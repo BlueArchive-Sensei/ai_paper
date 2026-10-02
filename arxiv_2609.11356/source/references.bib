@@ -1,0 +1,1036 @@
+% references.bib - the single citation file for the Bit-equiv paper.
+% Cite with \cite{key}. Keys are short keywords that also tag each paper in
+% paper-structure.md, so a note and its BibTeX entry share the same key.
+%
+% NOTE: entries below were drafted from a literature search. Titles, years, and
+% arXiv IDs are reliable; author lists / venues / pages marked "VERIFY" still
+% need a check against the ACM Digital Library or DBLP before camera-ready.
+
+% ---------------------------------------------------------------------------
+% Numerical non-determinism / reproducibility matters in ML and RL training
+% ---------------------------------------------------------------------------
+
+@inproceedings{henderson2018deeprl,
+  author    = {Henderson, Peter and Islam, Riashat and Bachman, Philip and
+               Pineau, Joelle and Precup, Doina and Meger, David},
+  title     = {Deep Reinforcement Learning that Matters},
+  booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence (AAAI)},
+  year      = {2018},
+}
+
+@misc{nagarajan2018determinism,
+  author        = {Nagarajan, Prabhat and Warnell, Garrett and Stone, Peter},
+  title         = {Deterministic Implementations for Reproducibility in Deep Reinforcement Learning},
+  year          = {2018},
+  eprint        = {1809.05676},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+}
+
+@inproceedings{summers2021nondeterminism,
+  author    = {Summers, Cecilia and Dinneen, Michael J.},
+  title     = {Nondeterminism and Instability in Neural Network Optimization},
+  booktitle = {Proceedings of the 38th International Conference on Machine Learning (ICML)},
+  year      = {2021},
+}
+
+@misc{bhojanapalli2021reproducibility,
+  author        = {Bhojanapalli, Srinadh and Wilber, Kimberly and Veit, Andreas and
+                   Rawat, Ankit Singh and Kim, Seungyeon and Menon, Aditya Krishna and
+                   Kumar, Sanjiv},
+  title         = {On the Reproducibility of Neural Network Predictions},
+  year          = {2021},
+  eprint        = {2102.03349},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+}
+
+@misc{fp8trainingstability2024,
+  author        = {{VERIFY authors}},
+  title         = {To {FP8} and Back Again: Quantifying Reduced Precision Effects on {LLM} Training Stability},
+  year          = {2024},
+  eprint        = {2405.18710},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+}
+
+% Levels/sources of bit-inequivalence and their (differing) impact
+@inproceedings{pham2020variance,
+  author    = {Pham, Hung Viet and Qian, Shangshu and Wang, Jiannan and Lutellier, Thibaud and
+               Rosenthal, Jonathan and Tan, Lin and Yu, Yaoliang and Nagappan, Nachiappan},
+  title     = {Problems and Opportunities in Training Deep Learning Software Systems: An Analysis of Variance},
+  booktitle = {Proceedings of the 35th IEEE/ACM International Conference on Automated Software Engineering (ASE)},
+  year      = {2020},
+}
+
+@article{frameworkversions2022,
+  author  = {{VERIFY authors}},
+  title   = {How Do Deep-Learning Framework Versions Affect the Reproducibility of Neural Network Models?},
+  journal = {Machine Learning and Knowledge Extraction (MAKE)},
+  year    = {2022},
+  note    = {VERIFY authors and volume},
+}
+
+% GPU-kernel-level numerical differences and what they impact
+% Verified: arXiv listing for 2511.00025 (sole author, Nov 2025). Finds the
+% error in batch-invariant matmul is structured and correlated rather than
+% i.i.d. Gaussian, with nearly 50% of float16 error variance off-diagonal.
+@misc{fpnoise_batchinvariant2025,
+  author        = {Yashwanth, Tadisetty Sai},
+  title         = {On the Structure of Floating-Point Noise in Batch-Invariant {GPU} Matrix Multiplication},
+  year          = {2025},
+  eprint        = {2511.00025},
+  archivePrefix = {arXiv},
+  primaryClass  = {math.NA},
+}
+
+% ---------------------------------------------------------------------------
+% Floating-point non-associativity, reduction order, and bit-level reproducibility
+% ---------------------------------------------------------------------------
+
+% author: VERIFY full author list
+@misc{shanmugavelu2024fpna,
+  author        = {Shanmugavelu, Sanjif and others},
+  title         = {Impacts of Floating-Point Non-Associativity on Reproducibility for
+                   HPC and Deep Learning Applications},
+  year          = {2024},
+  eprint        = {2408.05148},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.DC},
+}
+
+% Verified: arXiv listing for 2506.09501 (authors, 2025-06-11, rev. 2025-10-24).
+% Builds LayerCast, which stores weights in 16-bit and performs all computation
+% in FP32. Its measured damage figures (accuracy and response-length swings
+% across batch size, GPU count and GPU version) belong to movement 1.
+@misc{llmnondeterminism2025,
+  author        = {Yuan, Jiayi and Li, Hao and Ding, Xinheng and Xie, Wenya and
+                   Li, Yu-Jhe and Zhao, Wentian and Wan, Kun and Shi, Jing and
+                   Hu, Xia and Liu, Zirui},
+  title         = {Understanding and Mitigating Numerical Sources of Nondeterminism in {LLM} Inference},
+  year          = {2025},
+  eprint        = {2506.09501},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+}
+
+% Verified: the post itself, read 2026-09-05. Dated 10 September 2025, by
+% Horace He and collaborators at Thinking Machines Lab. It defines the property
+% as "the reduction order for each element must be fixed regardless of the
+% batch-size of the kernel", and reports "we only lose about 20% performance
+% compared to cuBLAS" for the batch-invariant matrix multiply.
+@misc{he2025defeating,
+  author       = {He, Horace and {Thinking Machines Lab}},
+  title        = {Defeating Nondeterminism in {LLM} Inference},
+  year         = {2025},
+  month        = sep,
+  howpublished = {\url{https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/}},
+  note         = {Thinking Machines Lab blog; accessed 2026-09-05},
+}
+
+% Verified: arXiv listing for 2510.09180 (authors, 2025-10-10). The abstract
+% states it ensures "deterministic and bitwise-reproducible deep learning
+% training and inference across diverse computing environments" by "enforcing
+% correct rounding and order invariance in floating-point computation".
+% Source code: github.com/microsoft/RepDL.
+@misc{repdl2025,
+  author        = {Xie, Peichen and Zhang, Xian and Chen, Shuo},
+  title         = {{RepDL}: Bit-level Reproducible Deep Learning Training and Inference},
+  year          = {2025},
+  eprint        = {2510.09180},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+}
+
+% ---------------------------------------------------------------------------
+% Tile programming languages
+% ---------------------------------------------------------------------------
+
+@inproceedings{triton2019,
+  author    = {Tillet, Philippe and Kung, H. T. and Cox, David},
+  title     = {Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations},
+  booktitle = {Proceedings of the 3rd ACM SIGPLAN International Workshop on Machine
+               Learning and Programming Languages (MAPL)},
+  year      = {2019},
+}
+
+% TODO (deep research): add citations for CuTile and TileLang.
+
+@inproceedings{linearlayouts2026,
+  author    = {Zhou, Keren and Lezcano, Mario and Goucher, Adam and Rakhmati, Akhmed and
+               Niu, Jeff and Lebar, Justin and Szczerbuk, Pawel and Bell, Peter and
+               Tillet, Phil and Raoux, Thomas and Moudallal, Zahi},
+  title     = {Linear Layouts: Robust Code Generation of Efficient Tensor Computation
+               Using $\mathbb{F}_2$},
+  booktitle = {Proceedings of the 31st ACM International Conference on Architectural
+               Support for Programming Languages and Operating Systems (ASPLOS), Volume 1},
+  year      = {2026},
+  doi       = {10.1145/3760250.3762221},
+}
+
+% ---------------------------------------------------------------------------
+% Autotuning
+% ---------------------------------------------------------------------------
+
+% year: VERIFY year
+@misc{nvidia_compileiq,
+  author       = {{NVIDIA}},
+  title        = {{CompileIQ}},
+  howpublished = {\url{https://developer.nvidia.com/cuda/compileiq}},
+  year         = {2025},
+}
+
+% ---------------------------------------------------------------------------
+% Program-equivalence / correctness checking methods (for the intro comparison)
+% ---------------------------------------------------------------------------
+
+@article{compcert2009,
+  author  = {Leroy, Xavier},
+  title   = {Formal Verification of a Realistic Compiler},
+  journal = {Communications of the ACM},
+  volume  = {52},
+  number  = {7},
+  pages   = {107--115},
+  year    = {2009},
+}
+
+@inproceedings{alive2_2021,
+  author    = {Lopes, Nuno P. and Lee, Juneyoung and Hur, Chung-Kil and
+               Liu, Zhengyang and Regehr, John},
+  title     = {Alive2: Bounded Translation Validation for {LLVM}},
+  booktitle = {Proceedings of the 42nd ACM SIGPLAN Conference on Programming
+               Language Design and Implementation (PLDI)},
+  year      = {2021},
+}
+
+@inproceedings{alivefp2016,
+  author    = {Menendez, David and Nagarakatte, Santosh and Gupta, Aarti},
+  title     = {{Alive-FP}: Automated Verification of Floating Point Based
+               Peephole Optimizations in {LLVM}},
+  booktitle = {Static Analysis (SAS)},
+  pages     = {317--337},
+  year      = {2016},
+  doi       = {10.1007/978-3-662-53413-7\_16},
+}
+
+@inproceedings{pnueli1998tv,
+  author    = {Pnueli, Amir and Siegel, Michael and Singerman, Eli},
+  title     = {Translation Validation},
+  booktitle = {Tools and Algorithms for the Construction and Analysis of Systems (TACAS)},
+  year      = {1998},
+}
+
+@inproceedings{asan2012,
+  author    = {Serebryany, Konstantin and Bruening, Derek and Potapenko, Alexander and
+               Vyukov, Dmitry},
+  title     = {{AddressSanitizer}: A Fast Address Sanity Checker},
+  booktitle = {USENIX Annual Technical Conference (USENIX ATC)},
+  year      = {2012},
+}
+
+@misc{tritonsanitizer,
+  author       = {{VERIFY authors}},
+  title        = {Triton-Sanitizer: A Fast and Device-Agnostic Memory Sanitizer for
+                  Triton with Rich Diagnostic Context},
+  howpublished = {\url{https://hgpu.org/?p=30696}},
+  note         = {VERIFY authors, venue, and year},
+}
+
+% ---------------------------------------------------------------------------
+% How others handle numerical issues (Background related work) -- broad list
+% ---------------------------------------------------------------------------
+
+% Deterministic / reproducible numerical kernels (HPC)
+@inproceedings{exblas2015,
+  author    = {Iakymchuk, Roman and Collange, Sylvain and Defour, David and Graillat, Stef},
+  title     = {{ExBLAS}: Reproducible and Accurate {BLAS} Library},
+  booktitle = {Numerical Reproducibility at Exascale (NRE), Supercomputing (SC15)},
+  year      = {2015},
+  note      = {VERIFY venue details},
+}
+
+% Framework-level determinism (ML infra)
+% Verified: the PyTorch documentation page, read 2026-09-05. It states
+% "Completely reproducible results are not guaranteed across PyTorch releases,
+% individual commits, or different platforms"; that
+% torch.use_deterministic_algorithms selects deterministic algorithms "where
+% available" and throws an error for an operation that is nondeterministic and
+% has no deterministic alternative; and that "Deterministic operations are often
+% slower than nondeterministic operations".
+@misc{pytorch_determinism,
+  author       = {{PyTorch Team}},
+  title        = {Reproducibility and Deterministic Algorithms},
+  howpublished = {\url{https://pytorch.org/docs/stable/notes/randomness.html}},
+  year         = {2026},
+  note         = {PyTorch documentation; accessed 2026-09-05},
+}
+
+% Numerical precision / stability techniques (ML infra)
+@inproceedings{micikevicius2018mixed,
+  author    = {Micikevicius, Paulius and Narang, Sharan and Alben, Jonah and
+               Diamos, Gregory and Elsen, Erich and Garcia, David and Ginsburg, Boris and
+               Houston, Michael and Kuchaiev, Oleksii and Venkatesh, Ganesh and Wu, Hao},
+  title     = {Mixed Precision Training},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2018},
+}
+
+@misc{adaptivelossscaling2019,
+  author        = {{VERIFY authors}},
+  title         = {Adaptive Loss Scaling for Mixed Precision Training},
+  year          = {2019},
+  eprint        = {1910.12385},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+}
+
+% FP exception / error debugging tools (sanitizer-like)
+% author: Li, Xinyi and Laguna, Ignacio and Gopalakrishnan, Ganesh, et al.
+@misc{gpufpx2023,
+  author       = {{VERIFY authors}},
+  title        = {{GPU-FPX}: A Low-Overhead Tool for Floating-Point Exception Detection in {NVIDIA} {GPUs}},
+  howpublished = {\url{https://github.com/LLNL/GPU-FPX}},
+  note         = {VERIFY authors, venue, and year (see PNNL/LLNL publication)},
+}
+
+@misc{flowfpx2024,
+  author        = {{VERIFY authors}},
+  title         = {{FlowFPX}: Nimble Tools for Debugging Floating-Point Exceptions},
+  year          = {2024},
+  eprint        = {2403.15632},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.MS},
+}
+
+@inproceedings{herbie2015,
+  author    = {Panchekha, Pavel and Sanchez-Stern, Alex and Wilcox, James R. and Tatlock, Zachary},
+  title     = {Automatically Improving Accuracy for Floating Point Expressions},
+  booktitle = {Proceedings of the 36th ACM SIGPLAN Conference on Programming Language
+               Design and Implementation (PLDI)},
+  year      = {2015},
+}
+
+% LLM inference determinism (recent; VERIFY -- titles/IDs from search, authors unconfirmed)
+% year: VERIFY
+@misc{silenthyperparameter2025,
+  author        = {{VERIFY authors}},
+  title         = {The Silent Hyperparameter: Quantifying the Impact of Inference Backends
+                   on {LLM} Reproducibility},
+  year          = {2026},
+  eprint        = {2605.19537},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  note          = {VERIFY authors and year},
+}
+
+% year: VERIFY
+@misc{llm42determinism,
+  author        = {{VERIFY authors}},
+  title         = {{LLM-42}: Enabling Determinism in {LLM} Inference with Verified Speculation},
+  year          = {2026},
+  eprint        = {2601.17768},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  note          = {VERIFY authors and year},
+}
+
+%% ---------------------------------------------------------------------------
+%% GPU execution model: the hierarchy of §1.1 and the numbers quoted in it.
+%% ---------------------------------------------------------------------------
+
+@misc{cuda_prog_guide,
+  author       = {{NVIDIA}},
+  title        = {{CUDA} {C++} Programming Guide},
+  howpublished = {\url{https://docs.nvidia.com/cuda/cuda-c-programming-guide/}},
+  year         = {2026},
+  note         = {Thread hierarchy: grid, thread block, warp; 1024 threads per
+                  block; thread block clusters at compute capability 9.0},
+}
+
+@misc{hip_prog_model,
+  author       = {{AMD}},
+  title        = {{HIP} Programming Model},
+  howpublished = {\url{https://rocm.docs.amd.com/projects/HIP/en/latest/understand/programming_model.html}},
+  year         = {2026},
+  note         = {Workgroup, wavefront and compute unit; wavefront 64 on CDNA,
+                  32 or 64 on RDNA},
+}
+
+@article{lindholm2008tesla,
+  author  = {Lindholm, Erik and Nickolls, John and Oberman, Stuart and Montrym, John},
+  title   = {{NVIDIA} {Tesla}: A Unified Graphics and Computing Architecture},
+  journal = {IEEE Micro},
+  volume  = {28},
+  number  = {2},
+  pages   = {39--55},
+  year    = {2008},
+  doi     = {10.1109/MM.2008.31},
+}
+
+@article{nickolls2008cuda,
+  author  = {Nickolls, John and Buck, Ian and Garland, Michael and Skadron, Kevin},
+  title   = {Scalable Parallel Programming with {CUDA}},
+  journal = {ACM Queue},
+  volume  = {6},
+  number  = {2},
+  pages   = {40--53},
+  year    = {2008},
+  doi     = {10.1145/1365490.1365500},
+}
+
+@misc{volta_whitepaper,
+  author       = {{NVIDIA}},
+  title        = {{NVIDIA} {Tesla} {V100} {GPU} Architecture},
+  howpublished = {\url{https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf}},
+  year         = {2017},
+  note         = {WP-08608-001\_v1.1; independent thread scheduling, per-thread
+                  program counters},
+}
+
+@misc{hopper_tuning,
+  author       = {{NVIDIA}},
+  title        = {{NVIDIA} {Hopper} Tuning Guide},
+  howpublished = {\url{https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html}},
+  year         = {2026},
+  note         = {Shared memory per SM and maximum thread blocks per SM at
+                  compute capability 9.0},
+}
+
+@misc{cdna3_whitepaper,
+  author       = {{AMD}},
+  title        = {{AMD} {CDNA} 3 Architecture},
+  howpublished = {\url{https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/white-papers/amd-cdna-3-white-paper.pdf}},
+  year         = {2023},
+  note         = {Compute unit: four SIMD units, 64\,KB local data share,
+                  64-work-item wavefront},
+}
+
+@article{thakur2005collectives,
+  author  = {Thakur, Rajeev and Rabenseifner, Rolf and Gropp, William},
+  title   = {Optimization of Collective Communication Operations in {MPICH}},
+  journal = {International Journal of High Performance Computing Applications},
+  volume  = {19},
+  number  = {1},
+  pages   = {49--66},
+  year    = {2005},
+  doi     = {10.1177/1094342005051521},
+}
+
+@misc{blackwell_tuning,
+  author       = {{NVIDIA}},
+  title        = {{NVIDIA} {Blackwell} Tuning Guide},
+  howpublished = {\url{https://docs.nvidia.com/cuda/blackwell-tuning-guide/index.html}},
+  year         = {2026},
+  note         = {Compute capability 10.0: 228\,KB shared memory per SM, 227\,KB
+                  the most one thread block may claim, 32 thread blocks per SM},
+}
+
+%% ---------------------------------------------------------------------------
+%% Prior effort on numerical reproducibility (introduction, movement 2).
+%% Every entry below was verified against a source independent of our notes:
+%% the DOI resolved through the Crossref registry, or the publisher's / arXiv's
+%% own listing was read. No VERIFY markers here on purpose.
+%% ---------------------------------------------------------------------------
+
+% Verified: Crossref record for DOI 10.1109/ARITH.2013.9.
+@inproceedings{demmel2013reproducible,
+  author    = {Demmel, James and Nguyen, Hong Diep},
+  title     = {Fast Reproducible Floating-Point Summation},
+  booktitle = {2013 IEEE 21st Symposium on Computer Arithmetic (ARITH)},
+  pages     = {163--172},
+  year      = {2013},
+  doi       = {10.1109/ARITH.2013.9},
+}
+
+% Verified: Crossref record for DOI 10.1016/j.parco.2015.09.001. This is the
+% published journal version of the work whose preprint was titled "Full-Speed
+% Deterministic Bit-Accurate Parallel Floating-Point Summation ...".
+@article{collange2015reduction,
+  author  = {Collange, Caroline and Defour, David and Graillat, Stef and
+             Iakymchuk, Roman},
+  title   = {Numerical Reproducibility for the Parallel Reduction on Multi- and
+             Many-Core Architectures},
+  journal = {Parallel Computing},
+  volume  = {49},
+  pages   = {83--97},
+  year    = {2015},
+  doi     = {10.1016/j.parco.2015.09.001},
+}
+
+% Verified: Crossref record for DOI 10.1145/3389360. The journal version of the
+% ReproBLAS line of work, and the entry to cite for it.
+@article{ahrens2020reproblas,
+  author  = {Ahrens, Willow and Demmel, James and Nguyen, Hong Diep},
+  title   = {Algorithms for Efficient Reproducible Floating Point Summation},
+  journal = {ACM Transactions on Mathematical Software},
+  volume  = {46},
+  number  = {3},
+  pages   = {1--49},
+  year    = {2020},
+  doi     = {10.1145/3389360},
+}
+
+% Verified: Intel's own oneMKL developer guide, read 2026-09-05. The guide
+% states the two reproducibility conditions (single executable; thread count
+% unchanged during the run), the MKL_CBWR code-branch control, and that
+% restricting the code path can degrade performance "by more than a half".
+@misc{mkl_cnr,
+  author       = {{Intel}},
+  title        = {Obtaining Numerically Reproducible Results
+                  ({Conditional} {Numerical} {Reproducibility})},
+  howpublished = {\url{https://www.intel.com/content/www/us/en/docs/onemkl/developer-guide-linux/2023-0/obtaining-numerically-reproducible-results.html}},
+  year         = {2023},
+  note         = {oneMKL Developer Guide for Linux; accessed 2026-09-05},
+}
+
+% Verified: arXiv listing for 2606.19348 (title, corporate author, 2026-04-26)
+% and the technical report PDF itself. Sections 3.2 and 3.3 carry the numerical
+% material cited here: fast-math off by default and T.annotate_layout pinning
+% layout-dependent lowering so accumulation order matches a reference CUDA
+% implementation bit for bit; and an end-to-end bitwise batch-invariant and
+% deterministic kernel library, which replaces cuBLAS with DeepGEMM and
+% abandons split-K in most scenarios.
+@misc{deepseekv4,
+  author        = {{DeepSeek-AI}},
+  title         = {{DeepSeek-V4}: Towards Highly Efficient Million-Token Context
+                   Intelligence},
+  year          = {2026},
+  eprint        = {2606.19348},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL},
+}
+
+%% ---------------------------------------------------------------------------
+%% Movement 2, second pass: the remaining approaches the author asked to see
+%% written in. Same discipline as the block above -- each verified against a
+%% resolving DOI or the arXiv listing, no VERIFY markers.
+%% ---------------------------------------------------------------------------
+
+% Verified: Crossref record for DOI 10.1177/10943420241313064. Error-free
+% transformations that express one high-precision matrix product as several
+% low-precision ones plus high-precision additions, run on integer matrix
+% units; the scheme's selling point is accuracy and bit-level reproducibility
+% independent of core and thread count.
+@article{ozaki2025,
+  author  = {Uchino, Yuki and Ozaki, Katsuhisa and Imamura, Toshiyuki},
+  title   = {Performance Enhancement of the {Ozaki} Scheme on Integer Matrix
+             Multiplication Unit},
+  journal = {The International Journal of High Performance Computing Applications},
+  volume  = {39},
+  number  = {3},
+  pages   = {462--476},
+  year    = {2025},
+  doi     = {10.1177/10943420241313064},
+}
+
+% Verified: Crossref record for DOI 10.1007/s10817-014-9317-x. Volume 54(2) is
+% dated 2015 by the publisher; Crossref carries 2014-12-06 as the online-first
+% date. Proves, in Coq, that CompCert's compilation preserves IEEE-754
+% semantics, including the transformations a compiler is tempted to make.
+@article{boldo2015fpcompile,
+  author  = {Boldo, Sylvie and Jourdan, Jacques-Henri and Leroy, Xavier and
+             Melquiond, Guillaume},
+  title   = {Verified Compilation of Floating-Point Computations},
+  journal = {Journal of Automated Reasoning},
+  volume  = {54},
+  number  = {2},
+  pages   = {135--163},
+  year    = {2015},
+  doi     = {10.1007/s10817-014-9317-x},
+}
+
+% Verified: arXiv listing for 2510.26788 (authors, 2025-10-30). Sea AI Lab and
+% NUS. Argues the RL training/inference mismatch is a rounding problem created
+% by BF16's range-for-precision trade, and that moving the whole pipeline to
+% FP16 removes it without algorithmic change.
+@misc{fp16mismatch,
+  author        = {Qi, Penghui and Liu, Zichen and Zhou, Xiangxin and
+                   Pang, Tianyu and Du, Chao and Lee, Wee Sun and Lin, Min},
+  title         = {Defeating the Training-Inference Mismatch via {FP16}},
+  year          = {2025},
+  eprint        = {2510.26788},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+}
+
+% Verified: arXiv listing for 2602.00182 (authors, 2026-01-30). Bit-exact
+% inference is the premise, not the goal: it makes verification "a byte-equality
+% check", which an optimistic re-execution protocol then arbitrates.
+@misc{eigenai2026,
+  author        = {Alves, David Ribeiro and Patankar, Vishnu and Pereira, Matheus
+                   and Stephens, Jamie and Vaziri, Nima and Kannan, Sreeram},
+  title         = {{EigenAI}: Deterministic Inference, Verifiable Results},
+  year          = {2026},
+  eprint        = {2602.00182},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.DC},
+}
+
+% Verified: arXiv listing for 2604.22032 (sole author, 2026-04-23). The
+% dissenting position: specify a kernel's contract with an explicit tolerance
+% and a named violation signature rather than demanding bitwise equality.
+@misc{kernelcontracts2026,
+  author        = {Veit, Cooper},
+  title         = {Kernel Contracts: A Specification Language for {ML} Kernel
+                   Correctness Across Heterogeneous Silicon},
+  year          = {2026},
+  eprint        = {2604.22032},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.SE},
+}
+
+% Verified: arXiv listing for 2609.00363 (sole author, 2026-08-25). Injects
+% nine faults into an INT8 pipeline on Qwen3-1.7B: four of five epilogue faults
+% escape a tolerance check because each moves the output by at most one
+% bfloat16 spacing. Requantizing to power-of-two scales restores bitwise
+% agreement between CUTLASS and Triton at every linear layer (196/196 and
+% 252/252, against 8/196 and 10/252 before).
+@misc{detinference2026,
+  author        = {Chen, Teng-Ruei},
+  title         = {Deterministic {LLM} Inference Across {GPU} Kernels:
+                   Power-of-Two {INT8} Quantization Scales and the Limits of
+                   Tolerance-Based Conformance},
+  year          = {2026},
+  eprint        = {2609.00363},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+}
+
+@inproceedings{paszke2019pytorch,
+  author    = {Paszke, Adam and Gross, Sam and Massa, Francisco and Lerer, Adam and
+               Bradbury, James and Chanan, Gregory and Killeen, Trevor and Lin, Zeming and
+               Gimelshein, Natalia and Antiga, Luca and Desmaison, Alban and K{\"o}pf, Andreas and
+               Yang, Edward and DeVito, Zachary and Raison, Martin and Tejani, Alykhan and
+               Chilamkurthy, Sasank and Steiner, Benoit and Fang, Lu and Bai, Junjie and
+               Chintala, Soumith},
+  title     = {{PyTorch}: An Imperative Style, High-Performance Deep Learning Library},
+  booktitle = {Advances in Neural Information Processing Systems 32 (NeurIPS)},
+  pages     = {8024--8035},
+  year      = {2019},
+}
+
+@inproceedings{tvm2018,
+  author    = {Chen, Tianqi and Moreau, Thierry and Jiang, Ziheng and Zheng, Lianmin and
+               Yan, Eddie and Cowan, Meghan and Shen, Haichen and Wang, Leyuan and Hu, Yuwei and
+               Ceze, Luis and Guestrin, Carlos and Krishnamurthy, Arvind},
+  title     = {{TVM}: An Automated End-to-End Optimizing Compiler for Deep Learning},
+  booktitle = {13th USENIX Symposium on Operating Systems Design and Implementation (OSDI)},
+  pages     = {578--594},
+  year      = {2018},
+}
+
+@inproceedings{ansor2020,
+  author    = {Zheng, Lianmin and Jia, Chengfan and Sun, Minmin and Wu, Zhao and Yu, Cody Hao and
+               Haj-Ali, Ameer and Wang, Yida and Yang, Jun and Zhuo, Danyang and Sen, Koushik and
+               Gonzalez, Joseph E. and Stoica, Ion},
+  title     = {Ansor: Generating High-Performance Tensor Programs for Deep Learning},
+  booktitle = {14th USENIX Symposium on Operating Systems Design and Implementation (OSDI)},
+  pages     = {863--879},
+  year      = {2020},
+}
+
+@inproceedings{pytorch2_2024,
+  author    = {Ansel, Jason and Yang, Edward and He, Horace and Gimelshein, Natalia and
+               Jain, Animesh and Voznesensky, Michael and Bao, Bin and Bell, Peter and
+               Berard, David and Burovski, Evgeni and Chauhan, Geeta and Chourdia, Anjali and
+               Constable, Will and Desmaison, Alban and DeVito, Zachary and Ellison, Elias and
+               Feng, Will and Gong, Jiong and Gschwind, Michael and Hirsh, Brian and
+               Huang, Sherlock and Kalambarkar, Kshiteej and Kirsch, Laurent and Lazos, Michael and
+               Lezcano, Mario and Liang, Yanbo and Liang, Jason and Lu, Yinghai and
+               Luk, C. K. and Maher, Bert and Pan, Yunjie and Puhrsch, Christian and
+               Reso, Matthias and Saroufim, Mark and Siraichi, Marcos Yukio and Susnea, Helen and
+               Zhang, Shunting and Zhang, Michael and Zaharia, Matei and Chintala, Soumith},
+  title     = {{PyTorch} 2: Faster Machine Learning Through Dynamic {Python} Bytecode
+               Transformation and Graph Compilation},
+  booktitle = {Proceedings of the 29th ACM International Conference on Architectural Support
+               for Programming Languages and Operating Systems (ASPLOS), Volume 2},
+  year      = {2024},
+  doi       = {10.1145/3620665.3640366},
+}
+
+@inproceedings{flashattention2022,
+  author    = {Dao, Tri and Fu, Daniel Y. and Ermon, Stefano and Rudra, Atri and R{\'e}, Christopher},
+  title     = {{FlashAttention}: Fast and Memory-Efficient Exact Attention with {IO}-Awareness},
+  booktitle = {Advances in Neural Information Processing Systems 35 (NeurIPS)},
+  year      = {2022},
+}
+
+@misc{rocq_prover,
+  author       = {{The Rocq Prover Team}},
+  title        = {About The {Rocq} Prover},
+  howpublished = {\url{https://rocq-prover.org/about}},
+  year         = {2026},
+  note         = {States that the Rocq Prover was formerly known as the Coq Proof
+                  Assistant; accessed 2026-09-05},
+}
+
+@misc{huggingface_hub,
+  author       = {{Hugging Face}},
+  title        = {The Model Hub},
+  howpublished = {\url{https://huggingface.co/docs/hub/models}},
+  year         = {2026},
+  note         = {Each model's \texttt{config.json} is the source of the layer dimensions
+                  used here; the text-generation listing is the source of the model
+                  selection. Read 2026-08-16},
+}
+
+@misc{tritonbench,
+  author       = {{Meta PyTorch}},
+  title        = {Tritonbench: A Collection of {PyTorch} Custom Operators with Example Inputs},
+  howpublished = {\url{https://github.com/pytorch-labs/tritonbench}},
+  year         = {2026},
+  note         = {Accessed 2026-09-06},
+}
+
+@misc{flaggems,
+  author       = {{FlagOpen}},
+  title        = {{FlagGems}: A {Triton}-Powered Operator Library},
+  howpublished = {\url{https://github.com/FlagOpen/FlagGems}},
+  year         = {2026},
+  note         = {Accessed 2026-09-06},
+}
+
+@misc{flashlinearattention,
+  author       = {{FLA Organization}},
+  title        = {Flash Linear Attention: Efficient {Triton} Implementations for Emerging
+                  Model Architectures},
+  howpublished = {\url{https://github.com/fla-org/flash-linear-attention}},
+  year         = {2026},
+  note         = {Accessed 2026-09-06},
+}
+
+@misc{torchao,
+  author       = {{PyTorch}},
+  title        = {torchao: {PyTorch} Architecture Optimization},
+  howpublished = {\url{https://github.com/pytorch/ao}},
+  year         = {2026},
+  note         = {Accessed 2026-09-06},
+}
+
+@misc{triton_tutorials,
+  author       = {{Triton Developers}},
+  title        = {{Triton} Tutorials},
+  howpublished = {\url{https://github.com/triton-lang/triton/tree/main/python/tutorials}},
+  year         = {2026},
+  note         = {The fused-attention tutorial is the source of the flash-attention kernel
+                  graded here; accessed 2026-09-06},
+}
+
+@misc{cublas_docs,
+  author       = {{NVIDIA}},
+  title        = {{cuBLAS} Library Documentation},
+  howpublished = {\url{https://docs.nvidia.com/cuda/cublas/}},
+  year         = {2026},
+  note         = {Results reproducibility: bitwise repeatability only on GPUs of the same
+                  architecture with the same number of SMs, and not across toolkit versions},
+}
+
+@misc{cudnn2014,
+  author        = {Chetlur, Sharan and Woolley, Cliff and Vandermersch, Philippe and
+                   Cohen, Jonathan and Tran, John and Catanzaro, Bryan and Shelhamer, Evan},
+  title         = {{cuDNN}: Efficient Primitives for Deep Learning},
+  year          = {2014},
+  eprint        = {1410.0759},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.NE},
+}
+
+@misc{rocblas_docs,
+  author       = {{AMD}},
+  title        = {{rocBLAS} Documentation},
+  howpublished = {\url{https://rocm.docs.amd.com/projects/rocBLAS/en/latest/}},
+  year         = {2026},
+  note         = {The ROCm BLAS library, implemented in HIP and tuned for AMD GPUs},
+}
+
+@inproceedings{tilelang2026,
+  author    = {Wang, Lei and Cheng, Yu and Shi, Yining and Mo, Zhiwen and Tang, Zhengju and
+               Xie, Wenhao and Wu, Tong and Ma, Lingxiao and Xia, Yuqing and Xue, Jilong and
+               Yang, Fan and Yang, Zhi},
+  title     = {{TileLang}: Bridge Programmability and Performance in Modern Neural Kernels},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2026},
+  note      = {Oral},
+}
+
+@misc{cutile,
+  author       = {{NVIDIA}},
+  title        = {{cuTile} {Python} and the {CUDA} {Tile} {IR}},
+  howpublished = {\url{https://docs.nvidia.com/cuda/tile-ir/latest/}},
+  year         = {2025},
+  note         = {A tile-level Python kernel language for CUDA, lowering through an
+                  MLIR-based tile intermediate representation},
+}
+
+@misc{pallas,
+  author       = {{JAX Developers}},
+  title        = {Pallas: a {JAX} Kernel Language},
+  howpublished = {\url{https://docs.jax.dev/en/latest/pallas/index.html}},
+  year         = {2026},
+  note         = {Lowers to Mosaic on TPU and to Triton on GPU},
+}
+
+@misc{nki,
+  author       = {{Amazon Web Services}},
+  title        = {{Neuron} {Kernel} {Interface} ({NKI})},
+  howpublished = {\url{https://awsdocs-neuron.readthedocs-hosted.com/en/latest/nki/}},
+  year         = {2026},
+  note         = {Tile-level Python kernel programming for AWS Trainium and Inferentia},
+}
+
+@inproceedings{tpu2017,
+  author    = {Jouppi, Norman P. and Young, Cliff and Patil, Nishant and Patterson, David and
+               Agrawal, Gaurav and Bajwa, Raminder and Bates, Sarah and Bhatia, Suresh and
+               Boden, Nan and Borchers, Al and others},
+  title     = {In-Datacenter Performance Analysis of a Tensor Processing Unit},
+  booktitle = {Proceedings of the 44th Annual International Symposium on Computer
+               Architecture (ISCA)},
+  pages     = {1--12},
+  year      = {2017},
+  doi       = {10.1145/3079856.3080246},
+}
+
+@misc{trainium,
+  author       = {{Amazon Web Services}},
+  title        = {{AWS} {Trainium} and {Inferentia}},
+  howpublished = {\url{https://aws.amazon.com/ai/machine-learning/trainium/}},
+  year         = {2026},
+  note         = {Amazon's training and inference accelerators},
+}
+
+@article{verifiedsched2024,
+  author  = {Yang, Ziteng and Shirako, Jun and Sarkar, Vivek},
+  title   = {Fully Verified Instruction Scheduling},
+  journal = {Proceedings of the ACM on Programming Languages},
+  volume  = {8},
+  number  = {OOPSLA2},
+  pages   = {791--816},
+  year    = {2024},
+  doi     = {10.1145/3689739},
+}
+
+@article{verifiedtensor2024,
+  author  = {Liu, Amanda and Bernstein, Gilbert and Chlipala, Adam and
+             Ragan-Kelley, Jonathan},
+  title   = {A Verified Compiler for a Functional Tensor Language},
+  journal = {Proceedings of the ACM on Programming Languages},
+  volume  = {8},
+  number  = {PLDI},
+  pages   = {320--342},
+  year    = {2024},
+  doi     = {10.1145/3656390},
+}
+
+@inproceedings{ptxmemmodel2019,
+  author    = {Lustig, Daniel and Sahasrabuddhe, Sameer and Giroux, Olivier},
+  title     = {A Formal Analysis of the {NVIDIA} {PTX} Memory Consistency Model},
+  booktitle = {Proceedings of the 24th ACM International Conference on
+               Architectural Support for Programming Languages and Operating
+               Systems (ASPLOS)},
+  pages     = {257--270},
+  year      = {2019},
+  doi       = {10.1145/3297858.3304043},
+}
+
+@inproceedings{cudaaucoq2019,
+  author    = {Ferrell, Benjamin and Duan, Jun and Hamlen, Kevin W.},
+  title     = {{CUDA} au {Coq}: A Framework for Machine-validating {GPU}
+               Assembly Programs},
+  booktitle = {Design, Automation and Test in Europe Conference (DATE)},
+  pages     = {474--479},
+  year      = {2019},
+  doi       = {10.23919/DATE.2019.8715160},
+}
+
+@inproceedings{mlirtv2022,
+  author    = {Bang, Seongwon and Nam, Seunghyeon and Chun, Inwhan and
+               Jhoo, Ho Young and Lee, Juneyoung},
+  title     = {{SMT}-Based Translation Validation for Machine Learning Compiler},
+  booktitle = {Computer Aided Verification (CAV), Part II},
+  pages     = {386--407},
+  year      = {2022},
+  doi       = {10.1007/978-3-031-13188-2\_19},
+}
+
+@inproceedings{csmith2011,
+  author    = {Yang, Xuejun and Chen, Yang and Eide, Eric and Regehr, John},
+  title     = {Finding and Understanding Bugs in {C} Compilers},
+  booktitle = {Proceedings of the 32nd ACM SIGPLAN Conference on Programming Language
+               Design and Implementation (PLDI)},
+  pages     = {283--294},
+  year      = {2011},
+  doi       = {10.1145/1993498.1993532},
+}
+
+@article{yarpgen2020,
+  author  = {Livinskii, Vsevolod and Babokin, Dmitry and Regehr, John},
+  title   = {Random Testing for {C} and {C++} Compilers with {YARPGen}},
+  journal = {Proceedings of the ACM on Programming Languages},
+  volume  = {4},
+  number  = {OOPSLA},
+  pages   = {196:1--196:25},
+  year    = {2020},
+  doi     = {10.1145/3428264},
+}
+
+@inproceedings{mlirsmith2023,
+  author    = {Wang, Haoyu and Chen, Junjie and Xie, Chuyue and Liu, Shuang and
+               Wang, Zan and Shen, Qingchao and Zhao, Yingquan},
+  title     = {{MLIRSmith}: Random Program Generation for Fuzzing {MLIR} Compiler
+               Infrastructure},
+  booktitle = {Proceedings of the 38th IEEE/ACM International Conference on Automated
+               Software Engineering (ASE)},
+  pages     = {1555--1566},
+  year      = {2023},
+  doi       = {10.1109/ASE56229.2023.00120},
+}
+
+@inproceedings{flit2017,
+  author    = {Sawaya, Geoffrey and Bentley, Michael and Briggs, Ian and
+               Gopalakrishnan, Ganesh and Ahn, Dong H.},
+  title     = {{FLiT}: Cross-Platform Floating-Point Result-Consistency Tester and
+               Workload},
+  booktitle = {2017 IEEE International Symposium on Workload Characterization
+               (IISWC)},
+  pages     = {229--238},
+  year      = {2017},
+  publisher = {IEEE},
+  doi       = {10.1109/IISWC.2017.8167780},
+}
+
+@inproceedings{varity2020,
+  author    = {Laguna, Ignacio},
+  title     = {{Varity}: Quantifying Floating-Point Variations in {HPC} Systems
+               Through Randomized Testing},
+  booktitle = {2020 IEEE International Parallel and Distributed Processing
+               Symposium (IPDPS)},
+  pages     = {622--633},
+  year      = {2020},
+  publisher = {IEEE},
+  doi       = {10.1109/IPDPS47924.2020.00070},
+}
+}
+
+@incollection{blelloch_maggs_parallel,
+  author    = {Blelloch, Guy E. and Maggs, Bruce M.},
+  title     = {Parallel Algorithms},
+  booktitle = {Algorithms and Theory of Computation Handbook},
+  editor    = {Atallah, Mikhail J.},
+  edition   = {2},
+  publisher = {Chapman and Hall/CRC},
+  year      = {2010},
+  pages     = {25-1--25-43},
+  doi       = {10.1201/9781584888215-c25}
+}
+
+@book{clrs,
+  author    = {Cormen, Thomas H. and Leiserson, Charles E. and Rivest, Ronald L. and Stein, Clifford},
+  title     = {Introduction to Algorithms},
+  edition   = {4},
+  publisher = {MIT Press},
+  address   = {Cambridge, MA},
+  year      = {2022},
+  isbn      = {9780262046305}
+}
+
+@article{kuck_muraoka1974,
+  author    = {Kuck, David J. and Muraoka, Yoichi},
+  title     = {Bounds on the Parallel Evaluation of Arithmetic Expressions Using Associativity and Commutativity},
+  journal   = {Acta Informatica},
+  volume    = {3},
+  number    = {3},
+  pages     = {203--216},
+  year      = {1974},
+  publisher = {Springer},
+  doi       = {10.1007/BF00288634}
+}
+
+@inproceedings{baer_bovet1968,
+  author    = {Baer, Jean-Loup and Bovet, Daniel P.},
+  title     = {Compilation of Arithmetic Expressions for Parallel Computations},
+  booktitle = {Proceedings of the IFIP Congress 1968},
+  address   = {Edinburgh, UK},
+  publisher = {North-Holland},
+  pages     = {340--346},
+  year      = {1968}
+}
+
+@article{beatty1972,
+  author  = {Beatty, James C.},
+  title   = {An Axiomatic Approach to Code Optimization for Expressions},
+  journal = {Journal of the ACM},
+  volume  = {19},
+  number  = {4},
+  pages   = {613--640},
+  year    = {1972},
+  doi     = {10.1145/321724.321728}
+}
+
+@book{kuck1978,
+  author    = {Kuck, David J.},
+  title     = {The Structure of Computers and Computations, Volume 1},
+  publisher = {John Wiley \& Sons},
+  address   = {New York, NY},
+  year      = {1978},
+  isbn      = {0471027162}
+}
+
+@article{brent1974,
+  author    = {Brent, Richard P.},
+  title     = {The Parallel Evaluation of General Arithmetic Expressions},
+  journal   = {Journal of the ACM},
+  volume    = {21},
+  number    = {2},
+  pages     = {201--206},
+  year      = {1974},
+  publisher = {Association for Computing Machinery},
+  doi       = {10.1145/321812.321815}
+}
+
+@misc{mmasim,
+  author       = {Xie, Peichen and Xu, Shuotao and Wang, Yang and Yang, Fan and Yang, Mao},
+  title        = {Bit-Accurate Modeling of {GPU} Matrix Multiply-Accumulate Units:
+                  Demystifying Numerical Discrepancy and Accuracy},
+  year         = {2025},
+  eprint       = {2511.10909},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.AR},
+  note         = {Bit-accurate models of every MMA instruction on ten GPU architectures,
+                  NVIDIA Volta through Blackwell and AMD CDNA1 through CDNA3;
+                  open source as MMA-Sim}
+}
+
+@misc{tcmodels,
+  author       = {Khattak, Faizan A. and Mikaitis, Mantas},
+  title        = {Accurate Models of {NVIDIA} Tensor Cores},
+  year         = {2025},
+  eprint       = {2512.07004},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.MS},
+  note         = {Bit-accurate inner-product models for V100, A100, H100 and B200 at
+                  8-, 16- and 19-bit inputs, verified against the hardware}
+}
+
+@article{agarwal1995,
+  author  = {Agarwal, R. C. and Balle, S. M. and Gustavson, F. G. and Joshi, M. and Palkar, P.},
+  title   = {A Three-Dimensional Approach to Parallel Matrix Multiplication},
+  journal = {IBM Journal of Research and Development},
+  volume  = {39},
+  number  = {5},
+  pages   = {575--582},
+  year    = {1995},
+  month   = sep,
+  doi     = {10.1147/rd.395.0575}
+}
+
+@article{blas2_1988,
+  author  = {Dongarra, Jack J. and Du Croz, Jeremy and Hammarling, Sven and Hanson, Richard J.},
+  title   = {An Extended Set of {FORTRAN} Basic Linear Algebra Subprograms},
+  journal = {ACM Transactions on Mathematical Software},
+  volume  = {14},
+  number  = {1},
+  pages   = {1--17},
+  year    = {1988},
+  month   = mar,
+  doi     = {10.1145/42288.42291}
+}

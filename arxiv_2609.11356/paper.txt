@@ -1,0 +1,1501 @@
+                                         Taming Bitwise Behavior in GPU Kernels with Tensor
+                                                               Core
+                                                  Black-Box Reconstruction, Compiler Enforcement, and Static Verification
+                                                                  Ziteng Yang                                           Nicholas J. Riasanovsky
+                                                         Georgia Institute of Technology                                           Meta
+                                                             Atlanta, Georgia, USA                                      Menlo Park, California, USA
+                                                            ziteng.yang@gatech.edu                                         njriasan@meta.com
+
+                                                                  Warren Deng                                                  Vivek Sarkar
+arXiv:2609.11356v1 [cs.DC] 10 Sep 2026
+
+
+
+
+                                                                     Meta                                              Georgia Institute of Technology
+                                                           Menlo Park, California, USA                                     Atlanta, Georgia, USA
+                                                             warrdeng@meta.com                                              vsarkar@gatech.edu
+
+                                         Abstract                                                          Keywords: bitwise reproducibility, numerical determinism,
+                                         Determinism and numerical reproducibility are increasingly        floating-point reduction order, compilers, compiler backends,
+                                         required of the GPU kernels under machine learning sys-           code generation, program equivalence, static equivalence
+                                         tems, yet two deterministic implementations of one kernel         checking, black-box reconstruction, GPU kernels, GEMM,
+                                         differ bit for bit. The result is decided by the floating-point   tensor compilers, Triton, autotuning, machine learning sys-
+                                         (FP) reduction order above all, and by partial-sum precision,     tems
+                                         multiply-add fusion and where the rounding falls: written
+                                         by hand, left to the compiler by a block-level language like
+                                                                                                           1   Introduction
+                                         Triton, or owned by a closed library like cuBLAS or rocBLAS.
+                                         The tile shape chosen for speed therefore chooses the arith-      Numerical determinism is now an important need for the
+                                         metic, and a request stops being batch invariant. Holding         systems that train and serve large models: the same computa-
+                                         the order still costs performance, reported at up to 20%. Also,   tion, the same bits, whenever and wherever it runs. Without
+                                         an autotuner searching hundreds of configurations cannot          determinism during numerical computation, a model may
+                                         tell which of them agree bit for bit.                             answer differently when asked the same question twice with
+                                            In this work we characterize what decides the bitwise be-      the same weights and the same seed. A kernel is batch in-
+                                         havior of GPU kernels, for reductions and General Matrix          variant when one request’s output is the same whatever else
+                                         Multiply (GEMM). i) We give a descriptor that records the         shares its batch, and the kernels serving these models are
+                                         parameters fixing a GEMM’s reduction order, such as where         not. Serving a request alongside others changes how many
+                                         the K axis is cut in a split-K GEMM. On that basis we give        rows a kernel reduces at once, which changes the algorithm
+                                         the first black-box reconstruction of a closed source library’s   its partial sums are combined by, giving a different floating-
+                                         arithmetic towards bit-level correctness, on NVIDIA cuBLAS,       point reduction order, while floating-point addition is not
+                                         and rebuild it as a bitwise equivalent GEMM family in Triton,     associative, so the bits move [24]. Measured across batch size,
+                                         a block-level GPU language. It matches cuBLAS bit for bit at      GPU count and GPU generation on one 7B model in bfloat16,
+                                         a 100% rate on Blackwell and Hopper, and with the epilogue        the difference is worth up to nine percentage points of accu-
+                                         fused from realistic LLM shape, the performance matches or        racy and generations that differ in length by thousands of
+                                         even exceed torch.compile. ii) Lowering to backend, we            tokens [63].
+                                         enforce balanced tree reduction in Triton’s compiler, with           The same instability reaches training. Two runs of one con-
+                                         a data-layout optimization that brings 19 of 27 kernels on        figuration, differing only in effects this small, end at mean-
+                                         GB300 and H100 within 10% of the free-order mode and 5            ingfully different models, and a retrained model changes its
+                                         even exceed. iii) We build the first sound static equivalence     mind about individual examples it used to get right [10, 51].
+                                         checkers to decide bitwise equivalence between compiled           Reinforcement learning is worse than either, because it runs
+                                         GPU kernels, and the first to partition two vendors’ instruc-     two engines at once: a rollout engine generates, a training
+                                         tion sets, NVIDIA PTX and AMD GCN with integration into           engine scores, and when the two disagree about a token’s
+                                         Triton’s autotuner as a static pruning predicate, so a search     log-probability the objective being optimized is no longer
+                                         runs inside a single bitwise-equivalence class.                   the one that was written down [48].
+                                                                                                              Floating-point accumulation order dominates [50]. The
+                                                                                                           precision the partial sums are held at, whether a multiply and
+                                         CCS Concepts: • Software and its engineering;                     an add were contracted into one instruction (FMA fusion),
+                                                                                                                           Yang et al.
+
+
+and where the rounding to the output type falls all move the       ratio is taken between two different models rather than be-
+result as well. At different infrastructure stack levels, such     tween two policies of one [48]. In the ML system infras-
+problems are addressed with heavy effort: i) Compute in            tructure, a stack is assembled from independently built
+higher precision. A fixed-point accumulator of 2098 bits for       parts, and one that accumulates differently breaks the agree-
+a sum, 4288 for a dot product, holds every fp64 magnitude, so      ment for all of them. Below the kernel, the vendor’s assem-
+every addition is exact and one rounding closes it [2, 15, 19].    bler may reassociate an accumulation it judges safe to move,
+The Ozaki scheme reaches matrix multiplication the other           and where no machine code was shipped the driver assem-
+way, splitting each input into int8 pieces a GPU’s integer         bles at load time, so a driver update can change bit-level
+matrix unit multiplies exactly and accumulates in int32 [56].      semantics the program did not.
+Both cost several times the work. ii) Set library mode. To            In the GPU kernel (scope of this work). Various obsta-
+give callers the property without asking them to change an         cles exist to reaching numerical consistency: i) A vendor
+algorithm, production libraries attach conditions to it. Intel’s   library will not fully disclose what arithmetic it performed,
+oneMKL returns bit-identical results run to run only while         so a kernel written elsewhere has difficulty matching it. ii)
+the executable, the instruction-set code path and the thread       Restricting the computation order reduces the flexibility of
+count all stay fixed, and warns that pinning the code path         optimization towards parallelism. PyTorch’s deterministic
+can more than halve its speed; PyTorch’s deterministic mode        mode stops tuning a reduction kernel’s configurations, and
+substitutes deterministic operators, raises an error where         when its full search is enabled it takes the vendor’s matrix
+none exists, and scopes its guarantee to one release on one        multiply instead of a generated one [47]. Where agreement
+platform [26, 47]. The price is the conditions themselves,         cannot be established, speed is what gets given up. iii) One
+which the caller must hold. iii) Rewrite the GPU kernels.          source compiled twice by one compiler under different pa-
+Nondeterministic LLM inference has been traced to kernels          rameters may or may not agree, and an autotuner [13, 64]
+whose reduction order moves with batch size, and rewriting         searching hundreds of configurations for speed has no way
+them to fix the order costs about 20% of matrix-multiply           to do equivalence partition.
+throughput against cuBLAS [24]; RepDL enforces correct                This paper makes four contributions.
+rounding and order invariance to keep training and inference          A mechanistic account of bitwise behavior. We show that
+bit-identical across machines [60]; LayerCast holds weights        FP reduction order is the dominant factor that decides the
+in sixteen bits while performing every computation in fp32,        numeric bits. We give a theoretical characterization of the
+paying in bandwidth rather than in kernel structure [63].          factors deciding the FP reduction order of reduction kernels
+DeepSeek-V4 [18] makes a frontier training stack bitwise           and General Matrix Multiply (GEMM) kernels. We give a
+batch-invariant and deterministic end to end. a) cuBLAS            formal descriptor for GEMM kernels, GEMMDesc, that de-
+picks its kernel from the problem dimensions behind a closed       scribes the full bitwise behavior of the most commonly used
+cost model, so the arithmetic moves with the batch; a matrix-      GEMM variants. It records the parameters that decide the
+multiply library of their own replaces it, and split-K, taken      reduction order, for example where to cut the K axis in a
+only at small batch sizes and so batch-dependent in the same       split-K GEMM, and holds nothing that is only a speed knob.
+way, is dropped wherever a kernel can do without it. b)            Two machines handed the same descriptor owe each other
+Atomic adds land in thread arrival order, so the backward          the same bits.
+pass gives each streaming multiprocessor its own buffer and           The first Triton GEMM family that is bit-identical to a closed-
+sums those in a fixed order. c) Its compiler turns fast-math       source vendor library. NVIDIA’s cuBLAS [42] is a black-box
+off by default, aligns its lowering with the reference CUDA        GPU kernel library that only provides incomplete compu-
+toolchain so no transformation moves a bit, and calls an           tation information that decides the FP computation order.
+SMT solver for the integer facts its layout inference rests on.    We applied the mechanism above, conducted a set of offline
+Their matrix multiplication is reported to match or surpass        experiments (runtime profiling, numerical inference, and
+standard split-K in most major scenarios. But none of them         others), and give the first black-box reconstruction of such a
+reproduces the discipline a closed library follows. iv) Align      library towards bit-level correctness: a Triton GEMM family
+two engines. A reinforcement-learning rollout engine and           over fp16, bf16 and fp8 e4m3 that reaches 100% bit-matches
+training engine that disagree on a token’s log-probability         with cuBLAS GEMM on GB300, GB200 and H100. As an extra
+shift the objective being optimized; one answer moves the          bonus, we discovered a logical bug in cuBLAS GEMM during
+whole pipeline from bf16 to fp16, trading dynamic range for        that offline work (Appendix D).1
+the rounding headroom that keeps the two consistent [48].             First Balanced Tree reduction in and layout optimization
+   Holding the bits still is a challenge at different layers:      in Triton compiler We implement compiler enforcement for
+   In the training algorithm, a policy update weighs each          balanced tree reduction (“inner tree” mode) in the compiler
+token by the ratio of two probabilities, so when the engine        backend of Triton [54] (none before), the block-level GPU
+that generated it and the engine that scores it disagree the
+                                                                   1 The   100% rate excludes this bug.
+Taming Bitwise Behavior in GPU Kernels with Tensor Core
+
+
+kernel language. We analyze and implement the data-layout         which thread reads which element, when a tile is staged into
+optimization opportunity that the enforcement opens, bring-       shared memory, where the barriers go. A caller can reach
+ing 19 of 27 kernels across GB300 and H100 within 10% of          for a closed-source vendor library instead, cuBLAS [42],
+the free-order mode, and even past it on five of the ten on       cuDNN [14] on NVIDIA or rocBLAS [7] on AMD, and then
+H100.                                                             chooses the result while the library chooses the arithmetic
+   The first Static & sound equivalence checkers for compiled     that produces it.
+Triton kernels and integration in autotuner. We implemented          Block-level programming and the compilation
+the first static checker that decides the bitwise equivalence     pipeline. Block-level programming asks instead for a block
+of two NVIDIA PTX kernel assembly, sound by construction,         of threads over a tile of data and leaves the thread detail
+and the first symmetric one for a second vendor’s instruction     to the compiler. Triton [54], TileLang [58] and NVIDIA’s
+set, AMD GCN. It acts both as a static equivalence partitioner    cuTile [41] implement it on GPUs, as do Pallas [27] on
+during the autotuning stage of a GPU kernel and as a veri-        Google’s TPUs [28] and the Neuron Kernel Interface [4]
+fication of the mechanism we claim. We incorparate it into        on AWS’s training and inference chips [3]. Tile operations
+Triton’s autotuner and achieved static pruning before the         carry no hardware in them; the tile-level IR fixes a layout
+actual pruning happens for the first time. The checker is         per tensor, saying algebraically which lane and register
+validated to be robustly sound across a large kernel suite, in-   hold which element [65]; an LLVM backend lowers that per
+cluding fused kernels generated by PyTorch Inductor [8] and       thread; and GPU assembly, PTX or AMDGCN, is the last
+Flash Attention kernels [17]. It recovers the exact partition     textual form before machine code. The tile-level IR is where
+on the GEMM family and on Inductor’s fused kernels, and           a reduction’s order first becomes visible, and the assembly
+comes within a factor 2.5 on reductions and normalizations.       is the lowest level we can read.
+                                                                     Autotuning. Tile sizes, the pipeline depth over which a
+                                                                  loop’s loads run ahead of its arithmetic, and warp count can
+2     Background                                                  be left as template parameters (knobs). A kernel written this
+2.1   GPU kernels and the programming model                       way is a kernel template, one assignment to its knobs a config-
+A GPU kernel is a function the host launches as a grid of         uration, compiling under one a kernel instance, and the legal
+thread blocks [6, 39, 43]; every thread runs the same body        assignments its configuration space, thousands for a GEMM;
+and reads an index to find its slice of the data. i) A block      they are the configurations fanning out from one template.
+is at most 1024 threads and goes whole onto one streaming         An autotuner picks among them by measurement at run time,
+multiprocessor (SM) on NVIDIA, one compute unit (CU) on           because the winner turns on occupancy, on whether the tile
+AMD [33], staying there until it finishes; an SM holds the ten-   shape matches the tensor core’s, and on register allocation
+sor cores (AMD’s matrix cores) that execute matrix-multiply       inside ptxas, none of it readable off the source [13, 64]. Au-
+instructions, and up to 32 blocks share one when registers        totuners have become routine recently: PyTorch’s compiler
+and scratchpad allow [44]. ii) Within a block, threads are        generates the Triton kernels with autotuning decorators and
+cut into fixed groups, a warp of 32 on NVIDIA and a wave-         autotunes them [8, 54].
+front of 64 on AMD’s CDNA [5], which is the unit of in-              Triton spells this as an annotation on the kernel:
+struction issue; lanes on a different branch sit an instruction    @triton.autotune(configs=[
+out, and since Volta [40] each lane carries its own program          triton.Config({'BLOCK_M': 128, 'BLOCK_K': 64},
+counter, so a value passed between lanes through memory                            num_warps=8, ...),
+                                                                     triton.Config({'BLOCK_M': 64, 'BLOCK_K': 32},
+needs an explicit __syncwarp(). iii) Above the grid, ordering
+                                                                                   num_warps=4, ...)],
+across launches comes from a kernel ending, and combining
+                                                                     ..., key=['M', 'N', 'K'])
+results across GPUs is a collective library’s job, NCCL or         @triton.jit
+RCCL [52].                                                         def matmul(a, b, c, M, N, K, BLOCK_M, BLOCK_K): ...
+   Registers are private to a thread, at most 255 of an SM’s        The decorator compiles and times every listed configu-
+64K. Shared memory (AMD’s local data share) is a scratchpad,      ration and caches the fastest; new shapes restart the mea-
+fast on-chip memory the program fills and empties itself,         surement. Two instances of one template compute the same
+carved per resident block from the SM’s 228 KB [44]. Global       mathematics, but not necessarily the same bits.
+memory is off-chip DRAM at roughly twenty times a shared-
+memory read. Only block scope costs a barrier: __sync
+threads() publishes a block’s shared-memory writes, a
+shuffle between lanes is free, and grid-wide ordering comes       2.2   Related work on compiler correctness
+from ending the kernel.                                           Correct by construction. A verified compiler carries a
+   Thread-level programming and the vendor libraries.             machine-checked proof that every program it compiles keeps
+CUDA C++ asks for the body of one thread and runs it              its source semantics. CompCert is the first realistic instance
+across the grid, leaving cooperation to be written by hand:       for C [32], and its floating-point semantics are verified in Coq
+                                                                                                                                                                                       Yang et al.
+
+
+    layout A — 4 threads × 2 elements, 2 warps                             layout A — 4 threads × 4 elements, 2 warps
+                                                                                                                                                before                        after
+                                       +    bits X                                               + bits X
+                                                                                                                                                0   0    1   1                 0   0   0   0
+                     +                                   +                                +                            +
+                                                                                                                                                0   0    1   1   warp 0        1   1   1   1
+            +                 +                 +                 +               +               +            +               +
+                                                                                                                                                2   2    3   3                 2   2   2   2
+
+
+
+
+                                                                                                                                       reduce
+
+
+
+
+                                                                                                                                                                     reduce
+                                                                              +       +       +       +   +        +       +       +            2   2    3   3                 3   3   3   3
+       a0       a1       a2       a3       a4       a5       a6       a7
+                                                                                                                                                0   0    1   1                 0   0   0   0
+            +                                   +                                                                                               0   0    1   1                 1   1   1   1
+                                                                              +       +       +       +   +        +       +       +                             warp 1
+                 +                                   +                                                                                          2   2    3   3                 2   2   2   2
+                                                                                  +               +            +               +
+                                                                                                                                                2   2    3   3                 3   3   3   3
+                         +              +
+                                                                  +                      +                                                                                    warp 0 warp 1
+                                + bits Y ≠ X
+                                                                              + the same bits X
+    layout B — 2 threads × 4 elements, 1 warp           layout B — 8 threads × 2 elements, 1 warp
+       within a thread (registers)  within a warp (lane shuffle)  across warps (shared memory)
+
+    (a) Order free: two layouts, two trees                                 (b) Order pinned: two layouts, equivalent tree                  (c) The layout optimization
+
+
+                                                                  Figure 1. Pinning the reduction order, and what it buys.
+
+(now Rocq [53]), so IEEE-754 arithmetic survives the trans-                                                   and an operation node is one floating-point addition. An
+formations a compiler is otherwise tempted to make [12].                                                      edge runs from a node to the operation that consumes its
+The same has since been done for instruction scheduling [62],                                                 value, so every edge is a data dependence and points the way
+tensor-language lowering [34], a GPU memory consistency                                                       the value travels. The graph is a tree in most cases for one
+model [36] and the semantics of GPU assembly [21]. The                                                        reduction result (or can be expanded into a tree), and we call
+price is the proof effort, and a toolchain of its own to run                                                  it the dependence tree of the reduction. The reduction order
+under.                                                                                                        therefore is represented by a dependence tree: Exchanging
+   Translation validation. It drops the claim about the                                                       an operation’s two incoming edges result a different tree
+compiler and checks the one compilation in front of it [45]:                                                  holding the same relation, and we call them equivalent trees.
+encode both IRs and ask a solver whether the output refines                                                   A kernel may induces more than one result, and we write
+the input. Alive2 does this for LLVM IR [35] and MLIR-TV                                                      T (𝐾) for the family of their dependence tree. Two kernels
+for the multi-level IR deep-learning compilers are built on [9].                                              over the same inputs return the same bits when the trees at
+Alive-FP brings floating point in, verifying LLVM’s floating-                                                 every output coordinate are equivalent.
+point and fast-math peepholes under one SMT encoding per                                                         A dependence tree also says how much of the reduction
+reading of the under-specification around signed zeros, NaNs                                                  can run at once. Its work, the count of operation nodes, is
+and infinities [37]. The price is what the encoding admits:                                                   𝑛 − 1 whatever shape it takes, so a tree’s parallelism, its work
+MLIR-TV over-approximates floating-point arithmetic and                                                       divided by its longest dependence chain, is settled by that
+reductions so that a solver finish in bounded time.                                                           chain alone. Across the trees a compiler may build over the
+   Fuzzing. Fuzzing proves nothing and locates real incor-                                                    same values the chain runs from 𝑛 − 1, a left fold whose
+rectness. Csmith generates random C free of undefined                                                         parallelism is 1, down to ⌈log2 𝑛⌉ for a balanced tree. The
+behavior and differentially tests compilers against each                                                      order Section 5 pins is the balanced one, so enforcing it
+other [61], and MLIRSmith carries the idea to the multi-                                                      gives up no parallelism chance in theory [11, 16, 30] and
+level IR [57]. Floating point moves the target from one                                                       still preserves data locality.
+wrong compilation to two that disagree [31, 49]. The price is                                                    A GPU builds that tree in three levels. A thread folds the
+every test-based method’s: finding nothing is not showing                                                     nodes held in its own registers, in index order. The threads of
+nothing is there.                                                                                             a warp fold their partials through lane exchanges. The warps
+   None of them decides whether two compiled GPU kernels                                                      holding a partial fold theirs through shared memory. The tree
+return identical bits, let alone autotuner integration.                                                       is settled only once all three are fixed, T = Tsmem ◦Twarp ◦Treg .
+                                                                                                              Thread count, the elements one thread holds and the warp
+3     Understand the bit behavior under GPU                                                                   count each decide which nodes share an accumulator at
+      parallelism                                                                                             some level, so each of them moves the tree: Figure 1(a) folds
+                                                                                                              the same eight values under two layouts and the two roots
+3.1     Dependence Tree of reduction
+                                                                                                              differ. Figure 1(b) folds sixteen values under two layouts, the
+An addition of data through a fp32 accumulator it runs is                                                     second over twice the threads of the first, and the two roots
+written ⊕fp32 . Addition commutes, but does not associate:                                                    agree. Section 5 is how it is pinned by compiler backend.
+(𝑎 ⊕fp32 𝑏) ⊕fp32 𝑐 ≠ 𝑎 ⊕fp32 (𝑏 ⊕fp32 𝑐). A reduction of 𝑛 values                                               Pipeline depth leaves the tree alone. A software-
+on a GPU is a directed acyclic graph (DAG). Its nodes are                                                     pipelined loop issues the loads for later iterations while an
+of two kinds: a data node holds one floating-point value,
+Taming Bitwise Behavior in GPU Kernels with Tensor Core
+
+
+      one accumulate step        one accumulator, closed by one rounding               an accumulator starts here     k_cuts is a descriptor field
+
+             BLOCK_K
+      instruction_k          k                    span                                            k_cuts[0].span
+                                                                                                                         0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3
+
+
+
+                                                                                                                            0       1        2        3
+   one accumulator, never reopened
+
+         round to output_dtype
+                                                                                                                            layout: STRIDED, count = 4
+                                               summed in index order                                                       lane j takes every fourth step
+                                                                               the inner cut divides one outer part
+          (a) Plain GEMM                           (b) Split-K                         (c) Chained chunks                          (d) GEMV
+                            one thread block          a second kernel launch
+
+
+                            Figure 2. Where each GEMM algorithm family cuts the contracted dimension.
+
+earlier one computes, and the pipeline depth, num_stages                        acc ← fma(𝑎, 𝑏, acc), and twice when the multiply is left
+in Triton, is how many iterations are in flight at once. What                   uncontracted. Three instructions carry the matrix path on
+it sets is arrival time. Iteration 𝑖 still accumulates iteration                NVIDIA: mma.sync in a warp, wgmma in a Hopper warpgroup,
+𝑖’s values into the same accumulator and in the same order,                     and tcgen05.mma from a single Blackwell thread with its
+so every node reaches the accumulator it reached before and                     accumulator in tensor memory. On GB300 mma.sync and
+the tree is what it was. The premise is that pipelining moves                   tcgen05.mma are bitwise equivalent at fp16 and at bf16,2 so
+the loads and leaves the loop’s accumulation chain where it                     the descriptor names the instructions one by one rather than
+stands.                                                                         carrying a single tensor-core value.
+   Warp specialization leaves it alone. A warp-specialized
+kernel splits the block’s warps into a producer set 𝑃, which                    3.2.2 The algorithm families. What separates one
+issues asynchronous copies into shared memory, and a con-                       GEMM from another is where the contracted axis is cut
+sumer set 𝐶, which does the arithmetic. Three facts settle the                  and what happens at each cut. Four GEMM algorithm cover
+question. A node of the tree is a floating-point addition and                   every library kernel that is used, and Figure 2 draws them.
+a producer warp executes none, so 𝑃 contributes no node.                           Plain GEMM hands one output tile to one threadblock,
+Treg is fixed by the map from a node to the lane holding it,                    gives every element of that tile an accumulator, and walks
+and that map is computed from the tile shape and the layout,                    the whole contracted axis inside that block, the uncut axis
+which the split leaves untouched. Specialization adds the                       of Figure 2(a). Three things about that walk decide the order.
+producers alongside the consumers rather than taking con-                       A matrix instruction does not add one product at a time: it
+sumers away, and Tsmem spans the same partials. All three                       folds a fixed number of them into a single rounding, and that
+levels are unchanged, so T is, and so are the bits. The third                   number sets how long the chain of roundings is, so we record
+fact is a premise about the compiler rather than about the                      it as instruction_k. The instruction’s own result then has
+hardware: a compiler that re-partitioned a tile over fewer                      to reach the accumulator, and it can do so inside that same
+compute warps when it specialized them would break the                          rounding or in a second one after it, which is one rounding
+claim.                                                                          per step against two; we record which as use_fast_accum.
+                                                                                And 𝐾 is rarely a multiple of the mainloop’s step, so one
+3.2    GEMM reduction                                                           turn of the loop is short, and whether that short turn runs
+                                                                                first or last changes which products share the first rounding
+3.2.1 Tensor core semantics. A matrix instruction takes
+                                                                                and therefore every partial sum after it. We record it as
+a tile of 𝐴 and a tile of 𝐵, multiplies them, and adds the prod-
+                                                                                k_loop_step.
+ucts into an accumulator that already holds a value. Where
+                                                                                   What tiles the output stays out of all three. BLOCK_M and
+the roundings fall inside that is a black box. For fp16, bf16 and
+                                                                                BLOCK_N decide which thread owns which output element,
+tf32 inputs this section assumes the semantics below, and ev-
+                                                                                and every element has an accumulator of its own either
+ery measurement in Section 7 agrees with it: one instruction
+                                                                                way, so re-tiling moves work between threads and leaves
+folds instruction_k products and the incoming accumula-
+                                          Í⊕fp32                               each accumulator’s chain where it was. BLOCK_K sets how
+tor into a single rounding: acc ← acc 𝑗 <instruction_k      𝑎 𝑗𝑏 𝑗 ,
+                                                                                many instructions one turn of the mainloop issues, and the
+where the sum is exact, so the instruction’s one rounding is                    accumulator is carried across turns, so by the semantics of
+the ⊕fp32 itself. The products inside one instruction therefore
+have no order of their own, and what survives as a reduction                    2 At fp8 the two are not bitwise equivalent, because fp8 accumulation runs
+order is the chain of ⊕fp32 steps across instructions, one step                 at reduced precision with a promotion cadence that need not match across
+per instruction. The scalar path rounds once per element,                       two lowerings [29, 59].
+                                                                                                                                        Yang et al.
+
+
+Section 3.2.1 the same instruction results reach it in the same   4    Black-box reconstruction
+order however the turns are cut. The three block sizes are        Although cuBLAS3 exposes a cost model API that names the
+speed knobs, which is why instruction_k and not BLOCK_K           GEMM algorithm it would run for a shape, that answer stops
+is the number the order depends on.                               short of the parameters of Section 3.2.2 that fix the bitwise
+   Split-K [1] cuts the axis into contiguous parts and gives      semantics.
+each part to a different threadblock, which starts it at zero          A GEMMDesc is the frozen record holding every one of
+in an accumulator of its own, the four parts and their merge      those factors and nothing else, so two equal records owe
+in Figure 2(b). We record the length of a part as span. Some      each other the same bits. What we recover is not one of
+kernels cut again inside a part, closing an accumulator every     them. For a fixed library generation, cuBLAS 12 or cuBLAS
+so many elements before the part is finished, so what records     13, we recover the function that generation computes,
+the cutting is a nest, outermost first, which we write as         (SM version, tensor shape) ↦−→ GEMMDesc, and a single
+k_cuts. A second kernel sums the parts. A finished part is        shape’s descriptor is one point of it. Building that function is
+written at one type and the running sum kept at another,          this section’s subject: how one point is recovered, and how
+and the two are set independently: parts at fp32 summed           the points become a function.
+at fp32, parts at the output type summed at fp32, or both              Two instruments. Runtime profiling says what the
+at the output type. We record them as partial_dtype and           library actually did: how many kernels it launched, over
+merge_dtype.                                                      what grid, and whether it took a workspace. That narrows
+   Chained chunks cuts twice and stays inside one thread-         a shape to a family cheaply. The arithmetic is settled by
+block, the two levels of Figure 2(c). Several threads share one   numerical experiment: two extreme values of opposite
+output element, and the outer cut gives each of them a con-       sign and one extreme small value, +𝐿, −𝐿 and 𝑟 , are placed
+tiguous chunk of the axis; the inner cut divides a chunk into     on an otherwise empty axis. For fp16, 𝐿 = 1024 and 𝑟 = 2−15 ,
+the sub-blocks one accumulator closes over. Both lengths          which is under half an ulp of fp32 at 𝐿. The pair cancels
+are the span of their level of the nest. This is what a kernel    exactly, so 𝑟 reaches the output from an accumulator that
+does on the scalar path, where no matrix instruction folds a      has already cancelled it and is swallowed by one still holding
+group of products for it and the accumulation is an explicit      half of it. A tensor core folds its own 𝑘 before the accumulator
+chain of fused multiply-adds.                                     sees anything, so 𝑟 goes one instruction group away from its
+   GEMV [20] multiplies a matrix by a vector. One output          𝐿 rather than beside it. Two placements read the two shapes
+element per row leaves no output tile to spread over threads,     a grouping takes.
+so the fold itself is spread instead, and that makes its order         i) Contiguous grouping. Eight terms summed as (𝑎 0 + 𝑎 1 +
+the most exposed of the four. The lanes of one warp each          𝑎 2 + 𝑎 3 ) + (𝑎 4 + 𝑎 5 + 𝑎 6 + 𝑎 7 ) answer differently from the
+take every countth tile of the axis rather than a contiguous      same eight in one chain, and what has to be found is where
+slice of it, the deal Figure 2(d) draws, and which of the two     a group ends. Put 𝑟 at index 0 and walk +𝐿 and −𝐿 as an
+a cut does is recorded as layout. The lanes then fold their       adjacent pair, at (1, 2), then (2, 3), and on. While the pair sits
+totals into one through shuffles, and that fold is where the      inside 𝑟 ’s own group the +𝐿 arrives after 𝑟 and absorbs it,
+order stops being a chain: a butterfly pairs lanes a power        and the output is zero. At (3, 4) the +𝐿 is still in that group
+of two apart, which is a balanced tree, and a butterfly that      and absorbs 𝑟 there, so the output is zero once more. At (4, 5)
+counts its offsets down rather than up is a balanced tree over    the pair lies wholly in the second group, which cancels to
+the lanes in bit-reversed order. Those are different sums, and    zero on its own, and 𝑟 reaches the output intact. The first
+only the second is what these kernels do, so we record the        placement that returns 𝑟 is 4, so the first group is 𝑎 0 through
+fold as one two-part cut per round rather than as a single        𝑎 3 ; pinning 𝑟 at 4 and walking again gives the next boundary.
+tree over the lanes.                                                   ii) Strided grouping. The same eight summed as (𝑎 0 + 𝑎 2 +
+   We formalise that whole set of factors as the GEMM com-        𝑎 4 + 𝑎 6 ) + (𝑎 1 + 𝑎 3 + 𝑎 5 + 𝑎 7 ) hold every other term in one
+putation descriptor, GEMMDesc for short, and Section 4 is         group, and what has to be found is which terms a group
+where it is put to work.                                          holds. Here the pair is pinned and 𝑟 walks. Under the layout
+                                                                  being tested, +𝐿 goes at a group’s first term and −𝐿 at its
+                                                                  last, 0 and 6 here, so that group carries an uncancelled 𝐿
+                                                                  throughout, and 𝑟 takes each remaining index in turn. It is
+                                                                  absorbed at 2 and 4 and survives at 1, 3, 5 and 7, so the group
+                                                                  holds {0, 2, 4, 6}: stride two, two groups. A layout guessed
+3.3   Attention
+                                                                  wrong puts the −𝐿 outside the group its +𝐿 is in, and the
+Readers may refer to Appendix F for the reduction order of        pattern that comes back is no longer periodic.
+a complex kernel such as flash attention, where this work of-
+fers a theoretical description and leaves the implementation
+open.                                                             3 CUDA   13.3 is the latest release at the completion of this work.
+Taming Bitwise Behavior in GPU Kernels with Tensor Core
+
+
+   Taking split-K as the example. Three things that fix            throughput [24], but these results open the opposite prospect,
+split-K’s bits are missing from that answer: k_cuts, how           that bitwise consistency and performance can be pursued
+the axis is cut, span, how long a part is at each level of         together. Section 7 carries the complete evaluation result.
+that nest, and the pair partial_dtype and merge_dtype.
+Reading span takes one row of an fp16 GEMM on GB300.               5     Compiler enforcement and layout
+An otherwise empty row of a 𝐾 = 576 GEMM carries 𝑟 at                    optimization
+𝑘 = 0 and the pair +𝐿, −𝐿 at 𝑘 = 𝑚 and 𝑚 + 1, walked along
+                                                                   Triton has no balanced tree reduction. Its lowering folds the
+the axis. While the pair shares 𝑟 ’s part the +𝐿 arrives after
+                                                                   values a thread holds one at a time, left to right, and the
+𝑟 and absorbs it, so the output is zero from 𝑚 = 1 to 191.
+                                                                   layout decides which values those are, so the tree a kernel
+From 192 the pair lies wholly in a later part, which cancels
+                                                                   computes moves with every layout the autotuner tries. We
+to zero on its own, and 𝑟 reaches the output. It falls back
+                                                                   extend Triton’s compiler with one, and with a data layout
+to zero at 𝑚 = 383 alone, where the pair straddles the next
+                                                                   optimization pass over it, at an acceptable performance cost
+boundary, so its halves reach the merge apart and the +𝐿
+                                                                   against the unordered mode under autotuning.
+absorbs 𝑟 there. One walk gives both boundaries, and the
+axis is in three parts of 192.                                     5.1   Backend lowering
+   Recovering one point runs the two instruments in order. A
+                                                                   The lane exchange is where the tree is built out of shuffles,
+profile of the shape narrows it to a family and drops the can-
+                                                                   and Figure 3 is the function that emits them. Both modes
+didates that disagree with what was launched. Each grouping
+                                                                   walk the same sequence of shuffle-xor steps and differ in
+still open is then read off the axis with +𝐿, −𝐿 and 𝑟 . What is
+                                                                   direction alone: the pinned mode counts the offset up from
+left over is separated by running each candidate’s own walk
+                                                                   one, so neighbouring lanes pair first and the tree has the same
+against the library on fresh draws until one survives.
+                                                                   shape whatever the warp count, while the default counts
+   From points to a function. A point at a time would never
+                                                                   down from half the lane count. A switch of this shape sits at
+finish: the shapes are unbounded and the cost model is free
+                                                                   every level of Section 3.1’s hierarchy, so the within-thread
+to answer differently at each of them. What makes the func-
+                                                                   fold and the cross-warp stage are pinned the same way.
+tion finite is that the descriptor depends on the shape only
+through the cost model’s answer for it, and those answers
+                                                                   void warpReduce(ConversionPatternRewriter &rw, Location loc,
+are finite in number. Recovering the function is therefore           SmallVector<Value> &acc, ReduceOp op, unsigned nLane, ...) {
+recovering one descriptor per reachable answer, which is a           if (targetInfo.warpReduce(rw, loc, acc, op, nLane, ...)) return;
+table, and we call one such table an arch profile. Following         if (isInnerTree(op)) { // count up: neighbours pair first
+                                                                       for (unsigned N = 1; N <= nLane / 2; N <<= 1) {
+this principle we reconstructed the tables for fp16, bf16 and            SmallVector<Value> shfl(acc.size());
+fp8 e4m3 on GB300, GB200 and H100 against cuBLAS 12 and                  for (unsigned i = 0; i < acc.size(); ++i)
+13, one per SM version and library generation. The answers                 shfl[i] = targetInfo.shuffleXor(
+                                                                                       rw, loc, acc[i], N * interleave);
+a table has to key on are enumerated rather than sampled: a              accumulate(loc, rw, op.getCombineOp(),
+scan of 8.25 million cost-model queries over vector lengths                         acc, shfl, pred);
+to 106 found every answer the vector family is reached with,         ...
+
+seven of them only at very long vectors or very deep 𝐾.
+On GB300, GB200, H100, excluding a located cuBLAS bug,                   Figure 3. The two orders, in the lane exchange.
+our reconstruction using Triton (block-level programming)
+returns cuBLAS’s own bytes on every shape whose kernel                The dispatch above it reaches the pinned path by two
+computes the full sum, and holds at 100%.                          routes. The attribute is one. The other is a layout whose
+   A non-cuBLAS GEMM taken alone falls short of highly             reduced register-lane extent on the axis is still greater than
+optimized cuBLAS whether or not we require bitwise equiv-          one, which the default lowering cannot express, so it is sent
+alent: above 5 GFLOP of arithmetic the Triton GEMM torch.          down the same path and gets the same tree.
+compile generates (FP order free) runs at 61–88% of it over           AMD reaches the same tree on different instructions. A
+the layer groups, while our bit-exact Triton kernel runs at        wave64 reduction folds within a row with row_shr steps,
+56–93%, and a large-tensor acceleration (Appendix E) at 69–        and the two orders are the two directions through the same
+91%. Below 5 GFLOP the free one runs at 59–88% while ours          step sequence: 8, 4, 2, 1 counting down for the default, and
+runs at 50–100%, which is where holding the order costs.           1, 2, 4, 8 counting up for the pinned mode. The cross-row
+Kernel fusion turns that around on realistic shapes: over          broadcast steps that follow preserve the tree and are identical
+96 of them the fused pair torch.compile generates runs at          either way. Where the assumption behind that sequence fails,
+85–125% of the speed of a cuBLAS GEMM followed by its epi-         on a wave32 target or a partial warp, the backend declines
+logue as a second kernel over the epilogue groups, while our       the instruction-level path and the shared count-up shuffle
+bit-exact fused pair runs at 95–168%. Fixing the reduction or-     tree performs the reduction instead, which is the same tree
+der is usually expected to cost about 20% of matrix-multiply       reached more slowly.
+                                                                                                                                               Yang et al.
+
+
+ A: 4 threads × 4 elements, 2 warps         B: 8 threads × 2 elements, 1 warp          carrying a map from register to the node standing for that
+ mov.u32             %r1, %tid.x            mov.u32              %r1, %tid.x
+ mul.wide.u32        %rd1, %r1, 16          and.b32              %r2, %r1, 7
+                                                                                       register’s contents. Each instruction is a transfer function on
+ add.s64             %rd2, %rd0, %rd1       shl.b32              %r3, %r2, 3           that map: it looks its operands up rather than tracing them
+ // %rd2 = %rd0 + 16t, t = 0..3             cvt.u64.u32          %rd1, %r3
+ ld.global.f32       %f1, [%rd2]            add.s64              %rd2, %rd0, %rd1      backwards, and writes a node into its destination. A global
+ ld.global.f32       %f2, [%rd2+4]          // %rd2 = %rd0 + 8t, t = 0..7
+ add.f32             %f3, %f1, %f2          ld.global.f32        %f1, [%rd2]           load becomes a data node carrying the address the load read.
+ ...                 4 elements, 2 levels   ld.global.f32        %f2, [%rd2+4]
+ shfl.sync.bfly.b32  %f4, %f3, 1, 31, -1    add.f32              %f3, %f2, %f1         A floating-point combine becomes an arithmetic node over
+ add.f32             %f5, %f3, %f4          shfl.sync.bfly.b32   %f4, %f3, 1, 31, -1   the nodes its operand registers already hold. A lane shuffle
+ st.shared.f32       [%rd6], %f5            add.f32              %f5, %f3, %f4
+ bar.sync            0                      ...                  offsets 2, 4          whose result is combined with the partial that was shuffled
+ ld.shared.f32       %f7, [%rd7]            setp.eq.s32          %p1, %r1, 0
+ add.f32             %f8, %f5, %f7          @%p1 st.global.f32 [%rd4], %f5             becomes one within-warp exchange node, and a store to
+ setp.eq.s32         %p1, %r1, 0
+ @%p1 st.global.f32 [%rd4], %f8                                                        shared memory, followed by a barrier, followed by a load,
+                    one signature: add.f32, height 4, first offset 1                   becomes one cross-warp exchange node. Figure 4 colours
+                                                                                       two assemblies by scope, thread green, warp yellow and
+  Figure 4. Two layouts of one reduction, one signature.                               shared memory pink, as Figure 1 colours its nodes. A loop
+                                                                                       that accumulates into a carried register becomes a fold over
+                                                                                       what one iteration contributes. A predicate is dropped when
+5.2    The data-layout optimization
+                                                                                       its truth is a function of the thread and block coordinates,
+A reduction whose axis is spread across warps pays a cross-                            since which threads run is a launch fact; a predicate carrying
+warp stage: two barriers, a shared-memory round trip and                               a loaded value is data, and the entry it guards is compared
+a second shuffle sequence. Moving the operand to a layout                              configuration by configuration instead. The nodes reaching
+that puts the axis inside one warp escapes that stage, and it                          a global store are the roots, one per output element, and each
+normally moves the tree along with it, so the escape costs                             carries the dependence tree of that element.
+bitwise equivalence.                                                                      Addresses. Address registers are evaluated symbolically.
+   A pinned tree makes the move safe. The lowering above                               Over a basis S of the integer symbols a kernel can read
+fixes the association independently of where the elements                              (the thread and block coordinates, the block extents, the
+live, so for a reduction whose tree is pinned the entire space                         parameters and theÍbase pointers), every integer register
+of valid layouts is a free performance knob. Algorithm 1, in                           lands in A = { 𝑐 0 + 𝑠 ∈ S 𝑐𝑠 𝑠 } ∪ { ⊤𝑒 }: an affine form, or an
+Appendix B, is the pass that spends it. It builds the layout that                      opaque token ⊤𝑒 carrying the expression that produced it.
+would reduce the axis inside one warp, puts the warps on the                           Moves and address-space casts are the identity, addition adds
+kept dimensions so the axis stays warp-synchronous, carries                            termwise, and a multiply or a left shift by a literal scales every
+whatever axis extent is left in registers as a within-thread fold,                     coefficient. A bitwise operation is admitted only where a rule
+and then asks whether that is worth the convert_layout it                              proves it exact. Writing tz(𝑎) for the trailing zeros common
+has to insert. The op, its axis, its extent and its ordering are                       to 𝑐 0 and every 𝑐𝑠 , a right shift by 𝑘 is exact when every
+never touched, so the result is bit-identical by construction.                         termÍis a multiple of 2𝑘 , so tz(𝑎) ≥ 𝑘 gives 𝑎 ≫ 𝑘 = (𝑐 0 ≫
+Figure 1(c) is that rewrite on one operand. Before it a lane                           𝑘) + 𝑠 (𝑐𝑠 ≫ 𝑘) 𝑠; a mask is the identity when it covers every
+holds a two-by-two block, so the eight-element axis runs past                          bit 𝑎 can set, and an or over two values that share no set bit is
+the warp boundary; after it a lane holds a row of the kept                             an addition. What is left is a mask or a shift on a thread index,
+                                                                                                                       Í exact too: %ntid.𝑑 = 𝑁𝑑 is
+dimension and each warp owns whole reductions. Loading                                 and the launch bound makes that
+in the reduce-friendly layout would reach the same place                               a power of two, so %tid.𝑑 = 𝑖<log2 𝑁𝑑 2𝑖 %tid.𝑑.bit𝑖 covers
+with no conversion at all, and the pass rejects it: a strided                          exactly [0, 𝑁𝑑 ), and in that basis a mask keeps the bits it
+load is paid on every launch and the conversion once per                               selects while a shift renumbers them. A leaf’s identity is the
+tile.                                                                                  affine form of the address it reads, so two kernels reaching
+   On GB300 the optimization recovers most of what the                                 one element by different index arithmetic give one leaf. An
+constraint costs, and on H100 it carries six of ten kernels to                         opaque token equals only an identical token, which splits a
+or past the unordered mode (see Section 7).                                            class rather than merging two.
+                                                                                          Canonicalization sorts the children of every commutative
+6 Static equivalence checking and partition                                            node, so a tree is compared up to exactly the commutativity
+The question the checker answers is narrow: given two com-                             Section 3.1 allows. A bottom-up hash then reduces the tree to
+piled kernels, are they bitwise equivalent. It answers from                            one signature, and two kernels are bitwise equivalent when
+the assembly statically. What it reads is PTX for NVIDIA and                           their signatures agree.
+AMDGCN for AMD.                                                                           A balanced tree reduction collapses one step further. Its
+                                                                                       shape is fixed by the logical element order (Section 3.1), so
+6.1    The algorithm                                                                   the collapsed node keeps four facts and drops the physical
+The walk takes one entry function in program order over                                structure that produced them: it keeps the combine with its
+a symbolic thread, one thread whose index stays a symbol,
+Taming Bitwise Behavior in GPU Kernels with Tensor Core
+
+
+rounding, the leaf computation with its coordinate blanked,       trip constants go into the signature and two kernels differing
+the reduction height, which is the base-two logarithm of the      only in a split count separate.
+elements folded in, and the offset of the butterfly step near-       Across 51,152 compiled configurations on GB300, 4,500
+est the leaves; it drops how many exchanges ran and which         on gfx942, and minor-scale benchmarks on GB200 and H100,
+thread held which element. A shared-memory exchange re-           equivalence the checker certified is equivalence the hardware
+locates one value and combines nothing, so it adds no height,     confirmed. On most kernels, the TorchInductor-generated
+and the height then counts elements and holds when the            ones included, it hands back 1.0 to 2.5 times the classes that
+warp count changes. Figure 4 reads the two layouts of Fig-        really exist (Section 7).
+ure 1(b) out of assembly, sixteen elements over four threads
+and two warps and then over eight threads and one: the
+cut between the scopes moves, the height of four holds, and
+                                                                  7     Evaluation
+the two reach one signature. Balance is the guard, an equal-      GB300 (sm_103) carries every measurement below. The
+height pair at every combine, so a left fold keeps its physical   cuBLAS reconstruction and the checker’s soundness gate
+structure and its own class.                                      run on GB200 (sm_100) and H100 (sm_90) too, H100 carries
+   A construct the walk does not model becomes opaque             the layout optimization as well, and gfx942 (CDNA3) carries
+syntax, matched on the instruction’s own text, which keeps        the AMDGCN checker over a corpus of its own. The eval-
+the answer sound (see Appendix).                                  uation splits in two: bit-level correctness first, then what
+                                                                  holding it costs.
+
+6.2   Implementation                                              7.1   Benchmarks
+The NVIDIA checker is about 2,500 lines of Python over a          cuBLAS 13, Triton 3.8, PyTorch 2.12 and CUDA 13 through-
+PTX parser: the walk, the symbolic address evaluator, the         out; bit-identical means the outputs agree byte for byte on
+tree representation and its canonical form, and the loop sum-     every input draw. Shapes. A measurement that feeds a ker-
+mariser. The AMDGCN checker is its twin over the same tree        nel draws its shapes from one of two sets. The realistic static
+representation, with the address evaluator and the exchange       set is 390 fp16 (𝑀, 𝑁 , 𝐾) triples read from the layer dimen-
+recognisers replaced for that instruction set, and it is graded   sions of open-weight models, each carrying its layer and the
+against a corpus of its own.                                      operation that follows it, with the ranges in Table 1. The
+   Triton’s autotuner already takes a pruning predicate, so       fuzzing set is drawn at random over two dtypes and reaches
+the PTX checker becomes one with no change to the auto-           the corners a layer list never visits, 𝑀 = 1 and a 𝐾 in the hun-
+tuner: a search keeps the configurations bitwise equivalent       dreds of thousands: 110,813 shapes for the reconstruction and
+to a reference, either its own first configuration or one the     1,400 for the performance work. Kernels. A measurement
+caller compiles and hands in, and benchmarks those.               that needs the kernel itself takes it from three sources: micro-
+   A loop is handled where the walk meets it. A loop-carried      kernels written for this work, each isolating one ordering
+accumulation is recognised by its shape in the assembly,          or layout question; the Triton kernels TorchInductor [8]
+an MMA or a combine whose destination is also one of its          emits, copied verbatim; and a zoo of 97 kernels adapted from
+sources, as in fma.rn.f32 %f5, %f1, %f2, %f5. The walk            open-source complex benchmarks [22, 23, 38, 46, 55]. The
+then replaces the one-iteration add(seed, chunk) it would         ordering work runs 24 (kernel, dtype) pairs over the first
+otherwise produce with a single fold node over the chunk,         two sources at fp16, fp8 and fp32, plus a LayerNorm weight-
+dropping the pre-loop seed, a value every configuration of        gradient reduction from the zoo; the checkers are graded on
+one kernel shares. The node is keyed on the loop’s own incre-     one PTX file per autotuner configuration, drawn from all
+ment, the BLOCK_N of a chunked reduction, since re-chunking       three.
+a scalar fold regroups the sum. The key comes off for a 𝐾
+loop whose tensor cores accumulate exactly (Section 3.2.1)
+and whose accumulator nothing outside the MMAs touches            7.2   Evaluation on bit-level correctness & static
+before the loop ends: every BLOCK_K then issues the same                checker soundness
+products into the same accumulator in the same order, so          Reconstructing cuBLAS. Table 2 puts a Triton GEMM
+the chunk size leaves the signature and those configurations      against cuBLAS on 110,813 random fp16 shapes on GB300,
+merge.                                                            at ten input draws each. Every shape whose cuBLAS kernel
+   An entry whose reduction the walk could not reconstruct        computes the full sum comes back byte for byte identical,
+keeps its launch geometry as the signature, so two kernels        across all eight algorithm families the library dispatches to.
+that both reconstruct to nothing stay apart. A reduction          The 60 shapes in the last column are one defect in cuBLAS
+whose accumulation crosses a loop back edge is summarised         itself: at very deep contraction lengths the library sums a
+from one iteration, which is exact for a single fold; a nest of   whole number of blocks and drops the tail, which we repro-
+folds would make that summary a guess, so the loop’s own          duce with no Triton in the picture. The same holds at fp8 and
+                                                                                                                                                                                                                                                                                                                                                                                                                               Yang et al.
+   speed relative to cuBLAS
+
+                                                                              torch-generated GEMM, max-autotune (TRITON)
+       (higher is faster)
+
+                                                                              bit-exact Triton GEMM, autotuned
+                                                                              bit-exact Triton GEMM, large tensor accelerated
+
+
+
+
+                                                                                                                                                                  1.00
+
+
+
+
+                                                                                                                                                                                                                                                        0.93
+                                                     1.25
+
+
+
+
+                                                                                                                                                                                                                                                               0.91
+                                                                                                                                                                          0.91
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                         0.88
+                                                                                                                                                           0.88
+
+
+
+
+                                                                                                                                                                                                                                                 0.88
+                                                                      0.79
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                      0.79
+                                                                                                                                                                                                                                       0.77
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                0.75
+                                                                                                                                                                                                                                                                                                                      0.74
+                                                                              0.74
+
+
+
+
+                                                                                                                                                                                                                                                                                                              0.73
+                                                                                                                                                                                         0.73
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                        0.72
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                                               0.71
+                                                                                                                                                                                                                                                                                                                                                                              0.70
+                                                                                                                                                                                                                             0.69
+
+
+
+
+                                                                                                                                                                                                                                                                                        0.69
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                                        0.69
+                                                     1.00
+
+
+
+
+                                                                                                                                                                                                0.66
+
+
+
+
+                                                                                                                                                                                                                                                                                                    0.66
+                                                                                                                                                                                                                      0.65
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                         0.65
+                                                                                                                                                                                                                                                                                                                                 0.65
+                                                                                                                           0.64
+
+
+
+
+                                                                                                                                                                                                                                                                                 0.64
+                                                                                                                                                                                                                                                                          0.62
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                              0.61
+                                                                                                                                                                                                           0.60
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                 0.60
+                                                                                                               0.60
+                                                                                               0.59
+                                                                                     0.58
+
+
+
+
+                                                                                                                                             0.58
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                       0.56
+                                                                                                                                      0.53
+                                                                                                        0.50
+                                                     0.75
+                                                     0.50
+                                                     0.25
+
+
+                                                                        16
+                                                                              )                       4)                          4)                              3)                        9   8)                           4)                         1)                       3)                           1)                        1)                           1)                         1)                        92
+                                                                                                                                                                                                                                                                                                                                                                                                                                )
+                                                                      (1                           (3                          (3                           (1                           (1                             (4                         (4                       (2                        (2                           (2                             (2                       (2                           (1
+                                                                  B                           up                       w   n                         a d
+                                                                                                                                                                                   all                             ge                         ge                       ge                       ge                            ge                         ge                           ge                            e
+                                                             RA                        oE                           do                            he                                                            lar                       lar                       lar                      lar                           lar                       lar                           lar                        lar
+                                                                                                                                                                                                                                                                                                                                                                                                                  g
+                                                        Lo                           M                         oE                            LM                                                            ns                       ad                         wn                       up                            wn                       up                              B
+                                                                                                                                                                                                                                                                                                                                                                                                        all
+                                                                                                           M                                                                                   c     tio                          he                      do                      LP                            do                       oE                               RA
+                                                                                                                                                                                           oje                          LM                         oE                            M                        LP                          M                              Lo
+                                                                                                                                                                                         pr                                                      M                                                  M
+                                                                                                                                                                                 ion
+                                                                                                                                                                            nt
+                                                                                                                                                                          te
+                                                                                                                                                                       at
+        relative to the baseline (lower is faster)
+
+
+
+
+                                                                                                                                                                                                           (a) a GEMM on its own, against cuBLAS
+
+                                                      2.0
+                  launch + kernel time,
+
+
+
+
+                                                                              cuBLAS, then the epilogue                                                                                                            bit-exact, autotuned                                                                                                                                                                 launch overhead
+                                                                              torch.compile, max-autotune (ATEN + TRITON)                                                                                                                                                                                                                                                                               kernel time
+                                                      1.5
+                                                                                                                                           1.18
+
+
+
+
+                                                                                                                                                                                                                                                             1.05
+                                                                                                                                                                                                1.04
+                                                                                                                                                    1.04
+                                                                             1.00
+
+
+
+
+                                                                                                                               1.00
+
+
+
+
+                                                                                                                                                                                    1.00
+
+
+
+
+                                                                                                                                                                                                                                          1.00
+
+
+
+
+                                                                                                                                                                                                                                                                                        1.00
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                             1.00
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                1.00
+                                                                                                                                                                                                                                                   0.97
+                                                                                              0.93
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                             0.91
+                                                                                     0.88
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                                      0.88
+                                                                                                                                                                                                                                                                                                                                                       0.86
+                                                                                                                                                                                                                                                                                                   0.80
+                                                                                                                                                                                                            0.78
+                                                      1.0
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                  0.67
+                                                                                                                                                                                                                                                                                                               0.59
+                                                      0.5
+
+
+
+                                                                                         8)                                                  2)                                                  14
+                                                                                                                                                                                                       )                                                0)                                            0   )
+                                                                                                                                                                                                                                                                                                                                                         (2
+                                                                                                                                                                                                                                                                                                                                                              )                                                6)
+                                                                                      (3                                                   (2                                                  t(                                                  (1                                              (1                                                                                                        (9
+                                                                          LU                                                          al                                                   h                                                  cw                                               A                                                    LU                                                 all
+                                                                        iG                                                 sid
+                                                                                                                               u
+                                                                                                                                                                                       eig                                             L  U                                             Lo
+                                                                                                                                                                                                                                                                                           R                                                 Re
+                                                                      Sw                                              re                                                           w                                                                                                                                                     d
+                                                                                                                                                                               S                                                    iG                                                                                              re
+                                                                                                                                                                        RM                                                    Sw                                                                                                 ua
+                                                                                                                                                                                                                                                                                                                             sq
+                                                                                                                                                                                                            (b) a GEMM with its epilogue folded in
+
+
+
+                                                                                              Figure 5. What the bitwise constraint costs, on a GEMM and on a fused epilogue.
+
+                                                     Table 1. The static GEMM shapes, by layer.                                                                                                                                                    Table 2. Reconstructing cuBLAS bit for bit, on three GPU
+                                                                                                                                                                                                                                                   generations.
+layer                                                                                shapes                                     𝑀                                                  𝑁                                     𝐾
+attention projections                                                                        45         256–16,384   2,048–18,432                                                          2,048–16,384                                                 GEMM algorithm (cuBLAS kernel)                                                                        tested bit identical cuBLAS bug
+MLP up                                                                                       21         256–16,384   6,144–33,792                                                           2,048–7,168                                                 Single-pass accumulation (nvjet)                                                                   19,449                               19,449                                        0
+MLP down                                                                                     21         256–16,384     2,048–7,168                                                         6,144–33,792                                                 Split-K (nvjet)                                                                                    18,636                               18,576                                       60
+MoE up                                                                                       55           16–3,072       512–3,072                                                          2,048–8,192                                                 Per-MMA accumulation (cutlass)                                                                     13,473                               13,473                                        0
+MoE down                                                                                     57           16–6,144     2,048–8,192                                                            512–3,072                                                 Split-K, per-MMA (cutlass)                                                                         33,677                               33,677                                        0
+LM head                                                                                      54             1–256 100,352–248,320                                                           2,048–8,192                                                 Three-level chain (gemmSN_NN)                                                                       4,731                                4,731                                        0
+LoRA B                                                                                      137          80–16,384     768–32,768                                                                 8–64                                                  Lane-tree GEMV (gemv2T)                                                                            14,897                               14,897                                        0
+all                                                                                         390                1–16,384                             512–248,320                                        8–33,792                                         Contiguous-slice GEMV (gemv2T)                                                                      1,722                                1,722                                        0
+                                                                                                                                                                                                                                                        Workspace GEMV (reduce_1Block)                                                                      4,228                                4,228                                        0
+Read from the layer dimensions of 16 open-weight models: Qwen3.8-2.4T-
+A95B, Qwen3.8-27B, Qwen3.6-35B-A3B, Qwen3-30B-A3B, DeepSeek-V4 Pro                                                                                                                                                                                      total                                                                                            110,813                           110,753                                           60
+and Flash, Kimi-K2.6 and K3, GLM-5.2, GLM-4.7-Flash, gpt-oss-120b and                                                                                                                                                                              GB300 (sm_103) against cuBLAS 13, fp16, 110,813 random shapes at ten
+20b, Ling-3.0-flash, MiniMax-M2, Nemotron-3.5-L, and granite-4.1-8b. Every                                                                                                                                                                         input draws each, from six regimes spanning 𝑀 and 𝑁 from 1 to 120,000
+dimension is a named key in that model’s own config.json; Appendix C                                                                                                                                                                               and 𝐾 from 8 to 300,000. Appendix D is the defect behind the last column,
+gives them per model.                                                                                                                                                                                                                              with its standalone reproduction.
+
+                                                                                                                                                                                                                                                                            architecture                                           tested bit identical cuBLAS bug
+on the two older generations: 100% bit-identical on every                                                                                                                                                                                                                   GB300, fp8         42,793                                                                  99.93%                                 0.07%
+shape outside that defect.                                                                                                                                                                                                                                                  GB200, fp16 + fp8 626,522                                                                  99.81%                                 0.19%
+  Soundness. Over 51,152 configurations on GB300, from                                                                                                                                                                                                                      H100, fp16 + fp8 648,720                                                                   99.82%                                 0.18%
+47 Triton kernels in five floating-point formats, every pair                                                                                                                                                                                       The fp8 half of the same GB300 campaign, then the same evaluation on
+the checker certified as bitwise equivalent returned the same                                                                                                                                                                                      GB200 (sm_100) and H100 (sm_90), whose records hold the two dtypes
+bytes on every input draw. The same gate holds over the                                                                                                                                                                                            together. Counts are shapes; rates are over byte comparisons.
+AMDGCN checker’s own 4,500 configurations, and over
+minor-scale benchmarks on GB200 and H100. Table 3 reads
+that corpus one dtype per kernel: on the reductions and                                                                                                                                                                                            GEMMs this paper targets the checker over-splits the true
+Taming Bitwise Behavior in GPU Kernels with Tensor Core
+
+
+
+
+                                                                                                                                                                                                                                                                                                                    141.9%
+partition by 1.0 to 2.5, reaching it exactly on the GEMM fam-
+
+
+
+
+                                                                                                      free-order mode (both tuned)
+
+
+
+
+                                                                                                                                                                                                                                                                                 118.9%
+                                                                                                         speed, as a share of the
+
+
+
+
+                                                                                                                                                                                                                  111.0%
+
+
+
+
+                                                                                                                                                                                                                                                                   102.6%
+ily, and four kernels outside of our major focus run from 6.7
+
+
+
+
+                                                                                                                                                        101.0%
+
+
+
+
+                                                                                                                                                                                                                                                                                                  100.0%
+                                                                                                                                                                                                99.5%
+                                                                                                                                                                              99.1%
+
+
+
+
+                                                                                                                                                                                                                                     98.3%
+
+
+                                                                                                                                                                                                                                                      97.7%
+to 23.0.
+                                                                                                                                     100%
+                                                                                                                                     75%
+Table 3. Static equivalence checking on NVIDIA PTX and                                                                               50%
+
+on AMD GCN.                                                                                                                          25%
+
+
+                                                                                                                                                      2                    2                  2                  2               16           2      2    2          2         2
+                                                                                                                                                   f3                    f3                f3                f3                bf          f3    f3    f3         f3        f3
+                                                                                                                                              0                   ol                  ig                er                            op          db            0         0
+                                                                classes          over-    over-
+                                                                                                                                            is             c                  b                    t                    6               u    m              i m        i m
+                                                                                                                                         ax             d_                ol_                   ou                   f1           l o_s         w         d         _d
+                                                                                                                                       d_         _2 d_c          d_                                        l_b exp
+                                                                                                                                                                                                                                _           _d         d_
+ kernel                                            configs checker bytes          split merges
+                                                                                                                                _2               m             _3                                        co                 um          wd          ra           um
+                                                                                                                               m            su         _2     m                                                co
+                                                                                                                                                                                                                  l_    l_s         _b           _g          ols
+                                                                                                                            su                        m     u                                                        co         m              s           c
+ reductions on different dims/axes (16), fp16 2,304 (1,920) 204 (144) 81 (87) 2.5 (1.7)   0 (0)                                                    su
+                                                                                                                                                          s
+                                                                                                                                                                                                                            no
+                                                                                                                                                                                                                               r           bia        ue
+                                                                                                                                                                                                                                                         _
+ softmax, fp16                                                                                                                                                                                                           er             r_         og
+                                                                                                                                                                                                                                     to
+                                                                                                                                                                                                                     lay duc                   pil
+                                                  144 (120)    8 (10) 4 (3) 2.0 (3.3)     0 (0)
+ layernorm, fp16                                                                                                                                                                                                                             e
+                                                  144 (120) 19 (20) 9 (3) 2.1 (6.7)       0 (0)
+                                                                                                                                                                                                                            in            r_
+ rmsnorm, fp16                                                                                                                                                                                                                         to
+                                                  144 (120) 17 (20) 8 (3) 2.1 (6.7)       0 (0)                                                                                                                                     uc
+ gemm, fp16                                      6,304 (72)      1 (4) 1 (4) 1.0 (1.0)    0 (0)                                                                                                                               ind
+ gemm_bias_relu_fp_fusion, bf16                    192 (24)      1 (2) 1 (2) 1.0 (1.0)    0 (0)
+                                                                                                                                                                                                                                    (a) H100
+ gemm_kgroup, bf16                              1,152 (132) 138 (1) 6 (1) 23.0 (1.0)      0 (0)
+
+
+
+
+                                                                                                      free-order mode (both tuned)
+ gemm_reduce_sum, fp32                              270 (–)    60 (–) 9 (–)     6.7 (–)   0 (–)
+
+
+
+
+                                                                                                         speed, as a share of the
+ gemm_softmax, fp32
+
+
+
+
+                                                                                                                                                                                                                                                                                                   100.2%
+                                                    270 (–)    60 (–) 9 (–)     6.7 (–)   0 (–)
+
+
+
+
+                                                                                                                                                  99.5%
+
+
+
+
+                                                                                                                                                                                                                                                                                                            98.6%
+ gemm_tma_store, fp16
+
+
+
+
+                                                                                                                                                                          96.4%
+
+
+
+
+                                                                                                                                                                                                                                                                                                                         94.5%
+                                                                 1 (1) 1 (1) 1.0 (1.0)
+
+
+
+
+                                                                                                                                                                                                                                                                        91.4%
+                                                                                                                                                                                                                                                       90.8%
+
+
+
+
+                                                                                                                                                                                                                                                                                          90.5%
+                                                                                                                                                                                                                       90.0%
+                                                    18 (12)                               0 (0)
+
+
+
+
+                                                                                                                                                                                                                                             88.7%
+
+
+
+                                                                                                                                                                                                                                                               85.4%
+                                                                                                                                                                                                 80.5%
+ inductor_sum_loop, fp16                                                       1.0 (–)
+
+
+
+
+                                                                                                                                                                 72.8%
+
+
+
+
+                                                                                                                                                                                                                                    72.6%
+                                                                                                                                                                                      72.5%
+                                                     20 (–)    20 (–) 20 (–)              0 (–)
+
+
+
+
+                                                                                                                                                                                                             68.7%
+ inductor_splitk_gemm, fp16                                                    1.0 (–)                                               100%
+
+
+
+
+                                                                                                                                                                                                                                                                                57.3%
+                                                       4 (–)     4 (–) 4 (–)              0 (–)
+ flash_attention, fp16                            2,720 (–) 2,655 (–) 266 (–) 10.0 (–)    0 (–)                                      75%
+
+Black is the PTX checker on GB300; blue, in brackets, is the AMDGCN                                                                  50%
+
+checker on gfx942 over a corpus of its own, where a dash is a kernel that                                                            25%
+
+corpus does not carry.
+                                                                                                                                    6 8 6 8 6 8 6 8 6 6 8 6 8 2 2 2 2
+                                                                                                                                  f1 fp f1 fp f1 fp f1 fp bf1 f1 fp f1 fp f3 f3 f3 f3
+                                                                                                                                0 0 ol ol ig ig er er                 m m p p b d 0 0
+                                                                                                                           a xis axis d_c d_c l_b l_b out out bf16 _su _su _loo _loo dwd ope dim dim
+                                                                                                                        d _ d_ _2 _2 co co d_ d_ l_ xp xp m m d_ _lo d_ m_
+                                                                                                                                            _   _
+                                                                                                                      _2 _2 m m d d _3 _3 c l_e l_e l_su l_su _bw um _gra lsu
+                                                                                                                                                           o
+                                                                                                                     m m su su _2 _2 um um                  co co co co rm n_s ias _co
+                                                                                                                   su su               m m s s
+7.3       Evaluation on performance cost                                                                                             su su                                           i
+                                                                                                                                                                            no la _b ue
+                                                                                                                                                                          er _p tor log
+                                                                                                                                                                       lay ctor duc epi
+                                                                                                                                                                          u in or_
+A GEMM on its own. Panel (a) of Figure 5 splits the 390                                                                                                               ind       uc
+                                                                                                                                                                                   t
+                                                                                                                                                                            ind
+shapes at 5 GFLOP of arithmetic (2𝑀𝑁 𝐾), where a GEMM
+                                                                                                                                                                                                                                (b) GB300
+gains enough work to saturate the machine. Above it, where
+the Triton GEMM torch.compile generates with the order                                                                                           raw inner-tree mode                                                            speedup of layout optimization
+left free reaches 61–88% of cuBLAS over the layer groups,4
+the bit-exact GEMM reaches 56–93% and the large-tensor                                            Figure 6. What the reduction-ordering constraint costs, and
+accelerated one 69–91%. Below the line the free one reaches                                       what the layout optimization takes back.
+59–88% and ours 50–100%.
+   A GEMM with its epilogue. Panel (b) folds the operation
+that follows each GEMM in its model’s own code into the                                           8                         Discussion and future work
+kernel, over 96 shapes in six epilogue groups. Each bar is a                                      Several limitations remain, and each is a future direction this
+call’s launch overhead plus its kernel time over the same two                                     work leaves open. i) Section 3 says enough about bit-level
+parts of a cuBLAS GEMM and a separate epilogue kernel,                                            semantics for a descriptor to hold across machines and across
+where launch is 82% of the baseline. Where torch.compile                                          library versions: none of its fields names a machine, and
+reaches 85–125% of that baseline, the bit-exact fused kernel                                      the split is written down rather than read off the hardware,
+reaches 95–168%: it runs 1.8 times as long as the baseline’s                                      so it survives the change in SM count at which cuBLAS’s
+kernel half and still wins the pair by removing one launch.                                       own guarantee lapses [42]. Measuring that cross-machine
+   The enforced reduction order. Figure 6 reads the fix-                                          robustness is what the resources behind this work did not
+bits layout optimization against the free-order mode, which                                       reach, due to resource limitations. ii) Taming a GEMM’s
+lets the compiler pick any reduction order. Both modes are                                        arithmetic could go up a level, from one kernel to a system
+tuned, so each bar is that mode’s own best; the white part                                        that composes many of them; and how much contribution
+of a bar is where the ordering constraint alone leaves the                                        this work can benefits the ML/RL training job is not measured
+kernel. 19 of the 27 bars finish within 10% of the free-order                                     either due to resource limitation. iii) It could go down a level
+mode, and on H100 the optimization carries six of the ten                                         equally, from the PTX and AMDGCN the checkers read to
+kernels to or past it, by as much as 42% on the column sum                                        the machine code ptxas emits below them: every soundness
+a matrix-multiply epilogue emits. On GB300 it passes that                                         claim here is relative to the assembly, and a checker reading
+mode once and otherwise reaches 57% to 99% of it.                                                 SASS would close that gap at the cost of a format the vendor
+                                                                                                  does not document. iv) Attention and the GEMM fusions
+4 torch.compile  emits a Triton GEMM of its own rather than reproducing                           whose epilogue impact the reduction order does not deeply
+cuBLAS’s algorithm, so it is not necessarily the faster kernel.                                   covered but only a theoretical analysis in Appendix F; v) The
+                                                                                                                            Yang et al.
+
+
+principle could be built into automatic kernel generation: a       Algorithm 1 The layout optimization for a pinned reduction.
+generator such as TorchInductor [8] could pin the order it         Require: module 𝑀, warp size 𝑤, per-thread element cap 𝑐, spread
+emits and tune inside one bitwise-equivalence class.                   factor 𝑢
+                                                                    1: for all reductions 𝑟 ∈ 𝑀 with reduction_ordering =
+                                                                       inner_tree do
+                                                                    2:     𝐿 ← operand layout of 𝑟 ; skip unless 𝐿 is blocked
+                                                                    3:     skip if 𝑟 crosses a thread block, or is already warp-
+                                                                       synchronous
+9   Conclusion                                                      4:     skip if |tile|/(𝑤 · 𝑛 warps ) > 𝑐 ⊲ the relayout would spill
+                                                                    5:     𝐶 ← Ideal(𝑟 ): lanes onto the axis first and the rest onto
+A GPU kernel’s bit-level semantics are decided by the struc-
+                                                                       the kept dimensions; warps onto the kept dimensions only; the
+ture of its floating-point accumulation, and that structure is         remaining axis extent into registers
+chosen by a compiler and a hardware mapping rather than             6:     skip if 𝐶 = 𝐿, or if 𝐶 puts no more lanes on the axis than 𝐿
+by whoever wrote the kernel. This paper makes the struc-               does
+ture a thing that can be handled. It can be written down, as        7:     skip if extent(axis) < 𝑢 · 𝐿.lanes(axis)      ⊲ already well
+a descriptor that holds what decides the bit-level semantics.          spread
+It can be recovered from a closed library by profiling and          8:     convert each operand to 𝐶, clone 𝑟 onto it, convert the
+numerical experiment, our first black-box reconstruction to            results back
+reach bit-level correctness, which reproduces cuBLAS’s own          9: end for
+bytes across three GPU generations. It can be requirement
+of a compiler, and we show that such requirement costs can
+be won back at acceptable rate. And it can be decided stati-
+                                                                   C    The models the shapes are read from
+cally from compiled code, soundly, by our first checkers to        A row of Table 4 becomes a set of GEMM shapes by reading
+settle bitwise equivalence between compiled GPU kernels            the weight each layer multiplies by. In 𝑀 × 𝑁 × 𝐾, 𝑁 is that
+on two vendors’ instruction sets, over tens of thousands of        weight’s output width, 𝐾 its input width, and 𝑀 a token
+autotuner configurations, and that decision goes back to the       count. Attention projections take their widths from hidden
+autotuner, which then searches inside one class. Our work          and from the head counts in the same file; the MLP pair takes
+was also heavily evaluated at the view of performance cost,        𝑁 from FFN going up and 𝐾 from FFN coming down; the
+which is much more acceptable than what the community              MoE pair does the same with expert in place of FFN ; and
+usually worried on enforcing numerical correcteness.               the LM head takes 𝑁 from vocab, which is where the widest
+                                                                   shapes in Table 1 come from.
+                                                                     A LoRA adapter contributes the second of its two matrix
+                                                                   multiplications, whose 𝐾 is the adapter rank rather than a
+                                                                   model width. That is why the LoRA rows of Table 1 reach
+                                                                   down to 𝐾 = 8 while their 𝑁 stays at hidden or FFN, and it is
+A    High level graph                                              the one layer group whose contracted dimension a model’s
+Figure 7 places the four mechanisms on the path a kernel           configuration does not fix.
+takes from a template to the bytes it returns, beside the closed
+library whose arithmetic Section 4 reconstructs.                   D    The cuBLAS bug on split-K tail
+                                                                   The defect sits in the nvjet split-K path cuBLASLt reaches at
+                                                                   ALGO_ID 66. It reproduces on GB200, GB300 and H100, and
+                                                                   under cuBLAS 12.8.5 as well as 13.1.1. Which shape loses its
+                                                                   tail moves with the architecture and the library together, so
+                                                                   Table 5 gives three that separate the pairings.
+B    The layout optimization                                          Fill 𝐴 and 𝐵 with ones. Every element of 𝐶 must then be
+The pass takes three numbers besides the module: the warp          exactly 𝐾, being a sum of 𝐾 products of one with one. A
+size 𝑤, a cap 𝑐 on the elements one thread may hold once           product of two ones is exact in fp32, the accumulator is fp32,
+the operand has moved, and a spread factor 𝑢. Every test           and an fp32 output holds every whole number below 224 , so
+is a skip, so a reduction it cannot place is left exactly as it    the number that comes back is the count of 𝑘 values that
+was. A reduction crossing a thread block is out of scope, and      were summed. On some shapes it comes back short by a
+one already inside a warp has nothing to win. The last two         whole number, which is that many missing terms of 1 × 1.
+guards ask whether the conversion pays: the candidate has             Where the piece is lost. Figure 8 draws 𝐾 = 8648. The 𝑘
+to put more lanes on the axis than the current layout does,        step of one threadblock in this fp16 kernel family is 64, and
+and the axis has to be under-spread by a factor 𝑢 before the       8648 holds 135 whole steps with 8 values over. cuBLASLt
+conversion earns its cost.                                         spreads the work over nine threadblocks, and 135/9 = 15
+Taming Bitwise Behavior in GPU Kernels with Tensor Core
+
+
+
+                                                                                                                  ML Framework
+
+
+                                                        Triton kernel template                                     §4 Black-box                        cuBLAS
+                                                                                                                                                  black box api with
+                                                                                                                   reconstruction               limited algorithm info.
+                 autotuner
+                                         config. 1       …        config. i            …        config. n              GEMM descriptor
+                                                                                                                   fixes the reduction order
+         Triton compiler                                                                                           offline derived
+                (MLIR) /                  tile IR                  tile IR                          tile IR        §5 Compiler enforcement
+         LLVM Backend                                                                                              & Layout Optimization
+                                                                                                                                                    closed source
+         GPU assembly                   PTX/GCN                  PTX/GCN                       PTX/GCN             §6 Static equivalence           CUDA compiler
+                      ptxas                                                                                        checking & partition
+                                                                                                                   FP computation reconstruction
+       machine program                    SASS                     SASS                             SASS                                                SASS
+
+                                                                                                                         bit equivalent?
+                                      execution code           execution code                execution code                                        execution code
+
+
+
+                                                             Figure 7. High level overview of this work.
+
+                                              Table 4. The open-weight models the static shapes are read from.
+
+         model                   hidden        FFN expert experts active                    vocab     model             hidden   FFN expert experts active     vocab
+         Qwen3.8-2.4T-A95B            8192        –     2048       512            10   248,320        gpt-oss-20b         2880     –   2880      32       4   201,088
+         DeepSeek-V4-Pro              7168        –     3072       384             6   129,280        Nemotron-3.5-L      2688 1856    1856     128       6   131,072
+         DeepSeek-V4-Flash            4096        –     2048       256             6   129,280        MiniMax-M2          3072     –   1536     256       8   200,064
+         GLM-5.2                      6144    12288     2048       256             8   154,880        Qwen3-30B-A3B       2048 6144     768     128       8   151,936
+         GLM-4.7-Flash                2048    10240     1536        64             4   154,880        Ling-3.0-flash      2560 6144     768     512       8   157,184
+         Kimi-K2.6                    7168    18432     2048       384             8   163,840        Qwen3.6-35B-A3B     2048     –    512     256       8   248,320
+         Kimi-K3                      7168    33792     3072       896            16   163,840        Qwen3.8-27B         5120 17408      –       –       –   248,320
+         gpt-oss-120b                 2880        –     2880       128             4   201,088        granite-4.1-8b      4096 12800      –       –       –   100,352
+Every number is the value of a named key in that model’s own config.json, read from the Hugging Face hub [25] on 2026-08-16. FFN is the dense feed-forward
+width and expert the routed one; a dash means the key is absent, so a model with no FFN entry is mixture-of-experts in every layer and one with no expert
+entry is dense in every layer. active is how many experts a token is routed to. The 16 are drawn from the highest trending and most downloaded models in
+that hub’s text-generation listing on the day the set was fixed. DeepSeek-V4 [18] appears in two sizes.
+
+
+ k=0                                                                                   8648            and nothing is added twice. The nine ranges cover [0, 8640),
+  CTA 0       CTA 1   CTA 2   CTA 3    CTA 4    CTA 5   CTA 6    CTA 7    CTA 8         8              and 𝐾 is 8648.
+ nine threadblocks, 960 values of k apiece                                        8640                    The condition. Write 𝑏 for the 𝑘 step, 𝑞 = ⌊𝐾/𝑏⌋, 𝑡 =
+ CTA 8 7680                                                                                            𝐾 mod 𝑏, and 𝑠 for the split count cuBLASLt picks. The tail
+  64     64                              …                                     64                      is lost exactly when ALGO_ID = 66, 𝑡 ≠ 0, 𝑞 mod 𝑠 = 0
+ fifteen whole blocks of 64, the last ending at 8640                                                   and 𝑠 > 𝑡. At 𝐾 = 8648 that reads 𝑞 = 135, 𝑡 = 8, 𝑠 = 9.
+    p0         p1      p2      p3        p4        p5     p6      p7         p8
+                                                                                                       The last clause is what makes 𝑞 divide evenly into ranges
+                                                                                                       of whole steps with the tail left over: a split that took an
+                                       splitKreduce
+                                                                                                       uneven share would give one threadblock the short step
+                                      C[m][n] = 8640                                                   and sum it. The ALGO_ID clause carries its own weight. On
+ all nine partials are added, and 9 × 960 = 8640                         tail out of scale             H100 the shape 1 × 2 × 1032 satisfies all three arithmetic
+                                                                                                       clauses and loses nothing, because it lands on ALGO_ID 23, a
+Figure 8. Where the last eight values of 𝑘 go, at 𝐾 = 8648.                                            CUTLASS kernel rather than an nvjet one. Over 1,542,555
+                                                                                                       real GEMMs per library on H100 the four-clause condition
+                                                                                                       predicted every loss with no false positives and no false
+exactly, so each takes 15 whole steps, or 960 values of 𝑘.                                             negatives, and dropping the ALGO_ID clause misclassified
+Every threadblock is full, and the last step of the last one is                                        3,557 shapes under each library.
+a whole 64 ending at 8640. The reduction then adds all nine                                               Which library, which machine. Table 5 gives three
+partial results, so everything computed reaches the output                                             shapes and where each one loses. No single shape covers
+                                                                                                                                                     Yang et al.
+
+
+    Table 5. Which shape loses its tail on which pairing.                              Table 6. What the acceleration is worth, by plan mode.
+
+                      GB200     GB300     GB300 H100        H100                              plan mode                   reference    accelerated
+             𝐾        13.1.1    13.1.x    12.8.5 13.1.1     12.8.5
+                                                                                              single-pass accumulation        0.303          0.802
+             8,648      −8        −8        ok               ok                               split-K                         0.426          0.857
+             57,608               ok        −8       ok      −8                               split-K, grouped                0.624          1.639
+             11,528                                  −8      −8                               per-MMA accumulation            0.654          2.086
+                                                                                              three-level chain               0.184          0.998
+A dash of −8 is eight values of 𝑘 left out of the sum, ok is the full sum, and a
+                                                                                              lane-tree GEMV                  0.210          0.843
+blank cell was not measured. Architectures are sm_100, sm_103 and sm_90.
+                                                                                              contiguous-slice GEMV           0.596          0.962
+                                                                                              workspace GEMV                  0.853          1.057
+every pairing, because the loss needs cuBLASLt to split 𝐾                          Device geometric mean of cuBLAS’s kernel time over the arm’s, by CUDA-
+at all and that decision moves with both the architecture                          graph replay with L2 flushed between replays, on an idle GB300. Above
+and the library. On GB300 the two libraries were nearly                            1.0 is faster than cuBLAS, and every such entry is in the unaligned regime,
+                                                                                   where the win comes from repacking the operands to restore alignment.
+disjoint: over 12,282 shapes, 13.1.1 met the condition on 193
+and 12.8.5 on 309, with no overlap, and at 𝐾 = 8648 the
+older library returns a split count of one and stays whole. On                     one of the 5,709 observed losses was exactly 𝐾 mod 64. It
+H100 they nearly coincide instead, and 11,528 is the smallest                      reaches ordinary shapes as well as skinny ones: 363 of 885
+losing 𝐾 for both. Every pairing runs the same tile family                         (𝑀, 𝑁 ) pairs under 13.1.1 and 416 of 885 under 12.8.5 lose 𝑘
+64x8_64x16_1x1 in the nvjet split-K path, followed by one                          somewhere, and 32 × 32, 64 × 64 and 128 × 128 all lose 8 at
+splitKreduce launch.                                                               𝐾 = 11,528.
+   The reproducer. It calls cuBLASLt directly, since
+torch.matmul never reaches this algorithm on its own                               E     The large-tensor acceleration on GB300
+path. Two things in it are load bearing. The workspace                             A descriptor fixes the arithmetic and says nothing about the
+is where split-K writes its partial results, so a zero-size                        schedule, so a second kernel that realises one descriptor may
+workspace keeps cuBLASLt whole and both shapes come                                choose any schedule it likes and still return the same bytes.
+back right. The output is fp32 because at part two’s depth                         The accelerated arm is that freedom taken up on GB300: each
+an fp16 output cannot be trusted: above 16,384 the fp16                            launcher gained one branch at the top, taken on sm_103 and
+step is 16, so a 𝐾 of the form 64𝑞 + 8 sits halfway between                        falling through to the original body everywhere else, so the
+two fp16 values and rounds down on its own. The control                            kernels the other two generations run are the ones they ran
+is 𝐾 = 57,616, a shape whose sum is complete, which                                before.
+an fp16 output reads as 57,600 and an fp32 output reads                               The branch carries a GROUP_M tile swizzle, tensor-memory
+correctly. Asking for fp32 leaves the heuristic’s choice alone,                    descriptors, a persistent grid with warp specialisation, deeper
+checked over 600 random shapes that returned a bit-identical                       pipelining, 32-bit indexing wherever an operand cannot
+configuration either way.                                                          reach 231 elements, a copy-free operand path, a single launch
+M, N, K = 1, 8, 8648   # q = 135, t = 8, splits 9
+                                                                                   across the split-K slices, and a tile rule for each of the eight
+a = torch.ones(M, K, dtype=torch.float16, device="cuda")
+b = torch.ones(K, N, dtype=torch.float16, device="cuda")
+                                                                                   plan modes a GB300 reaches.
+c = torch.empty(M, N, dtype=torch.float32, device="cuda")                             One change needed an argument that no value moves. The
+                                                                                   per-MMA plan accumulates in groups of KPD real 𝑘 elements,
+# algo is NULL, so cuBLASLt picks the split; the                                   and the reference kernel spends one tl.dot on each group.
+# workspace is what lets it split at all                                           The accelerated kernel spends one on 𝐺 groups at once. A
+cublasLtMatmul(handle, desc, one, a, a_layout,                                     tl.dot whose 𝑘 extent is 16𝐺 lowers to 𝐺 chained 𝑘 = 16
+               b, b_layout, zero, c, c_layout,                                     MMAs on one fp32 accumulator in increasing 𝑘, and each
+               c, c_layout, None,                                                  rounds the accumulator exactly once, so lanes [16𝑔, 16𝑔 +16)
+               workspace, WORKSPACE_BYTES, stream)                                 of the wide dot are the accumulator update the 𝑔-th narrow
+                                                                                   dot performed. Where a group is narrower than an MMA, at
+assert c[0, 0].item() == K               # reads back 8640
+                                                                                   KPD 8, the tail of each group is masked to zero, which is the
+   How far it reaches. The three shapes are the visible end
+                                                                                   stand-in the narrow kernel already used, repeated 𝐺 times
+of a sweep. Over 496,906 random shapes on a GB300 under
+                                                                                   in one tile. The residue tile keeps one group per dot, since
+13.1.1, 1,062 came back other than bit-identical to a full-𝐾
+                                                                                   its last group can be short:
+reference and 1,059 of those meet the condition; under 12.8.5                      # residue tile: one group per dot, the last one may be short
+on the same GPU, 179 shapes were flagged and all 179 lose                          for g in tl.range(0, nfirst, num_stages=1):
+exactly 𝑡 values of 𝑘, while 9,525,600 GEMMs at smaller 𝐾                              off = g * KPD
+stay whole. On H100 the counts are 2,714 under 13.1.1 and                              real = tl.arange(0, 16) < tl.minimum(KPD, rbk - off)
+2,995 under 12.8.5, each out of 1,542,555 real GEMMs. Every                            kk   = k0 + off + tl.arange(0, 16)
+Taming Bitwise Behavior in GPU Kernels with Tensor Core
+
+                                                                                                 Éfp32
+    a = tl.load(A + om[:, None]*am + kk[None, :]*ak,                    𝑂 𝑗 = 𝛼 𝑗 𝑂 𝑗 −1 ⊕fp32      𝑡 ∈ B 𝑗 𝑝𝑡 𝑣 𝑡 . The base is two because
+                mask=real[None, :], other=0.0)                          the kernel folds log2 𝑒 into the score scale and calls the
+    b = tl.load(B + kk[:, None]*bk + on[None, :]*bn,
+                                                                        hardware’s base-two exponential. The answer is 𝑂 𝐵 /ℓ𝐵 ,
+                mask=real[:, None], other=0.0)
+                                                                        taken once at the end.
+    acc = tl.dot(a, b, acc)
+                                                                           Every block boundary is a rounding. In exact arith-
+# the rest: G groups per dot, every group full                          metic 𝛼 𝑗 undoes the previous normalisation, and the recur-
+BKW: tl.constexpr = 16 * G                                              rence returns one value at every 𝑤. In floating point 𝛼 𝑗 𝑂 𝑗 −1
+STEP: tl.constexpr = G * KPD                                            is a multiply over the whole running output row, so each
+ix   = tl.arange(0, BKW)                                                boundary costs one rounding on every element of 𝑂 and one
+# lane ix holds k off+koff[ix]; KPD 8 zeroes each tail                  on ℓ, and a row of 𝑁 keys pays ⌈𝑁 /𝑤⌉ of them. The key block
+koff = (ix // 16) * KPD + ix % 16                                       width, BLOCK_N in Triton, therefore sets how many round-
+wr   = ix % 16 < KPD                                                    ings the answer carries and where they fall. Section 3.2.2
+for _ in tl.range(0, (klen - rbk) // STEP,                              put BLOCK_K on the other side of that line: an accumulator
+                 num_stages=NSTAGE):
+                                                                        carried across the turns of a tensor-core mainloop receives
+    a = tl.load(ap, mask=wr[None, :], other=0.0)
+                                                                        the same instruction results in the same order however the
+    b = tl.load(bp, mask=wr[:, None], other=0.0)
+    acc = tl.dot(a, b, acc)
+                                                                        turns are cut, so the turn boundary is a speed knob there.
+    ap += STEP * ak                                                     Here it is a term of the arithmetic.
+    bp += STEP * bk                                                        Masking puts the query block into the answer as well.
+   Across the whole arm, 154,904 byte comparisons returned              Left unmasked, the key walk runs from the first key to the
+zero differences. The load-bearing half of that is a sweep              last in steps of 𝑤, so the boundaries are multiples of 𝑤 alone
+of the plan-parameter space rather than of shapes: 7,868                and the query block width, BLOCK_M, chooses only which
+parameter combinations over the nine modes at ten input                 rows share a kernel instance. Causal masking splits the walk
+draws each. cuBLAS’s own heuristic hands any one shape a                in two: a run of blocks lying entirely below the diagonal, and
+small corner of a plan’s parameter space, so the sweep walks            one block straddling it, whose entries above the diagonal
+that space directly, and it was checked for power against a             are offset by −106 before the maximum is taken, so their
+deliberately broken kernel whose backwards split-K partials             probabilities underflow to zero. Both bounds of that split
+it caught. Every input set was drawn twice over, once ordi-             are multiples of BLOCK_M, so the query block width decides
+narily and once with the exponents spread across the dtype’s            where the straddling block begins, how many keys inside
+usable range, since narrow exponents hide a regrouping.                 it are live, and how many rescales precede it. Two causal
+   The descriptor path costs about 100 𝜇s of host time per              configurations differing only in BLOCK_M accumulate over
+call against about 20 𝜇s for the pointer launch, which is what          different boundaries, and two unmasked ones accumulate
+builds the tensor descriptors. Device time does not see it              over the same boundaries at any BLOCK_M.
+and a caller does, so it is visible on a GEMM under roughly                What the layout still moves. Two reductions run inside
+100 𝜇s.                                                                 a block. The row maximum selects one of its inputs and
+                                                                        rounds nothing, so its dependence tree is free. The row sum
+                                                                        Éfp32
+                                                                            𝑡 ∈ B 𝑗 𝑝𝑡 is a plain sum of 𝑤 values, which makes it the
+F    The reduction order of attention                                   object of Section 3.1 exactly, and its tree moves with the
+One attention kernel holds three reductions. The score matrix           thread count and the lane layout in the way that section
+contracts 𝑄 against 𝐾 over the head dimension, and the                  describes.
+output contracts the probabilities against 𝑉 over the key                  The probabilities are narrowed before the second
+axis; both are matrix multiplications, and their order is the           matmul. A tensor core takes its operands at the input type,
+object of Section 3.2. Between them sits an accumulation                so 𝑝𝑡 is rounded from the fp32 it was computed in down to
+over the key axis that carries a scale factor, and that factor is       fp16, bf16 or fp8 before it meets 𝑉 . That rounding lands on
+what separates attention from every reduction in Section 3.1.           every probability of every block, and it sits between the two
+  The recurrence. Cut the keys of one query row into                    reductions the kernel is composing, so the operand type is
+blocks B1, . . . , B𝐵 of width 𝑤, and write 𝑠𝑡 for the scaled           as much a part of the order as the accumulator type is.
+score of key 𝑡 and 𝑣𝑡 for its value row. The kernel carries                The descriptor. An attention descriptor carries the key
+three running quantities in fp32: a maximum 𝑚 𝑗 , a de-                 block width, the masking convention together with the query
+nominator ℓ 𝑗 and an output row 𝑂 𝑗 . At block 𝑗 it folds the           block width when masking is on, the tree of the row sum
+block’s own maximum into the running one and rescales                   inside a block, the type the probabilities are narrowed to, the
+what it already holds by 𝛼 𝑗 before it adds. Writing 𝑚 𝑗 =              descriptors of the two matrix multiplications, and the place
+max(𝑚 𝑗 −1, max𝑡 ∈ B 𝑗 𝑠𝑡 ), 𝛼 𝑗 = 2 𝑚 𝑗 −1 −𝑚 𝑗 and 𝑝𝑡 = 2 𝑠𝑡 −𝑚 𝑗 ,   of the final division.
+                                                    Éfp32
+the two running sums are ℓ 𝑗 = 𝛼 𝑗 ℓ 𝑗 −1 ⊕fp32        𝑡 ∈ B 𝑗 𝑝𝑡 and
+                                                                                                                                             Yang et al.
+
+
+References                                                                   [15] Caroline Collange, David Defour, Stef Graillat, and Roman Iakymchuk.
+ [1] R. C. Agarwal, S. M. Balle, F. G. Gustavson, M. Joshi, and P. Palkar.        2015. Numerical Reproducibility for the Parallel Reduction on Multi-
+     1995. A Three-Dimensional Approach to Parallel Matrix Multiplication.        and Many-Core Architectures. Parallel Comput. 49 (2015), 83–97.
+     IBM Journal of Research and Development 39, 5 (Sept. 1995), 575–582.         doi:10.1016/j.parco.2015.09.001
+     doi:10.1147/rd.395.0575                                                 [16] Thomas H. Cormen, Charles E. Leiserson, Ronald L. Rivest, and Clif-
+ [2] Willow Ahrens, James Demmel, and Hong Diep Nguyen. 2020. Al-                 ford Stein. 2022. Introduction to Algorithms (4 ed.). MIT Press, Cam-
+     gorithms for Efficient Reproducible Floating Point Summation. ACM            bridge, MA.
+     Trans. Math. Software 46, 3 (2020), 1–49. doi:10.1145/3389360           [17] Tri Dao, Daniel Y. Fu, Stefano Ermon, Atri Rudra, and Christopher Ré.
+ [3] Amazon Web Services. 2026. AWS Trainium and Inferentia. https://             2022. FlashAttention: Fast and Memory-Efficient Exact Attention with
+     aws.amazon.com/ai/machine-learning/trainium/. Amazon’s training              IO-Awareness. In Advances in Neural Information Processing Systems
+     and inference accelerators.                                                  35 (NeurIPS).
+ [4] Amazon Web Services. 2026. Neuron Kernel Interface (NKI). https:        [18] DeepSeek-AI. 2026. DeepSeek-V4: Towards Highly Efficient Million-
+     //awsdocs-neuron.readthedocs-hosted.com/en/latest/nki/. Tile-level           Token Context Intelligence. arXiv:2606.19348 [cs.CL]
+     Python kernel programming for AWS Trainium and Inferentia.              [19] James Demmel and Hong Diep Nguyen. 2013. Fast Reproducible
+ [5] AMD. 2023. AMD CDNA 3 Architecture. https://www.amd.                         Floating-Point Summation. In 2013 IEEE 21st Symposium on Computer
+     com/content/dam/amd/en/documents/instinct-tech-docs/white-                   Arithmetic (ARITH). 163–172. doi:10.1109/ARITH.2013.9
+     papers/amd-cdna-3-white-paper.pdf. Compute unit: four SIMD              [20] Jack J. Dongarra, Jeremy Du Croz, Sven Hammarling, and Richard J.
+     units, 64 KB local data share, 64-work-item wavefront.                       Hanson. 1988. An Extended Set of FORTRAN Basic Linear Algebra
+ [6] AMD. 2026. HIP Programming Model. https://rocm.docs.amd.com/                 Subprograms. ACM Trans. Math. Software 14, 1 (March 1988), 1–17.
+     projects/HIP/en/latest/understand/programming_model.html. Work-              doi:10.1145/42288.42291
+     group, wavefront and compute unit; wavefront 64 on CDNA, 32 or 64       [21] Benjamin Ferrell, Jun Duan, and Kevin W. Hamlen. 2019. CUDA au
+     on RDNA.                                                                     Coq: A Framework for Machine-validating GPU Assembly Programs.
+ [7] AMD. 2026. rocBLAS Documentation. https://rocm.docs.amd.com/                 In Design, Automation and Test in Europe Conference (DATE). 474–479.
+     projects/rocBLAS/en/latest/. The ROCm BLAS library, implemented              doi:10.23919/DATE.2019.8715160
+     in HIP and tuned for AMD GPUs.                                          [22] FLA Organization. 2026. Flash Linear Attention: Efficient Triton Imple-
+ [8] Jason Ansel, Edward Yang, Horace He, Natalia Gimelshein, Animesh             mentations for Emerging Model Architectures. https://github.com/fla-
+     Jain, Michael Voznesensky, Bin Bao, Peter Bell, David Berard, Evgeni         org/flash-linear-attention. Accessed 2026-09-06.
+     Burovski, Geeta Chauhan, Anjali Chourdia, Will Constable, Alban Des-    [23] FlagOpen. 2026. FlagGems: A Triton-Powered Operator Library. https:
+     maison, Zachary DeVito, Elias Ellison, Will Feng, Jiong Gong, Michael        //github.com/FlagOpen/FlagGems. Accessed 2026-09-06.
+     Gschwind, Brian Hirsh, Sherlock Huang, Kshiteej Kalambarkar, Lau-       [24] Horace He and Thinking Machines Lab. 2025. Defeating Nondetermin-
+     rent Kirsch, Michael Lazos, Mario Lezcano, Yanbo Liang, Jason Liang,         ism in LLM Inference. https://thinkingmachines.ai/blog/defeating-
+     Yinghai Lu, C. K. Luk, Bert Maher, Yunjie Pan, Christian Puhrsch,            nondeterminism-in-llm-inference/. Thinking Machines Lab blog;
+     Matthias Reso, Mark Saroufim, Marcos Yukio Siraichi, Helen Susnea,           accessed 2026-09-05.
+     Shunting Zhang, Michael Zhang, Matei Zaharia, and Soumith Chintala.     [25] Hugging Face. 2026. The Model Hub. https://huggingface.co/docs/
+     2024. PyTorch 2: Faster Machine Learning Through Dynamic Python              hub/models. Each model’s config.json is the source of the layer
+     Bytecode Transformation and Graph Compilation. In Proceedings of             dimensions used here; the text-generation listing is the source of the
+     the 29th ACM International Conference on Architectural Support for           model selection. Read 2026-08-16.
+     Programming Languages and Operating Systems (ASPLOS), Volume 2.         [26] Intel. 2023. Obtaining Numerically Reproducible Results (Condi-
+     doi:10.1145/3620665.3640366                                                  tional Numerical Reproducibility). https://www.intel.com/content/
+ [9] Seongwon Bang, Seunghyeon Nam, Inwhan Chun, Ho Young Jhoo,                   www/us/en/docs/onemkl/developer-guide-linux/2023-0/obtaining-
+     and Juneyoung Lee. 2022. SMT-Based Translation Validation for                numerically-reproducible-results.html. oneMKL Developer Guide for
+     Machine Learning Compiler. In Computer Aided Verification (CAV),             Linux; accessed 2026-09-05.
+     Part II. 386–407. doi:10.1007/978-3-031-13188-2_19                      [27] JAX Developers. 2026. Pallas: a JAX Kernel Language. https://docs.
+[10] Srinadh Bhojanapalli, Kimberly Wilber, Andreas Veit, Ankit Singh             jax.dev/en/latest/pallas/index.html. Lowers to Mosaic on TPU and to
+     Rawat, Seungyeon Kim, Aditya Krishna Menon, and Sanjiv Ku-                   Triton on GPU.
+     mar. 2021. On the Reproducibility of Neural Network Predictions.        [28] Norman P. Jouppi, Cliff Young, Nishant Patil, David Patterson, Gau-
+     arXiv:2102.03349 [cs.LG]                                                     rav Agrawal, Raminder Bajwa, Sarah Bates, Suresh Bhatia, Nan Bo-
+[11] Guy E. Blelloch and Bruce M. Maggs. 2010. Parallel Algorithms. In            den, Al Borchers, et al. 2017. In-Datacenter Performance Anal-
+     Algorithms and Theory of Computation Handbook (2 ed.), Mikhail J.            ysis of a Tensor Processing Unit. In Proceedings of the 44th An-
+     Atallah (Ed.). Chapman and Hall/CRC, 25–1–25–43. doi:10.1201/                nual International Symposium on Computer Architecture (ISCA). 1–12.
+     9781584888215-c25                                                            doi:10.1145/3079856.3080246
+[12] Sylvie Boldo, Jacques-Henri Jourdan, Xavier Leroy, and Guillaume        [29] Faizan A. Khattak and Mantas Mikaitis. 2025. Accurate Models of
+     Melquiond. 2015. Verified Compilation of Floating-Point Compu-               NVIDIA Tensor Cores. arXiv:2512.07004 [cs.MS] Bit-accurate inner-
+     tations. Journal of Automated Reasoning 54, 2 (2015), 135–163.               product models for V100, A100, H100 and B200 at 8-, 16- and 19-bit
+     doi:10.1007/s10817-014-9317-x                                                inputs, verified against the hardware.
+[13] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin Zheng, Eddie         [30] David J. Kuck and Yoichi Muraoka. 1974. Bounds on the Parallel Evalua-
+     Yan, Meghan Cowan, Haichen Shen, Leyuan Wang, Yuwei Hu, Luis                 tion of Arithmetic Expressions Using Associativity and Commutativity.
+     Ceze, Carlos Guestrin, and Arvind Krishnamurthy. 2018. TVM: An Au-           Acta Informatica 3, 3 (1974), 203–216. doi:10.1007/BF00288634
+     tomated End-to-End Optimizing Compiler for Deep Learning. In 13th       [31] Ignacio Laguna. 2020. Varity: Quantifying Floating-Point Variations in
+     USENIX Symposium on Operating Systems Design and Implementation              HPC Systems Through Randomized Testing. In 2020 IEEE International
+     (OSDI). 578–594.                                                             Parallel and Distributed Processing Symposium (IPDPS). IEEE, 622–633.
+[14] Sharan Chetlur, Cliff Woolley, Philippe Vandermersch, Jonathan Co-           doi:10.1109/IPDPS47924.2020.00070
+     hen, John Tran, Bryan Catanzaro, and Evan Shelhamer. 2014. cuDNN:       [32] Xavier Leroy. 2009. Formal Verification of a Realistic Compiler. Com-
+     Efficient Primitives for Deep Learning. arXiv:1410.0759 [cs.NE]              mun. ACM 52, 7 (2009), 107–115.
+Taming Bitwise Behavior in GPU Kernels with Tensor Core
+
+
+[33] Erik Lindholm, John Nickolls, Stuart Oberman, and John Montrym.          [50] Sanjif Shanmugavelu et al. 2024. Impacts of Floating-Point Non-
+     2008. NVIDIA Tesla: A Unified Graphics and Computing Architecture.            Associativity on Reproducibility for HPC and Deep Learning Applica-
+     IEEE Micro 28, 2 (2008), 39–55. doi:10.1109/MM.2008.31                        tions. arXiv:2408.05148 [cs.DC]
+[34] Amanda Liu, Gilbert Bernstein, Adam Chlipala, and Jonathan Ragan-        [51] Cecilia Summers and Michael J. Dinneen. 2021. Nondeterminism and
+     Kelley. 2024. A Verified Compiler for a Functional Tensor Language.           Instability in Neural Network Optimization. In Proceedings of the 38th
+     Proceedings of the ACM on Programming Languages 8, PLDI (2024),               International Conference on Machine Learning (ICML).
+     320–342. doi:10.1145/3656390                                             [52] Rajeev Thakur, Rolf Rabenseifner, and William Gropp. 2005. Optimiza-
+[35] Nuno P. Lopes, Juneyoung Lee, Chung-Kil Hur, Zhengyang Liu, and               tion of Collective Communication Operations in MPICH. International
+     John Regehr. 2021. Alive2: Bounded Translation Validation for LLVM.           Journal of High Performance Computing Applications 19, 1 (2005), 49–66.
+     In Proceedings of the 42nd ACM SIGPLAN Conference on Programming              doi:10.1177/1094342005051521
+     Language Design and Implementation (PLDI).                               [53] The Rocq Prover Team. 2026. About The Rocq Prover. https://rocq-
+[36] Daniel Lustig, Sameer Sahasrabuddhe, and Olivier Giroux. 2019. A              prover.org/about. States that the Rocq Prover was formerly known as
+     Formal Analysis of the NVIDIA PTX Memory Consistency Model. In                the Coq Proof Assistant; accessed 2026-09-05.
+     Proceedings of the 24th ACM International Conference on Architectural    [54] Philippe Tillet, H. T. Kung, and David Cox. 2019. Triton: An Intermedi-
+     Support for Programming Languages and Operating Systems (ASPLOS).             ate Language and Compiler for Tiled Neural Network Computations.
+     257–270. doi:10.1145/3297858.3304043                                          In Proceedings of the 3rd ACM SIGPLAN International Workshop on
+[37] David Menendez, Santosh Nagarakatte, and Aarti Gupta. 2016. Alive-            Machine Learning and Programming Languages (MAPL).
+     FP: Automated Verification of Floating Point Based Peephole Opti-        [55] Triton Developers. 2026. Triton Tutorials. https://github.com/triton-
+     mizations in LLVM. In Static Analysis (SAS). 317–337. doi:10.1007/978-        lang/triton/tree/main/python/tutorials. The fused-attention tutorial
+     3-662-53413-7_16                                                              is the source of the flash-attention kernel graded here; accessed 2026-
+[38] Meta PyTorch. 2026. Tritonbench: A Collection of PyTorch Custom               09-06.
+     Operators with Example Inputs. https://github.com/pytorch-labs/          [56] Yuki Uchino, Katsuhisa Ozaki, and Toshiyuki Imamura. 2025. Perfor-
+     tritonbench. Accessed 2026-09-06.                                             mance Enhancement of the Ozaki Scheme on Integer Matrix Multipli-
+[39] John Nickolls, Ian Buck, Michael Garland, and Kevin Skadron. 2008.            cation Unit. The International Journal of High Performance Computing
+     Scalable Parallel Programming with CUDA. ACM Queue 6, 2 (2008),               Applications 39, 3 (2025), 462–476. doi:10.1177/10943420241313064
+     40–53. doi:10.1145/1365490.1365500                                       [57] Haoyu Wang, Junjie Chen, Chuyue Xie, Shuang Liu, Zan Wang,
+[40] NVIDIA. 2017.           NVIDIA Tesla V100 GPU Architecture.                   Qingchao Shen, and Yingquan Zhao. 2023. MLIRSmith: Random Pro-
+     https://images.nvidia.com/content/volta-architecture/pdf/volta-               gram Generation for Fuzzing MLIR Compiler Infrastructure. In Pro-
+     architecture-whitepaper.pdf.      WP-08608-001_v1.1; independent              ceedings of the 38th IEEE/ACM International Conference on Automated
+     thread scheduling, per-thread program counters.                               Software Engineering (ASE). 1555–1566. doi:10.1109/ASE56229.2023.
+[41] NVIDIA. 2025. cuTile Python and the CUDA Tile IR. https://docs.               00120
+     nvidia.com/cuda/tile-ir/latest/. A tile-level Python kernel language     [58] Lei Wang, Yu Cheng, Yining Shi, Zhiwen Mo, Zhengju Tang, Wenhao
+     for CUDA, lowering through an MLIR-based tile intermediate repre-             Xie, Tong Wu, Lingxiao Ma, Yuqing Xia, Jilong Xue, Fan Yang, and
+     sentation.                                                                    Zhi Yang. 2026. TileLang: Bridge Programmability and Performance
+[42] NVIDIA. 2026. cuBLAS Library Documentation. https://docs.nvidia.              in Modern Neural Kernels. In International Conference on Learning
+     com/cuda/cublas/. Results reproducibility: bitwise repeatability only         Representations (ICLR). Oral.
+     on GPUs of the same architecture with the same number of SMs, and        [59] Peichen Xie, Shuotao Xu, Yang Wang, Fan Yang, and Mao
+     not across toolkit versions.                                                  Yang. 2025.       Bit-Accurate Modeling of GPU Matrix Multiply-
+[43] NVIDIA. 2026. CUDA C++ Programming Guide. https://docs.nvidia.                Accumulate Units: Demystifying Numerical Discrepancy and Accu-
+     com/cuda/cuda-c-programming-guide/. Thread hierarchy: grid,                   racy. arXiv:2511.10909 [cs.AR] Bit-accurate models of every MMA
+     thread block, warp; 1024 threads per block; thread block clusters at          instruction on ten GPU architectures, NVIDIA Volta through Black-
+     compute capability 9.0.                                                       well and AMD CDNA1 through CDNA3; open source as MMA-Sim.
+[44] NVIDIA. 2026. NVIDIA Blackwell Tuning Guide. https://docs.nvidia.        [60] Peichen Xie, Xian Zhang, and Shuo Chen. 2025.                   RepDL:
+     com/cuda/blackwell-tuning-guide/index.html. Compute capability                Bit-level Reproducible Deep Learning Training and Inference.
+     10.0: 228 KB shared memory per SM, 227 KB the most one thread block           arXiv:2510.09180 [cs.LG]
+     may claim, 32 thread blocks per SM.                                      [61] Xuejun Yang, Yang Chen, Eric Eide, and John Regehr. 2011. Find-
+[45] Amir Pnueli, Michael Siegel, and Eli Singerman. 1998. Translation             ing and Understanding Bugs in C Compilers. In Proceedings of the
+     Validation. In Tools and Algorithms for the Construction and Analysis         32nd ACM SIGPLAN Conference on Programming Language Design and
+     of Systems (TACAS).                                                           Implementation (PLDI). 283–294. doi:10.1145/1993498.1993532
+[46] PyTorch. 2026. torchao: PyTorch Architecture Optimization. https:        [62] Ziteng Yang, Jun Shirako, and Vivek Sarkar. 2024. Fully Verified
+     //github.com/pytorch/ao. Accessed 2026-09-06.                                 Instruction Scheduling. Proceedings of the ACM on Programming
+[47] PyTorch Team. 2026. Reproducibility and Deterministic Algorithms.             Languages 8, OOPSLA2 (2024), 791–816. doi:10.1145/3689739
+     https://pytorch.org/docs/stable/notes/randomness.html. PyTorch           [63] Jiayi Yuan, Hao Li, Xinheng Ding, Wenya Xie, Yu-Jhe Li, Wentian Zhao,
+     documentation; accessed 2026-09-05.                                           Kun Wan, Jing Shi, Xia Hu, and Zirui Liu. 2025. Understanding and
+[48] Penghui Qi, Zichen Liu, Xiangxin Zhou, Tianyu Pang, Chao Du,                  Mitigating Numerical Sources of Nondeterminism in LLM Inference.
+     Wee Sun Lee, and Min Lin. 2025. Defeating the Training-Inference              arXiv:2506.09501 [cs.LG]
+     Mismatch via FP16. arXiv:2510.26788 [cs.LG]                              [64] Lianmin Zheng, Chengfan Jia, Minmin Sun, Zhao Wu, Cody Hao Yu,
+[49] Geoffrey Sawaya, Michael Bentley, Ian Briggs, Ganesh Gopalakrish-             Ameer Haj-Ali, Yida Wang, Jun Yang, Danyang Zhuo, Koushik Sen,
+     nan, and Dong H. Ahn. 2017. FLiT: Cross-Platform Floating-Point               Joseph E. Gonzalez, and Ion Stoica. 2020. Ansor: Generating High-
+     Result-Consistency Tester and Workload. In 2017 IEEE International            Performance Tensor Programs for Deep Learning. In 14th USENIX
+     Symposium on Workload Characterization (IISWC). IEEE, 229–238.                Symposium on Operating Systems Design and Implementation (OSDI).
+     doi:10.1109/IISWC.2017.8167780                                                863–879.
+                                                                              [65] Keren Zhou, Mario Lezcano, Adam Goucher, Akhmed Rakhmati, Jeff
+                                                                                   Niu, Justin Lebar, Pawel Szczerbuk, Peter Bell, Phil Tillet, Thomas
+                                                                                                                            Yang et al.
+
+
+Raoux, and Zahi Moudallal. 2026. Linear Layouts: Robust Code Gen-      Programming Languages and Operating Systems (ASPLOS), Volume 1.
+eration of Efficient Tensor Computation Using F2 . In Proceedings of   doi:10.1145/3760250.3762221
+the 31st ACM International Conference on Architectural Support for
+
