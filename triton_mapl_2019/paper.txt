@@ -1,0 +1,780 @@
+  Triton: An Intermediate Language and Compiler for
+          Tiled Neural Network Computations
+                  Philippe Tillet                                           H. T. Kung                                                       David Cox
+                Harvard University                                      Harvard University                                         Harvard University, IBM
+                      USA                                                     USA                                                           USA
+Abstract                                                                             1                           Introduction
+   The validation and deployment of novel research ideas in                             The recent resurgence of Deep Neural Networks (DNNs)
+the field of Deep Learning is often limited by the availability                      was largely enabled [24] by the widespread availability of
+of efficient compute kernels for certain basic primitives. In                        programmable, parallel computing devices. In particular, con-
+particular, operations that cannot leverage existing vendor                          tinuous improvements in the performance of many-core
+libraries (e.g., cuBLAS, cuDNN) are at risk of facing poor                           architectures (e.g., GPUs) have played a fundamental role,
+device utilization unless custom implementations are written                         by enabling researchers and engineers to explore an ever-
+by experts – usually at the expense of portability. For this                         growing variety of increasingly large models, using more
+reason, the development of new programming abstractions                              and more data. This effort was supported by a collection
+for specifying custom Deep Learning workloads at a minimal                           of vendor libraries (cuBLAS, cuDNN) aimed at bringing the
+performance cost has become crucial.                                                 latest hardware innovations to practitioners as quickly as
+   We present Triton, a language and compiler centered around                        possible. Unfortunately, these libraries only support a re-
+the concept of tile, i.e., statically shaped multi-dimensional                       stricted set of tensor operations, leaving the implementation
+sub-arrays. Our approach revolves around (1) a C-based lan-                          of novel primitives to experts [13, 17, 25].
+guage and an LLVM-based intermediate representation (IR)                                This observation has led to the development of various
+for expressing tensor programs in terms of operations on                             Domain-Specific Languages (DSLs) for DNNs, based on poly-
+parametric tile variables and (2) a set of novel tile-level opti-                    hedral machinery (e.g., Tensor Comprehensions [43]) and/or
+mization passes for compiling these programs into efficient                          loop synthesis techniques (e.g., Halide [37], TVM [10] and
+GPU code. We demonstrate how Triton can be used to build                             PlaidML[22]). But while these systems generally perform
+portable implementations of matrix multiplication and con-                           well for certain classes of problems such as depthwise-separable
+volution kernels on par with hand-tuned vendor libraries                             convolutions (e.g., MobileNet [20]), they are often much
+(cuBLAS / cuDNN), or for efficiently implementing recent                             slower than vendor libraries in practice (see, e.g., Figure 1),
+research ideas such as shift convolutions.                                           and lack the expressivity necessary to implement structured
+                                                                                     sparsity patterns [28, 31, 47] that cannot be directly specified
+CCS Concepts • Computing methodologies → Paral-
+                                                                                     using affine array indices in nested loops.
+lel computing methodologies.
+Keywords compiler; neural networks; GPU
+ACM Reference Format:
+Philippe Tillet, H. T. Kung, and David Cox. 2019. Triton: An Inter-
+mediate Language and Compiler for Tiled Neural Network Com-
+                                                                                         Performance (TFLOP/S)
+
+
+
+
+putations. In Proceedings of the 3rd ACM SIGPLAN International
+Workshop on Machine Learning and Programming Languages (MAPL
+                                                                                                                  100
+’19), June 22, 2019, Phoenix, AZ, USA. ACM, New York, NY, USA,
+10 pages. https://doi.org/10.1145/3315508.3329973
+Permission to make digital or hard copies of all or part of this work for                                                                                     Roofline Model
+personal or classroom use is granted without fee provided that copies                                                                                         cuBLAS 10.0
+                                                                                                                                                              Triton
+are not made or distributed for profit or commercial advantage and that
+                                                                                                                                                              Auto-TVM
+copies bear this notice and the full citation on the first page. Copyrights                                                                                   Tensor Comprehensions
+for components of this work owned by others than the author(s) must                                              10−1                                         PlaidML
+be honored. Abstracting with credit is permitted. To copy otherwise, or                                                          101                            102
+republish, to post on servers or to redistribute to lists, requires prior specific                                              Arithmetic Intensity (TFLOP/GB)
+permission and/or a fee. Request permissions from permissions@acm.org.
+MAPL ’19, June 22, 2019, Phoenix, AZ, USA                                            Figure 1. Performance of various implementations of
+© 2019 Copyright held by the owner/author(s). Publication rights licensed            C = ABT vs. Roofline [46] Model (NVIDIA GeForce
+to ACM.
+                                                                                     GTX1070), where A ∈ R1760×1760 and B ∈ RN ×1760 as N
+ACM ISBN 978-1-4503-6719-6/19/06. . . $15.00
+https://doi.org/10.1145/3315508.3329973                                              modulates arithmetic intensity.
+MAPL ’19, June 22, 2019, Phoenix, AZ, USA                                                                Philippe Tillet, H. T. Kung, and David Cox
+
+
+   These issues have often been addressed by the use of           Listing 1. C = A × BT in Triton-C. Keywords specific to
+micro-kernels [11, 21] – i.e., hand-written tile-level intrin-    Triton are shown in purple.
+sics – but this solution requires a lot of manual labor and       / / T i l e s h a p e s a r e p a r a m e t r i c and can be o p t i m i z e d
+lacks portability. And while several high-level programming       / / by c o m p i l a t i o n b a c k e n d s
+abstractions for tiling have recently been proposed [23, 41],     c o n s t t u n a b l e i n t TM = { 1 6 , 3 2 , 6 4 , 1 2 8 }
+                                                                  c o n s t t u n a b l e i n t TN = { 1 6 , 3 2 , 6 4 , 1 2 8 }
+underlying compiler backends still lack support for tile-level    c o n s t t u n a b l e i n t TK = { 8 , 1 6 }
+operations and optimizations. To this end we present Tri-         // C = A ∗ B.T
+                                                                  k e r n e l v o i d matmul_nt ( f l o a t ∗ a , f l o a t ∗ b , f l o a t ∗ c ,
+ton (Figure 2), an open-source1 intermediate language and                                               i n t M, i n N , i n t K )
+compiler for specifying and compiling tile programs into          {
+                                                                    / / 1D t i l e o f i n d i c e s
+efficient GPU code.                                                 i n t rm [TM] = g e t _ g l o b a l _ r a n g e ( 0 ) ;
+                                                                    i n t rn [TN] = g e t _ g l o b a l _ r a n g e ( 1 ) ;
+                                                                    i n t r k [ TK ] = 0 . . . TK ;
+                                          Interface to existing     / / 2D t i l e o f a c c u m u l a t o r s
+                                          DSLs                      f l o a t C[TM, TN] = 0 ;
+                                          (Not addressed
+                    Triton-C              in this paper)
+                                                                    / / 2D t i l e o f p o i n t e r s
+                                                                    f l o a t ∗ pa [TM, TK ] = a + rm [ : , n e w a x i s ] + r k ∗ M;
+                                                                    f l o a t ∗ pb [TN , TK ] = b + rn [ : , n e w a x i s ] + r k ∗ K ;
+                    Triton-IR                                       f o r ( i n t k = K ; k >= 0 ; k −= TK ) {
+                                                                        b o o l c h e c k _ k [ TK ] = r k < k ;
+                                                                        b o o l c h e c k _ a [TM, TK ] = ( rm < M) [ : , n e w a x i s ] && c h e c k _ k ;
+                     Triton-JIT
+                                                                        b o o l c h e c k _ b [TN , TK ] = ( rn < N ) [ : , n e w a x i s ] && c h e c k _ k ;
+                                   Auto-Tuner                           / / load t i l e operands
+                                                                        f l o a t A[TM, TK ] = c h e c k _ a ? ∗ pa : 0 ;
+                                     Machine                            f l o a t B [TN , TK ] = c h e c k _ b ? ∗ pb : 0 ;
+                     Benchmark
+                                  -Independent
+                                     Passes
+                                                                        / / accumulate
+                                                                        C += d o t ( A , t r a n s ( B ) ) ;
+                                     Machine                            / / update p o i n t e r s
+                                   -Dependent                           pa = pa + TK ∗M;
+                                     Passes                             pb = pb + TK ∗N ;
+                                                                    }
+                                  Machine-Code                      / / w r i t e −b a c k a c c u m u l a t o r s
+                                                                    f l o a t ∗ pc [TM, TN] = c + rm [ : , n e w a x i s ] + rn ∗ M;
+                                                                    b o o l c h e c k _ c [TM, TN] = ( rm < M) [ : , n e w a x i s ] && ( rn < N ) ;
+                                                                    @check_c ∗ pc = C ;
+                                                                  }
+                    Figure 2. Overview of Triton
+
+
+   The main contributions of this paper are summarized as                any compilation target; (2) a set of tile-level machine-
+follows:                                                                 dependent passes for generating efficient GPU-ready
+     • Triton-C (Section 3): A C-like language for expressing            LLVM-IR; and (3) an auto-tuner that optimize any
+       tensor programs in terms of parametric tile variables.            meta-parameter associated with the above passes.
+       The purpose of this language is to provide a stable in-         • Numerical Experiments (Section 6): A numerical
+       terface for existing DNN transcompilers (e.g., PlaidML,           evaluation of Triton that demonstrates its ability to
+       Tensor Comprehensions) and programmers familiar                   (1) generate matrix multiplication implementations
+       with CUDA. Listing 1 shows the Triton-C source code               on par with cuBLAS and up to 3× faster than alterna-
+       associated with a simple matrix multiplication task.              tives DSLs on recurrent and transformer neural net-
+     • Triton-IR (Section 4): An LLVM-based Intermediate                 works; (2) re-implement cuDNN’s IMPLICIT_GEMM algo-
+       Representation (IR) that provides an environment suit-            rithm for dense convolution without performance loss;
+       able for tile-level program analysis, transformation and          and (3) create efficient implementations of novel re-
+       optimization. Listing 5 shows the Triton-IR code for a            search ideas such as shift-conv [47] modules.
+       Rectified Linear Unit (ReLU) function. Here Triton-IR        This paper will be prefaced by a brief analysis of the exist-
+       programs are constructed directly from Triton-C dur-       ing related literature (Section 2) and concluded by a summary
+       ing parsing, but automatic generation from embedded        and directions of future work (Section 7).
+       DSLs or higher-level DNN compilers (e.g., TVM) could
+       also be explored in the future.                            2     Related Work
+     • Triton-JIT (Section 5): A Just-In-Time (JIT) compiler         The existence of frameworks [1, 9, 36] and libraries for
+       and code generation backend for compiling Triton-IR        Deep Learning has been critical to the emergence of novel
+       programs into efficient LLVM bitcode. This includes (1)    neural network architectures and algorithms. But despite
+       a set of tile-level, machine-independent passes aimed      advances in analytical [5, 48] and empirical [6, 30] heuris-
+       at simplifying input compute kernels independently of      tics for linear algebra compilers, these software still invari-
+                                                                  ably rely on hand-optimized sub-routines (e.g., cuBLAS and
+1 http://triton-lang.org                                          cuDNN). This has led to development of various DSLs and
+Triton: An Intermediate Language for Tiled Neural Network Computations                               MAPL ’19, June 22, 2019, Phoenix, AZ, USA
+
+
+compilers for DNNs, generally based on one of three distinct             Listing 3. Grammar extensions for Triton-C. We assume the
+approaches:                                                              existence of certain C constructs shown in blue.
+    • Tensor-level IRs have been used by XLA [16] and                    // Broadcasting semantics
+       Glow [38] to transform tensor programs into prede-                slice           : ': ' | ' newaxis '
+                                                                         slice_list      : slice | slice_list ',' slice
+       fined LLVM-IR and CUDA-C operation templates (e.g.,               slice_expr      : postfix_expr | expr '[ ' slice_list '] '
+       tensor contractions, element-wise operations, etc.) us-           // Range initialization
+                                                                         constant_range : expr ' ... ' expr
+       ing pattern-matching.                                             // Intrinsics
+    • The polyhedral model [18] has been used by Tensor                  global_range    : ' get_global_range ' '( ' constant ') '
+                                                                         dot             : ' dot ' '( ' expr ',' expr ') '
+       Comprehensions (TC) [43] and Diesel [14] to parame-               trans           : ' trans ' '( ' expr ', ' expr ') '
+       terize and automate the compilation of one or many                intrinsic_expr : global_range | dot | trans
+                                                                         // Predication
+       DNN layers into LLVM-IR and CUDA-C programs.                      predicate_expr : '@ ' expr
+    • Loop synthesizers have been used by Halide [37]                    // Tile extensions for abstract declarators
+                                                                         abstract_decl : abstract_decl | '[ ' constant_list '] '
+       and TVM [10] to transform tensor computations into                // Extensions of C expressions
+       loop nests that can be manually optimized using user-             expr            : expr | constant_range | slice_expr
+                                                                                         | intrinsic_expr
+       defined (though possibly parametric [11]) schedules.              // Extensions of C specifiers
+   By contrast, Triton relies on the addition of tile-level opera-       storage_spec : storage_spec | ' kernel '
+                                                                         type_spec     : type_spec | ' tunable '
+tions and optimizations into traditional compilation pipelines.          // Extensions of C statements
+This approach provides (1) more flexibility than XLA and                 statement     : statement | predicate_expr statement
+
+Glow; (2) support for non-affine tensor indices contrary to
+TC and Diesel; and (3) automatic inference of possible exe-                 Built-in function: While common C syntax was retained
+cution schedule that would otherwise have to be specified                for element-wise array operations (+, -, &&, *, etc.), various
+manually to Halide or TVM. The benefits of Triton come at                built-in functions (dot, trans, get_global_range) were added to
+the cost of increased programming efforts – see Listing 2 for            support tile semantics (Section 3.2.1) and the SPMD pro-
+implementations of matrix multiplication in these DSLs.                  gramming model.
+                                                                            Broadcasting: N-dimensional tiles can be broadcast along
+                                                                         any particular axis using the newaxis keyword and usual slic-
+      Listing 2. C = A × BT in TF, PlaidML, TC and TVM
+                                                                         ing syntax (e.g., int broadcast [8, 8] = range[:, newaxis] for stack-
+C = tf . matmul (A , tf . transpose ( B ) )        //   TF
+C [i , j: I , J] = +( A [i , k ] * B [j , k ]) ;   //   PlaidML          ing columns). Note that slicing tiles to retrieve scalars or
+C (i , j) +=! A(i , k ) * B (j , k )               //   TC               sub-arrays is otherwise forbidden.
+tvm . sum (A[i , k] * B [j , k ] , axis = k )      //   TVM
+                                                                            Predication: Basic control-flow within tile operations
+                                                                         (Section 4.3) is achieved through the use of predicated state-
+                                                                         ments via the ’@’ prefix.
+3     The Triton-C Language
+   The purpose of Triton-C is to provide a stable frontend               3.2     Semantics
+for existing (and future) DNN transcompilers, as well as                 3.2.1   Tile semantics
+programmers familiar with low-level GPU programming. In                     The existence of built-in tile types and operations (i.e., tile
+this section we describe the CUDA-like syntax of Triton-C                semantics) in Triton-C offers two main benefits. First, it sim-
+(Section 3.1), its Numpy[35]-like semantics (Section 3.2) and            plifies the structure of tensor programs by hiding important
+its "Single-Program, Multiple-Data" (SPMD) programming                   performance details pertaining to intra-tile memory coalesc-
+model (Section 3.3).                                                     ing [12], cache management [32] and specialized hardware
+                                                                         utilization [27]. Second, it opens the door for compilers to
+3.1    Syntax                                                            perform these optimizations automatically, as discussed in
+   The syntax of Triton-C is based on that of ANSI C (and                Section 5.
+more specifically CUDA-C), but was modified and extended
+                                                                         3.2.2   Broadcasting Semantics
+(see Listing 3) to accomodate the semantics and program-
+ming model described in the two next subsections. These                     Tiles in Triton-C are strongly typed in the sense that cer-
+changes fall into the following categories:                              tain instructions statically require their operands to obey
+   Tile declarations: We added special syntax for declar-                strict shape constraints. For example, a scalar may not be
+ing multi-dimensional arrays (e.g., int tile[16, 16]) so as to           added to an array unless it is first appropriately broadcast.
+emphasize their semantical difference with nested arrays                 Broadcasting semantics [35] provide a set of rules to perform
+found in ANSI C (e.g., int tile[16][16]). Tile shapes must be            these conversions implicitly (see Listing 4 for an example):
+constant but can also be made parametric with the tunable                    1. Padding: the shape of the shortest operand is left-
+keyword. One-dimensional integer tiles may be initialized                       padded with ones until both operands have the same
+using ellipses (e.g., int range[8] = 0 ... 8).                                  dimensionality.
+MAPL ’19, June 22, 2019, Phoenix, AZ, USA                                                    Philippe Tillet, H. T. Kung, and David Cox
+
+
+      2. Broadcasting: the content of both operands is repli-     Listing 5. A = max(A, 0) in Triton-IR. Note that tile shapes
+         cated as many times as needed until their shape is       are non-parametric here. In this paper their values are in-
+         identical; an error is emitted if this cannot be done.   stantiated by the Triton-JIT.
+                                                                  define kernel void @relu ( float * %A , i32 %M , i32 %N) {
+         Listing 4. Broadcasting semantics in practice            prologue :
+int a [16] , b [32 , 16] , c [16 , 1];                              % rm = call i32 <8 > get_global_range (0) ;
+// a is first reshaped to [1 , 16]                                  % rn = call i32 <8 > get_global_range (1) ;
+// and then broadcast to [32 , 16]                                  ; broadcast shapes
+int x_1 [32 , 16] = a [ newaxis , :] + b ;                          %1 = reshape i32 <8 , 8 > % M ;
+// Same as above but implicitly                                     % M0 = broadcast i32 <8 , 8 > %1 ;
+int x_2 [32 , 16] = a + b ;                                         %2 = reshape i32 <8 , 8 > % N ;
+// a is first reshaped to [1 , 16]                                  % N0 = broadcast i32 <8 , 8 > %2 ;
+// a is broadcast to [16 , 16]                                      ; broadcast global ranges
+// c is broadcast to [16 , 16]                                      %3 = reshape i32 <8 , 1 > % rm ;
+int y [16 , 16] = a + c ;                                           % rm_bc = broadcast i32 <8 , 8 > %3 ;
+                                                                    %4 = reshape i32 <1 , 8 > % rn ;
+                                                                    % rn_bc = broadcast i32 <8 , 8 > %4 ;
+                                                                    ; compute mask
+3.3     Programming Model                                           % pm = icmp slt % rm_bc , % M0 ;
+                                                                    % pn = icmp slt % rn_bc , % N0 ;
+   The execution of CUDA [33] code on GPUs is supported             % msk = and % pm , % pn ;
+                                                                    ; compute pointer
+by an SPMD [4] programming model in which each kernel               % A0 = splat float * <8 , 8 > % A ;
+is associated with an identifiable thread-block in a so-called      %5 = getelementptr % A0 , % rm_bc ;
+                                                                    %6 = mul % rn_bc , % M0 ;
+launch grid. The Triton programming model is similar, but           % pa = getelementptr %5 , %6 ;
+each kernel is single-threaded – though automatically par-          ; compute result
+                                                                    % a = load % pa ;
+allelized – and associated with a set of global ranges that         % _0 = splat float <8 , 8 > 0 ;
+varies from instance to instance (see Figure 3). This approach      % result = max % float %a , % _0 ;
+                                                                    ; write back
+leads to simpler kernels in which CUDA-like concurrency             store fp32 <8 , 8 > % pa , % result
+primitives (shared memory synchronization, inter-thread           }
+communication, etc.) are inexistent.
+   The global ranges associated with a kernel can be queried
+using the get_global_range(axis) built-in function in order to    from Triton-C during parsing, although they could also be
+create e.g., tiles of pointers as shown in Listing 1.             generated directly from higher level DSLs in the future.
+                                                                     Triton-IR and LLVM-IR programs share the same high-
+                                                                  level structure (recalled in Section 4.1), but the former also
+                                                                  includes a number of extensions necessary for tile-level data-
+                                                                  flow (Section 4.2) and control-flow (Section 4.3) analysis.
+                                                                  These novel extensions are crucial for carrying out the op-
+                                                                  timizations outlined in Section 5, and for safely accessing
+                                                                  tensors of arbitrary shapes as shown in Section 6.
+
+                                                                  4.1     Structure
+                                                                  4.1.1   Modules
+                                                                    At the highest level, Triton-IR programs consist of one
+                                                                  or multiple basic units of compilation known as modules.
+                                                                  These modules are compiled independently from one an-
+                                                                  other, and eventually aggregated by a linker whose role is to
+                                                                  resolve forward declarations and adequately merge global
+                                                                  definitions.
+Figure 3. Difference between the CUDA and the Triton pro-           Each module itself is composed of functions, global vari-
+gramming model                                                    ables, constants and other miscellaneous symbols (e.g., meta-
+                                                                  data, function attributes).
+                                                                  4.1.2   Functions
+4      The Triton IR                                                 Triton-IR function definitions consist of a return type, a
+   Triton-IR is an LLVM-based Intermediate Representation         name and a potentially empty arguments list. Additional
+(IR) whose purpose is to provide an environment suitable for      visibility, alignment and linkage specifiers can be added if
+tile-level program analysis, transformation and optimization.     desired. Function attributes (such as inlining hints) and pa-
+In this work, Triton-IR programs are constructed directly         rameter attributes (such as read-only, aliasing hints) can also
+Triton: An Intermediate Language for Tiled Neural Network Computations                                     MAPL ’19, June 22, 2019, Phoenix, AZ, USA
+
+
+be specified, allowing compiler backends to perform more                   arithmetic instructions for transpositions (trans) and matrix
+aggressive optimizations by, for instance, making better use               multiplications (dot).
+of read-only memory caches.
+   This header is followed by a body composed of a list of                 4.3     Support for Tile-Level Control-Flow Analysis
+basic blocks whose interdependencies form the Control Flow                    One problem that arises from the existence of tile-level
+Graph (CFG) of the function.                                               operations in Triton-IR is the inexpressibility of divergent
+4.1.3     Basic Blocks
+                                                                           control flow within tiles. For example, a program may need
+                                                                           to partially guard tile-level loads against memory access
+   Basic blocks are, by definition, straight-line code sequences
+                                                                           violations, but this cannot be achieved using branching since
+that may only contain so-called terminator instructions (i.e.,
+                                                                           tile elements cannot be accessed individually.
+branching, return) at their end.
+   Triton-IR uses the Static Single Assignment (SSA) form,
+meaning that each variable in each basic block must be (1)                          Listing 6. Tile-Level Predication in Triton-IR
+assigned to only once and (2) defined before being used. In so                   ; pt [i , j ] , pf [i , j ] = ( true , false ) if x [i , j ] < 5
+                                                                                 ; pt [i , j ] , pf [i , j ] = ( false , true ) if x [i , j ] >= 5
+doing, each basic block implicitly defines a Data-Flow Graph                     % pt , % pf = icmpp slt %x , 5
+(DFG) whose different paths correspond to use-def chains in                      @ % pt % x1 = add %y , 1
+                                                                                 @ % pf % x2 = sub %y , 1
+the program’s SSA representation. This form can be created                       ; merge values from different predicates
+directly from Abstract Syntax Trees (ASTs) as shown in [7].                      % x = psi i32 <8 ,8 > [% pt , % x1 ] , [% pf , % x2 ]
+                                                                                 % z = mul i32 <8 ,8 > %x , 2
+
+4.2       Support for Tile-Level Data-Flow Analysis
+4.2.1     Types                                                               We propose to solve this issue through the use of the
+   Multi-dimensional tiles are at the center of data-flow anal-            Predicated SSA (PSSA) form [8] and ψ -functions [39]. This
+ysis in Triton-IR and can be declared using syntax similar                 requires the addition of two instruction classes (see Listing 6)
+to vector declarations in LLVM-IR. For example, i32<8, 8> is               to Triton-IR:
+the type corresponding to 8 × 8 32-bit integer tiles. Note                     • The cmpp instructions [8] are similar to usual compar-
+that there is no tunable keyword in Triton-IR, hence para-                        ison (cmp) instructions, except for the fact that they
+metric shape values must be resolved before programs are                          return two opposite predicates instead of one.
+generated. In our case, this is done by Triton-JIT’s auto-tuner                • The psi instruction merges instructions from different
+(Section 5.3).                                                                    streams of predicated instructions.
+4.2.2     Instructions
+   Triton-IR introduces a set of retiling instructions whose               5     The Triton-JIT compiler
+purpose is to support broadcasting semantics as described                    The goal of Triton-JIT is to simplify and compile Triton-IR
+in Section 3.2.2:                                                          programs into efficient machine code, via a set of machine-
+    • The reshape instruction creates a tile of the specified              independent (Section 5.1) and machine-dependent (Section 5.2)
+       shapes using data from its input argument. This is                  passes backed by an auto-tuning engine (Section 5.3).
+       particularly useful to re-interpret variables as higher-
+                                                                           5.1     Machine-Independent Passes
+       dimensional arrays by padding their input shapes with
+                                                                           5.1.1    Pre-Fetching
+       ones in preparation of implicit or explicit broadcasting.
+    • The broadcast instruction creates a tile of the specified               Tile-level memory operation inside loops can be prob-
+       shapes by replicating its input argument as many times              lematic, as they may induce severe latency that cannot be
+       as necessary along dimensions of size 1 – as shown in               hidden in the absence of enough independent instructions.
+       Figure 4.                                                           It is however possible to mitigate this problem in Triton-IR
+                                                                           directly by detecting loops and adding adequate prefetching
+      a                  a     a   a
+                                                                           code where necessary (See Listing 7).
+                                                             a     b   c
+      b                  b     b   b   a   b    c            a     b   c
+      c                  c     c   c                         a     b   c                   Listing 7. Automatic pre-fetching
+                                                                                                                  B0 :
+           (a) [3 × 1] input                   (b) [1 × 3] input                                                   % p0 = getelementptr %1 , %2
+                                                                           B0 :
+                                                                                                                   % x0 = load % p0
+                                                                            % p0 = getelementptr %1 , %2
+                                                                                                                  B1 :
+             Figure 4. The broadcast   <3,3>   instruction                 B1 :
+                                                                                                                   % p = phi [% p0 , B0 ], [% p1 , B1 ]
+                                                                            % p = phi [% p0 , B0 ] , [% p1 , B1 ]
+                                                                                                                   % x = phi [% x0 , B0 ], [% x1 , B1 ]
+                                                                            % x = load % p
+                                                                                                                   ; increment pointer
+  Usual scalar instructions (cmp, getelementptr, add, load...) were         ; increment pointer
+                                                                                                                   % p1 = getelementptr %p , %3
+                                                                            % p1 = getelementptr %p , %3
+preserved and extended to signify element-wise operations                                                          ; prefetching
+                                                                                                                   % x1 = load % p
+on tile operands. Finally, Triton-IR also exposes specialized
+MAPL ’19, June 22, 2019, Phoenix, AZ, USA                                                                                                                    Philippe Tillet, H. T. Kung, and David Cox
+
+
+5.1.2   Tile-Level Peephole Optimization
+                                                                                                                                          I/O granularity                              I/O granularity
+  The presence of tile-level operations in Triton-IR offers                                                   Micro-                                                        Micro-
+                                                                                                      t=0     Tile                                                          Tile
+new opportunities for peephole [29] optimizers. For instance,                                                                                         DRAM                                     DRAM
+chains of transpositions can be simplified using the identity                                                                              Loaded but
+                                                                                                                                           not used
+X = (X T )T for any tile X. We believe that other algebraic
+properties related to e.g., diagonal tiles could also be ex-
+ploited in the future.                                                                                t=1
+
+5.2     Machine-Dependent Passes
+   We now present a set of optimization passes for machines                                                                                           (a)                   (b)
+that follow the high-level model shown in Figure 5. Specif-
+ically, the optimizations performed by Triton-JIT consist                                            Figure 6. Uncoalesced (a) and coalesced (b) DRAM accesses.
+of (1) hierarchical tiling, (2) memory coalescing, (3) shared                                        Different threads are shown in different colors.
+memory allocation and (4) shared memory synchronization.
+5.2.1   Hierarchical Tiling                                                                          5.2.3   Shared Memory Allocation
+   Nested tiling strategies (see Figure 5) aim at decomposing                                           Tile-level operations that have high arithmetic intensity
+tiles into micro-tiles and eventually nano-tiles in order to fit                                     (e.g., dot) can benefit from temporarily storing their operands
+a machine’s compute capabilities and memory hierarchy as                                             in fast shared memory. The purpose of the Shared Memory
+tightly as possible. While this technique is routinely used in                                       Allocation pass is to determine when and where a tile should
+auto-tuning frameworks [34, 40], the structure of Triton-IR                                          be stashed to this space. This can be done, as illustrated in
+makes it possible to automatically enumerate and optimize                                            Figure 7, by first calculating the live range of each variable
+valid nested tiling configurations for any expressible pro-                                          of interest, and then using the linear-time storage allocation
+gram (and without the need for polyhedral machinery).                                                algorithm proposed in [15].
+
+               Hierarchical Tiling                                    Machine Model
+                                                                                                                                   4kB
+                                                                                                                  Live Intervals
+
+
+
+
+           Kernel Instance            Kernel Instance                    Device                                                                                             Capacity
+
+
+
+
+                                                                                                                                                                   Memory
+                                                                                                                                          4kB
+                                                                                                                                    4kB
+
+
+
+
+                    Tile                          Tile
+
+                                                                 Core1           Core2
+                           Tile                          Tile
+                                                                                              DRAM
+
+
+
+
+             Tile                          Tile
+                                                                                                                                                8kB
+
+
+
+
+                                                                 Core3           Core4                                                                                         Time
+
+
+           Micro
+           -Tile
+                           Micro
+                           -Tile Micro
+                                       Micro     Micro
+                                       -Tile Micro
+                                   -Tile
+                                                 -Tile
+                                             -Tile               Core       Shared Memory
+                                                                                                                                   Figure 7. Shared Memory Allocation
+                                Micro-Tile
+
+                              Micro-Tile                         SIMD1      B0     B1    B2   B3
+
+                              Micro-Tile                         SIMD2         Register File
+                                                                                                     5.2.4   Shared Memory Synchronization
+                              Micro-Tile                                                               Reads from and write to shared memory are asynchro-
+                                                                SIMD Unit                            nous in our machine model. The goal of the Shared Memory
+                       Nano-Tile        Nano-Tile               ALU      ALU      ALU     ALU
+                       Nano-Tile       Nano-Tile                  LD / ST         LD / ST
+                                                                                                     Synchronization pass automatically inserts barriers in the
+                                                                                                     generated GPU source code so as to preserve program cor-
+                                                                                                     rectness. This is done by detecting read-after-writes (RAW)
+Figure 5. Hierarchical Tiling in the Triton-IR Machine Model
+                                                                                                     and write-after-read(WAR) hazards using forward data-flow
+                                                                                                     analysis with the following data-flow equations:
+5.2.2   Memory Coalescing                                                                                                                 Ø
+   Memory accesses are said to be coalesced when adjacent                                             ins(RAW ) =                                     outp(RAW )
+threads simultaneously access nearby memory locations.                                                                             p ∈pred(s)
+This is important because memory is usually retrieved in
+                                                                                                                                          Ø
+                                                                                                      ins(W AR)       =                               outp(W AR)
+large blocks from DRAM.
+                                                                                                                                   p ∈pred(s)
+   Because Triton-IR programs are single-threaded and auto-                                                                        (
+matically parallelized, our compiler backend is able to order                                                             ∅              if ins(RAW ) ∩ read(s) , ∅ (barrier)
+                                                                                                     outs(RAW )       =     (RAW )
+threads internally within each micro-tile so as to avoid un-                                                             ins       ∪ write(s) otherwise
+coalesced memory accesses when possible. This strategy                                                                  (
+reduces the number of memory transactions necessary to                                                                    ∅             if ins(W AR) ∩ write(s) , ∅ (barrier)
+                                                                                                     outs(W AR)       =
+load a tile column (see Figure 6).                                                                                       ins(W AR) ∪ read(s) otherwise
+Triton: An Intermediate Language for Tiled Neural Network Computations                                                                                               MAPL ’19, June 22, 2019, Phoenix, AZ, USA
+
+
+5.3              Auto-tuner                                                                                          on certain tasks. CuBLAS, however, remains faster than Tri-
+   Traditional auto-tuners [42, 45] typically rely on hand-                                                          ton on shallow transformer neural networks thanks to the
+written parameterized code templates to achieve good per-                                                            use of a 3D algorithm [2] which splits deep reductions into in-
+formance on pre-defined workloads. By contrast, Triton-JIT                                                           dependent chunks to provide more parallelism when M and
+can extract optimization spaces directly from Triton-IR pro-                                                         N are too small. Otherwise, existing DSLs are 2-3x slower
+grams by simply concatenating meta-parameters associated                                                             than our solution – except for TVM (< 2x slower) when input
+with each of the above optimization passes.                                                                          shapes are multiples of 32.
+   In this work, only the Hierarchical Tiling pass is consid-
+                                                                                                                     6.2            Convolutions
+ered, leading to no more than 3 tiling parameters per dimen-
+sion per tile. These parameters are then optimized using an                                                             Convolutional Neural Networks (CNNs) are an important
+exhaustive search over powers of two between (a) 32 and                                                              class of machine learning models which should be well sup-
+128 for tile sizes; (b) 8 and 32 for micro-tile sizes; and (c) 1                                                     ported by DSLs and compilers. They are based around convo-
+and 4 for nano-tile sizes. Better auto-tuning methods could                                                          lutional layers (Figure 9a) whose implementation as matrix
+be used in the future.                                                                                               multiplication (Figure 9b) is necessary to make use of special-
+                                                                                                                     ized tensor-processing hardware – yet unsupported by exist-
+6            Numerical Experiments                                                                                   ing DSLs. Here we benchmark a Triton re-implementation of
+                                                                                                                     cuDNN’s "IMPLICIT_GEMM" algorithm (Section 6.2.1) and
+  In this section we evaluate the performance Triton on
+                                                                                                                     provide the first fused kernel available for shifted convolu-
+various workloads from the Deep Learning literature. We
+                                                                                                                     tions (Section 6.2.2). We implemented these routines using
+used an NVIDIA GeForce GTX1070 and compared our sys-
+                                                                                                                     look-up tables of pointer increments, as shown in Listing 8.
+tem against the most recent vendor libraries (cuBLAS 10.0,
+cuDNN 7.0) as well as related compiler technology (Auto-                                                                                                 Dense-Conv
+TVM, TC, PlaidML). When applicable, we auto-tuned these                                                                                     Data                                  Filters
+                                                                                                                               C
+DSLs for each individual problem size following official doc-                                                                  d0
+umentation guidelines.                                                                                                                                       *   R
+                                                                                                                           H                                             S                                           Activations
+
+6.1              Matrix Multiplication                                                                                                             dm                                                           K
+                                                                                                                                      W                                                                         a0
+  Matrix multiplication tasks of the form: A = D × W T                                                                                                                                                  =
+(D ∈ RM ×K , W ∈ RN ×K ) are at the heart of neural network                                                                          Shifted Data
+                                                                                                                                                         Shift-Conv
+                                                                                                                                                                                       Point-wise
+                                                                                                                                                                                                            P
+
+                                                                                                                                                                                       Filters                                am
+computations. Here we consider a variety of tasks from re-                                                                     C                                                                                     Q
+
+current (DeepSpeech2 [3]) and transformer [44] neural net-                                                                     d0
+                                                                                                                                                                         1
+                                                                                                                                                             *
+works; we report their performance in Figure 8.                                                                        H
+                                                                                                                                                                             1
+
+
+
+
+                                                                                                                                                   dm
+                                                                                                                                      W
+                                                                                          Triton
+             7
+                                                                                          cuBLAS 10.0
+                                                                                          AutoTVM
+                                                                                                                                                        (a) A convolutional layer
+                                                                                          Tensor Comprehensions
+             6
+                                                                                          PlaidML
+                                                                                                                                     C(RS)                                                                               K
+                                                                                                                                       d0                                                                                a0
+                                                                                                                                                                                       K
+             5                                                                                                                         d1                                                                                a1
+                                                                                                                                                                 C(RS)
+
+
+
+
+                                                                                                                                                                                                            HW
+
+
+
+                                                                                                                                                                                                    =
+                                                                                                                      HW
+
+
+
+
+                                                                                                                                                         X                   f0   f1           fk
+    TFLOPS
+
+
+
+
+             4
+
+
+
+                                                                                                                                      dm                                                                                 am
+             3
+
+
+                                                                                                                                                   (b) Equivalent matrix multiplication
+             2
+
+
+
+             1
+                                                                                                                     Figure 9. Dense and shifted convolutional layers (a) viewed
+                                                                                                                     as matrix multiplication (b)
+             0
+                   512       4       8                 )      )      )   )      )     )           12)   48)    12)
+                          102     204               760 ,1536 ,1024 ,1760 ,2560 ,1760          2,5 32,20 ,32,5
+                                                 7,1     2       8     8  4       3        2,3
+                                              845 144,3 72,12 60,12 680,6 0,713                     ,
+                                                                                        (51 (512 (204
+                                                                                                          8
+                                         (35
+                                             ,
+                                                 (6     ( 3 0  ( 1 7  (7
+                                                                         (1 7 6                                      6.2.1          Dense Convolutions
+                     M=N=K                                    (M,N,K)                             (M,N,K)
+                         Square                          DeepSpeech2                          Transformer               The convolutional layers considered in this subsection are
+                                                                                                                     from the Deep Learning literature and shown in Table 1.
+                 Figure 8. Performance of matrix multiplication                                                         As shown in Figure 10, Triton outperforms cuDNN’s im-
+                                                                                                                     plementation of IMPLICIT_GEMM for ResNet. This may be
+  Triton and cuBLAS are generally on par with each other,                                                            due to the fact that cuDNN also maintains better algorithms
+and achieve more than 90% of the device’s peak performance                                                           for 3 × 3 convolutions (i.e., Winograd [25]), thereby leaving
+MAPL ’19, June 22, 2019, Phoenix, AZ, USA                                                                                                                           Philippe Tillet, H. T. Kung, and David Cox
+
+                                  H W              C B K                       R   S      Application
+                  Task 1         112 112          64 4 128                     3   3      ResNet [19]                                 Listing 8. shift-convolutions in Triton-C
+                  Task 2         56 56            128 4 256                    3   3        ResNet                   const tunable int TM = {16 , 32 , 64 , 128};
+                  Task 3         28 28            256 4 512                    3   3        ResNet                   const tunable int TN = {16 , 32 , 64 , 128};
+                  Task 4         14 14            512 4 512                    3   3        ResNet                   const tunable int TK = {8};
+                  Task 5          7   7           512 4 512                    3   3        ResNet
+                  Task 6         161 700           1  8 64                     5   5      DeepSpeech2                __constant__ int * delta = alloc_const int [512];
+                  Task 7         79 341           32 8 32                      5   10     DeepSpeech2
+                                                                                                                     for ( int c = 0; c < C ; c ++)
+       Table 1. Convolution tasks considered in this paper                                                             delta [ c ] = c * H * W + shift_h [ c ]* W + shift_w [ c ]
+
+
+little engineering resources for optimizing kernels of lesser                                                        void shift_conv ( restrict read_only float *a ,
+                                                                                                                                         restrict read_only float *b , float *c ,
+importance. When fast algorithms are not available (e.g.,                                                                                int M , int N , int K ) {
+DeepSpeech2), cuDNN and Triton are on par.                                                                             int rxa [ TM ] = get_global_range [ TM ](0) ;
+                                                                                                                       int ryb [ TN ] = get_global_range [ TN ](1) ;
+                                                                                                                       int rka [ TK ] = 0 ... TK ;
+                                                                                                                       int rkb [ TK ] = 0 ... TK ;
+                                                                                        Triton
+                                                                                        cuDNN 7.0 - IMPLICIT GEMM
+                                                                                                                       float C [ TM , TN ] = 0;
+             5                                                                                                         float * pxa [ TM , TK ] = a + rxa [: , newaxis ];
+                                                                                                                       float * pb [ TN , TK ] = b + ryb [: , newaxis ] + rkb *N;
+                                                                                                                       __constant__ int * pd [ TK ] = delta + rka ;
+                                                                                                                       for ( int k = K ; k > 0; k = k - TK ) {
+             4                                                                                                           int delta [ TK ] = * pd ;
+                                                                                                                         float * pa [ TM , TK ] = pxa + delta [ newaxis , :];
+                                                                                                                         float a [ TM , TK ] = * pa ;
+                                                                                                                         float b [ TN , TK ] = * pb ;
+    TFLOPS
+
+
+
+
+             3
+                                                                                                                         C = dot (a , trans ( b ) , C ) ;
+                                                                                                                         pb = pb + TK * N ;
+                                                                                                                         pd = pd + TK ;
+             2
+                                                                                                                       }
+                                                                                                                       int rxc [ TM ] = get_global_range [ TM ](0) ;
+                                                                                                                       int ryc [ TN ] = get_global_range [ TN ](1) ;
+             1                                                                                                         float * pc [ TM , TN ] = c + rxc [: , newaxis ] + ryc *M;
+                                                                                                                       bool checkc0 [ TM ] = rxc < M ;
+                                                                                                                       bool checkc1 [ TN ] = ryc < N ;
+                                                                                                                       bool checkc [ TM , TN ] = checkc0 [: , newaxis ] && checkc1 ;
+             0
+                             1            2            3           4           5                     6           7     @checkc * pc = C ;
+                        sk           sk           sk          sk          sk                    sk          sk
+                     Ta           Ta           Ta          Ta          Ta                    Ta          Ta          }
+
+                                              ResNet                                          DeepSpeech2
+                                                                                                                                  5     Naive shift
+                                                                                                                                        Fused shift
+ Figure 10. Performance of implicit matrix multiplication                                                                               Maximum attainable performance
+
+
+                                                                                                                                  4
+
+6.2.2            Shift Convolutions
+   We finally consider an implementation of Task1-5 from                                                                          3
+Table 1 as shifted convolutions – a novel approach to CNNs
+                                                                                                                         TFLOPS
+
+
+
+
+(see Figure 9a). We compare our implementation of a fused
+shift-conv module in Triton (Listing 8) against that of a naive                                                                   2
+
+implementation relying on a hand-written shift kernel and
+a separate call to cuBLAS. We also report the maximum
+                                                                                                                                  1
+attainable performance when shift is not done (i.e., 1 × 1
+convolution). As we can see in Figure 11, our Triton imple-
+mentation is able to almost entirely hide the cost of shifting.                                                                   0
+                                                                                                                                             1                 2                 3           4           5
+                                                                                                                                        sk                sk                sk          sk          sk
+                                                                                                                                      Ta               Ta                Ta          Ta          Ta
+
+7            Conclusions
+                                                                                                                     Figure 11. Performance of shifted convolutions in Triton
+   In this paper we presented Triton, an open-source lan-
+guage and compiler for expressing and compiling tiled neu-
+ral network computations into efficient machine code. We
+showed that the addition of just a few data- and control-flow                                                           Directions of future work includes support for tensor
+extensions to LLVM-IR could enable various tile-level opti-                                                          cores, implementation of quantized kernels [26] and integra-
+mization passes which jointly lead to performance on-par                                                             tion into higher level DSLs.
+with vendor libraries. We also proposed Triton-C, a higher-
+level language in which we were able to concisely implement                                                          8            Acknowledgements
+efficient kernels for novel neural network architectures for                                                           This work was supported by the NVIDIA Graduate Fel-
+CNNs.                                                                                                                lowship.
+Triton: An Intermediate Language for Tiled Neural Network Computations                                        MAPL ’19, June 22, 2019, Phoenix, AZ, USA
+
+
+References                                                                          Learning.
+ [1] Martín Abadi, Paul Barham, Jianmin Chen, Zhifeng Chen, Andy Davis,        [14] Venmugil Elango, Norm Rubin, Mahesh Ravishankar, Hariharan San-
+     Jeffrey Dean, Matthieu Devin, Sanjay Ghemawat, Geoffrey Irving,                danagobalane, and Vinod Grover. 2018. Diesel: DSL for Linear Algebra
+     Michael Isard, Manjunath Kudlur, Josh Levenberg, Rajat Monga, Sherry           and Neural Net Computations on GPUs. In Proceedings of the 2Nd
+     Moore, Derek G. Murray, Benoit Steiner, Paul Tucker, Vijay Vasude-             ACM SIGPLAN International Workshop on Machine Learning and Pro-
+     van, Pete Warden, Martin Wicke, Yuan Yu, and Xiaoqiang Zheng. 2016.            gramming Languages (MAPL 2018). ACM, New York, NY, USA, 42–51.
+     TensorFlow: A System for Large-scale Machine Learning. In Proceed-             https://doi.org/10.1145/3211346.3211354
+     ings of the 12th USENIX Conference on Operating Systems Design and        [15] Jordan Gergov. 1999. Algorithms for Compile-time Memory Optimiza-
+     Implementation (OSDI’16).                                                      tion. In Proceedings of the Tenth Annual ACM-SIAM Symposium on
+ [2] R. C. Agarwal, S. M. Balle, F. G. Gustavson, M. Joshi, and P. Palkar.          Discrete Algorithms (SODA ’99).
+     1995. A three-dimensional approach to parallel matrix multiplication.     [16] Google Inc. 2017. Tensorflow XLA. https://www.tensorflow.org/
+     IBM Journal of Research and Development 39, 5 (Sep. 1995), 575–582.            performance/xla/
+     https://doi.org/10.1147/rd.395.0575                                       [17] Scott Gray and Alex Radford ans Diederik P. Kingma. 2017. Gpu
+ [3] Dario Amodei, Rishita Anubhai, Eric Battenberg, Carl Case, Jared               kernels for block-sparse weights. CoRR abs/1711.09224 (2017).
+     Casper, Bryan Catanzaro, Jingdong Chen, Mike Chrzanowski, Adam            [18] M. Griebl, C. Lengauer, and S. Wetzel. 1998. Code generation in
+     Coates, Greg Diamos, Erich Elsen, Jesse Engel, Linxi Fan, Christopher          the polytope model. In Proceedings. 1998 International Conference on
+     Fougner, Tony Han, Awni Y. Hannun, Billy Jun, Patrick LeGresley,               Parallel Architectures and Compilation Techniques (Cat. No.98EX192).
+     Libby Lin, Sharan Narang, Andrew Y. Ng, Sherjil Ozair, Ryan Prenger,           106–111. https://doi.org/10.1109/PACT.1998.727179
+     Jonathan Raiman, Sanjeev Satheesh, David Seetapun, Shubho Sen-            [19] K. He, X. Zhang, S. Ren, and J. Sun. 2016. Deep Residual Learning for
+     gupta, Yi Wang, Zhiqian Wang, Chong Wang, Bo Xiao, Dani Yogatama,              Image Recognition. In 2016 IEEE Conference on Computer Vision and
+     Jun Zhan, and Zhenyao Zhu. 2015. Deep Speech 2: End-to-End Speech              Pattern Recognition (CVPR). 770–778. https://doi.org/10.1109/CVPR.
+     Recognition in English and Mandarin. CoRR abs/1512.02595 (2015).               2016.90
+     arXiv:1512.02595 http://arxiv.org/abs/1512.02595                          [20] Andrew G. Howard, Menglong Zhu, Bo Chen, Dmitry Kalenichenko,
+ [4] M. Auguin and F. Larbey. [n. d.]. Opsila: an advanced SIMD for nu-             Weijun Wang, Tobias Weyand, Marco Andreetto, and Hartwig Adam.
+     merical analysis and signal processing. ([n. d.]), 311–318.                    2017. MobileNets: Efficient Convolutional Neural Networks for Mobile
+ [5] Bin Bao and Chen Ding. 2013. Defensive Loop Tiling for Shared Cache.           Vision Applications. CoRR abs/1704.04861 (2017). arXiv:1704.04861
+     In Proceedings of the 2013 IEEE/ACM International Symposium on Code            http://arxiv.org/abs/1704.04861
+     Generation and Optimization (CGO) (CGO ’13). IEEE Computer Society,       [21] Jianyu Huang and Robert A. van de Geijn. 2016. BLISlab: A Sandbox
+     Washington, DC, USA, 1–11.                                                     for Optimizing GEMM. FLAME Working Note #80, TR-16-13. The
+ [6] Muthu Manikandan Baskaran, Albert Hartono, Sanket Tavarageri,                  University of Texas at Austin, Department of Computer Science. http:
+     Thomas Henretty, J. Ramanujam, and P. Sadayappan. 2010. Parameter-             //arxiv.org/pdf/1609.00076v1.pdf
+     ized Tiling Revisited. In Proceedings of the 8th Annual IEEE/ACM Inter-   [22] Intel AI. 2018. PlaidML. https://www.intel.ai/reintroducing-plaidml
+     national Symposium on Code Generation and Optimization (CGO ’10).         [23] Andrew Kerr, Duane Merrill, Julien Demouth, and John Tran. [n. d.].
+     ACM, New York, NY, USA, 200–209. https://doi.org/10.1145/1772954.              CUTLASS: Fast Linear Algebra in CUDA C++. ([n. d.]). https://devblogs.
+     1772983                                                                        nvidia.com/cutlass-linear-algebra-cuda/
+ [7] Matthias Braun, Sebastian Buchwald, Sebastian Hack, Roland Leissa,        [24] Alex Krizhevsky, Ilya Sutskever, and Geoffrey E. Hinton. 2012. Ima-
+     Christoph Mallon, and Andreas Zwinkau. 2013. Simple and Efficient              geNet Classification with Deep Convolutional Neural Networks. In
+     Construction of Static Single Assignment Form. In Proceedings of the           Proceedings of the 25th International Conference on Neural Information
+     22Nd International Conference on Compiler Construction (CC’13). 102–           Processing Systems - Volume 1 (NIPS’12).
+     122.                                                                      [25] Andrew Lavin and Scott Gray. 2016. Fast Algorithms for Convolutional
+ [8] Lori Carter, Beth Simon, Brad Calder, Larry Carter, and Ferrante. [n.          Neural Networks. (CVPR’16).
+     d.]. Predicated Static Single Assignment. In Proceedings of the PACT      [26] Darryl D. Lin, Sachin S. Talathi, and V. Sreekanth Annapureddy. 2016.
+     1999 Conference on Parallel Architectures and Compilation Techniques.          Fixed Point Quantization of Deep Convolutional Networks. In Proceed-
+ [9] Tianqi Chen, Mu Li, Yutian Li, Min Lin, Naiyan Wang, Minjie Wang,              ings of the 33rd International Conference on International Conference
+     Tianjun Xiao, Bing Xu, Chiyuan Zhang, and Zheng Zhang. 2015.                   on Machine Learning - Volume 48 (ICML’16). JMLR.org, 2849–2858.
+     MXNet: A Flexible and Efficient Machine Learning Library for Hetero-           http://dl.acm.org/citation.cfm?id=3045390.3045690
+     geneous Distributed Systems. CoRR abs/1512.01274 (2015).                  [27] Matt Martineau, Patrick Atkinson, and Simon McIntosh-Smith. 2017.
+[10] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Haichen Shen, Eddie Q.              Benchmarking the NVIDIA V100 GPU and Tensor Cores. Springer.
+     Yan, Leyuan Wang, Yuwei Hu, Luis Ceze, Carlos Guestrin, and Arvind        [28] Bradley McDanel, Surat Teerapittayanon, and H.T. Kung. 2017. Em-
+     Krishnamurthy. 2018. TVM: End-to-End Optimization Stack for Deep               bedded Binarized Neural Networks. In Proceedings of the 2017 Interna-
+     Learning. CoRR abs/1802.04799 (2018).                                          tional Conference on Embedded Wireless Systems and Networks (EWSN
+[11] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Haichen Shen, Eddie Q.              &#8217;17). Junction Publishing, USA, 168–173. http://dl.acm.org/
+     Yan, Leyuan Wang, Yuwei Hu, Luis Ceze, Carlos Guestrin, and Arvind             citation.cfm?id=3108009.3108031
+     Krishnamurthy. 2018. TVM: End-to-End Optimization Stack for Deep          [29] W. M. McKeeman. 1965. Peephole Optimization. Commun. ACM 8, 7
+     Learning. CoRR abs/1802.04799 (2018).                                          (July 1965), 443–444. https://doi.org/10.1145/364995.365000
+[12] Jack W. Davidson and Sanjay Jinturkar. 1994. Memory Access Coa-           [30] Sanyam Mehta, Rajat Garg, Nishad Trivedi, and Pen-Chung Yew. 2016.
+     lescing: A Technique for Eliminating Redundant Memory Accesses.                TurboTiling: Leveraging Prefetching to Boost Performance of Tiled
+     In Proceedings of the ACM SIGPLAN 1994 Conference on Programming               Codes. In Proceedings of the 2016 International Conference on Supercom-
+     Language Design and Implementation (PLDI ’94). ACM, New York, NY,              puting (ICS ’16). ACM, New York, NY, USA, Article 38, 12 pages.
+     USA, 186–195. https://doi.org/10.1145/178243.178259                       [31] Sharan Narang, Eric Undersander, and Gregory F. Diamos. 2017. Block-
+[13] Greg Diamos, Shubho Sengupta, Bryan Catanzaro, Mike Chrzanowski,               Sparse Recurrent Neural Networks. CoRR abs/1711.02782 (2017).
+     Adam Coates, Erich Elsen, Jesse Engel, Awni Hannun, and Sanjeev           [32] Rajib Nath, Stanimire Tomov, and Jack Dongarra. 2011. Accelerat-
+     Satheesh. 2016. Persistent RNNs: Stashing Recurrent Weights On-                ing GPU Kernels for Dense Linear Algebra. In Proceedings of the 9th
+     Chip. In Proceedings of The 33rd International Conference on Machine           International Conference on High Performance Computing for Computa-
+                                                                                    tional Science (VECPAR’10). Springer-Verlag, Berlin, Heidelberg, 83–92.
+MAPL ’19, June 22, 2019, Phoenix, AZ, USA                                                                     Philippe Tillet, H. T. Kung, and David Cox
+
+
+     http://dl.acm.org/citation.cfm?id=1964238.1964250                        [41] Didem Unat, Tan Nguyen, Weiqun Zhang, Muhammed Nufail Fa-
+[33] John Nickolls, Ian Buck, Michael Garland, and Kevin Skadron. 2008.            rooqi, Burak Bastem, George Michelogiannakis, Ann Almgren, ed-
+     Scalable Parallel Programming with CUDA. Queue 6, 2 (March 2008),             itor="Kunkel Julian M. Shalf, John", Pavan Balaji, and Jack Dongarra.
+     40–53. https://doi.org/10.1145/1365490.1365500                                2016". TiDA: High-Level Programming Abstractions for Data Locality
+[34] Cedric Nugteren. 2017. CLBlast: A Tuned OpenCL BLAS Library.                  Management.
+     CoRR abs/1705.05249 (2017). arXiv:1705.05249 http://arxiv.org/abs/       [42] Field G. Van Zee and Robert A. van de Geijn. 2015. BLIS: A Framework
+     1705.05249                                                                    for Rapidly Instantiating BLAS Functionality. ACM Trans. Math. Softw.
+[35] Travis Oliphant. 2006–. NumPy: A guide to NumPy. USA: Trelgol Pub-            41, 3 (June 2015).
+     lishing. (2006–). http://www.numpy.org/ [Online; accessed <today>].      [43] Nicolas Vasilache, Oleksandr Zinenko, Theodoros Theodoridis, Priya
+[36] PyTorch. 2016. . https://github.com/pytorch/pytorch                           Goyal, Zachary DeVito, William S. Moses, Sven Verdoolaege, Andrew
+[37] Jonathan Ragan-Kelley, Connelly Barnes, Andrew Adams, Sylvain                 Adams, and Albert Cohen. 2018. Tensor Comprehensions: Framework-
+     Paris, Frédo Durand, and Saman Amarasinghe. 2013. Halide: A Lan-              Agnostic High-Performance Machine Learning Abstractions. CoRR
+     guage and Compiler for Optimizing Parallelism, Locality, and Recom-           abs/1802.04730 (2018).
+     putation in Image Processing Pipelines. In Proceedings of the 34th ACM   [44] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion
+     SIGPLAN Conference on Programming Language Design and Implemen-               Jones, Aidan N. Gomez, Lukasz Kaiser, and Illia Polosukhin. 2017. At-
+     tation (PLDI ’13).                                                            tention Is All You Need. CoRR abs/1706.03762 (2017). arXiv:1706.03762
+[38] Nadav Rotem, Jordan Fix, Saleem Abdulrasool, Summer Deng, Roman               http://arxiv.org/abs/1706.03762
+     Dzhabarov, James Hegeman, Roman Levenstein, Bert Maher, Nadathur         [45] R. Clint Whaley, Antoine Petitet, and Jack J. Dongarra. 2000. Auto-
+     Satish, Jakob Olesen, Jongsoo Park, Artem Rakhov, and Misha Smelyan-          mated Empirical Optimization of Software and the ATLAS Project.
+     skiy. 2018. Glow: Graph Lowering Compiler Techniques for Neural               PARALLEL COMPUTING 27 (2000), 2001.
+     Networks. CoRR abs/1805.00907 (2018).                                    [46] Samuel Williams, Andrew Waterman, and David Patterson. 2009.
+[39] Arthur Stoutchinin and Francois de Ferriere. 2001. Efficient Static           Roofline: An Insightful Visual Performance Model for Multicore Ar-
+     Single Assignment Form for Predication. In Proceedings of the 34th            chitectures. Commun. ACM 52, 4 (April 2009), 65–76. https://doi.org/
+     Annual ACM/IEEE International Symposium on Microarchitecture (MI-             10.1145/1498765.1498785
+     CRO 34). IEEE Computer Society, Washington, DC, USA, 172–181.            [47] Bichen Wu, Alvin Wan, Xiangyu Yue, Peter H. Jin, Sicheng Zhao, Noah
+     http://dl.acm.org/citation.cfm?id=563998.564022                               Golmant, Amir Gholaminejad, Joseph Gonzalez, and Kurt Keutzer. 2017.
+[40] Philippe Tillet and David Cox. 2017. Input-aware Auto-tuning of               Shift: A Zero FLOP, Zero Parameter Alternative to Spatial Convolu-
+     Compute-bound HPC Kernels. In Proceedings of the International Con-           tions. CoRR abs/1711.08141 (2017).
+     ference for High Performance Computing, Networking, Storage and Anal-    [48] Jiacheng Zhao, Huimin Cui, Yalin Zhang, Jingling Xue, and Xiaobing
+     ysis (SC ’17). ACM.                                                           Feng. 2018. Revisiting Loop Tiling for Datacenters: Live and Let Live.
+                                                                                   In Proceedings of the 2018 International Conference on Supercomputing
+                                                                                   (ICS ’18). ACM, New York, NY, USA, 328–340.
+

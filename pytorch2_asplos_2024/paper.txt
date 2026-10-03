@@ -1,0 +1,1175 @@
+PyTorch 2: Faster Machine Learning Through Dynamic
+    Python Bytecode Transformation and Graph
+                    Compilation
+            Jason Ansel                            Edward Yang                                Horace He                Natalia Gimelshein
+                  Meta                                     Meta                                   Meta                         OpenAI
+
+           Animesh Jain                      Michael Voznesensky                                Bin Bao                      Peter Bell
+                  Meta                                     Meta                                   Meta                       Quansight
+
+           David Berard                          Evgeni Burovski                           Geeta Chauhan                 Anjali Chourdia
+                  Meta                                 Quansight                                  Meta                          Meta
+
+          Will Constable                        Alban Desmaison                            Zachary DeVito                  Elias Ellison
+                  Meta                                     Meta                                   Meta                          Meta
+
+              Will Feng                              Jiong Gong                           Michael Gschwind                  Brian Hirsh
+                  Meta                                     Intel                                  Meta                          Meta
+
+         Sherlock Huang                      Kshiteej Kalambarkar                           Laurent Kirsch                Michael Lazos
+                  Meta                                 Quansight                                  Meta                          Meta
+
+          Mario Lezcano                             Yanbo Liang                               Jason Liang                   Yinghai Lu
+               Quansight                                   Meta                                   Meta                          Meta
+
+                CK Luk                               Bert Maher                               Yunjie Pan                Christian Puhrsch
+                  Meta                                     Meta                          University of Michigan                 Meta
+
+          Matthias Reso                           Mark Saroufim                      Marcos Yukio Siraichi                   Helen Suk
+                  Meta                                     Meta                                Quansight                        Meta
+
+            Michael Suo                               Phil Tillet                            Eikan Wang                  Xiaodong Wang
+                  Meta                                   OpenAI                                   Intel                         Meta
+
+           William Wen                           Shunting Zhang                                Xu Zhao                      Keren Zhou
+                  Meta                                     Meta                                   Meta                       OpenAI
+                                                                                                                      George Mason University
+
+            Richard Zou                            Ajit Mathews                            Gregory Chanan                    Peng Wu
+                  Meta                                     Meta                                   Meta                          Meta
+
+                                                                    Soumith Chintala
+                                                                                  Meta
+                                                                                         Abstract
+Permission to make digital or hard copies of part or all of this work for                This paper introduces two extensions to the popular PyTorch
+personal or classroom use is granted without fee provided that copies are                machine learning framework, TorchDynamo and TorchIn-
+not made or distributed for profit or commercial advantage and that copies
+                                                                                         ductor, which implement the torch.compile feature released
+bear this notice and the full citation on the first page. Copyrights for third-
+party components of this work must be honored. For all other uses, contact               in PyTorch 2. TorchDynamo is a Python-level just-in-time
+the owner/author(s).                                                                     (JIT) compiler that enables graph compilation in PyTorch
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA                                      programs without sacrificing the flexibility of Python. It
+© 2024 Copyright held by the owner/author(s).                                            achieves this by dynamically modifying Python bytecode
+ACM ISBN 979-8-4007-0385-0/24/04
+https://doi.org/10.1145/3620665.3640366
+before execution and extracting sequences of PyTorch oper-               like fusion or scheduling, that cross operator boundaries.
+ations into an FX graph, which is then JIT compiled using                To address this, there have been attempts to allow graph
+one of many extensible backends. TorchInductor is the de-                capture in PyTorch through record/replay [17, 34], Python
+fault compiler backend for TorchDynamo, which translates                 parsing [17], and lazy evaluation [39]. Unfortunately, these
+PyTorch programs into OpenAI’s Triton for GPUs and C++                   approaches have sacrificed much of the usability that draws
+for CPUs. Results show that TorchDynamo is able to capture               users to PyTorch. Record/replay is unsound and can produce
+graphs more robustly than prior approaches while adding                  incorrect behavior [17]. Python parsing works for simple
+minimal overhead, and TorchInductor is able to provide a                 programs, but has not been able to replicate the complex
+2.27× inference and 1.41× training geometric mean speedup                semantics of all of Python, so results will show it fails on
+on an NVIDIA A100 GPU across 180+ real-world models,                     over half of real-world models. Lazy evaluation incurs high
+which outperforms six other compilers. These extensions                  run-time overheads and adds latency to kernel launches. Ad-
+provide a new way to apply optimizations through compilers               ditionally, an exclusively graph mode backend for PyTorch is
+in eager mode frameworks like PyTorch.                                   intractable for some models. Due to the flexibility provided
+ACM Reference Format:                                                    by PyTorch, many model authors take advantage of features
+Jason Ansel, Edward Yang, Horace He, Natalia Gimelshein, Ani-            that do not easily map to graphs, such as: dictionaries, lists,
+mesh Jain, Michael Voznesensky, Bin Bao, Peter Bell, David Berard,       custom classes, third party libraries (numpy, logging, etc),
+Evgeni Burovski, Geeta Chauhan, Anjali Chourdia, Will Consta-            disk/network, multiprocessing, exceptions, and handwritten
+ble, Alban Desmaison, Zachary DeVito, Elias Ellison, Will Feng,          kernels.
+Jiong Gong, Michael Gschwind, Brian Hirsh, Sherlock Huang, Kshi-            This paper presents two open source extensions to Py-
+teej Kalambarkar, Laurent Kirsch, Michael Lazos, Mario Lezcano,          Torch: TorchDynamo and TorchInductor. These extensions
+Yanbo Liang, Jason Liang, Yinghai Lu, CK Luk, Bert Maher, Yunjie         are behind the torch.compile feature introduced in PyTorch
+Pan, Christian Puhrsch, Matthias Reso, Mark Saroufim, Marcos
+                                                                         2 and officially released in March 2023. TorchDynamo is a
+Yukio Siraichi, Helen Suk, Michael Suo, Phil Tillet, Eikan Wang,
+                                                                         Python-level JIT compiler designed to allow graph compila-
+Xiaodong Wang, William Wen, Shunting Zhang, Xu Zhao, Keren
+Zhou, Richard Zou, Ajit Mathews, Gregory Chanan, Peng Wu,                tion in PyTorch programs while retaining the full flexibility
+and Soumith Chintala. 2024. PyTorch 2: Faster Machine Learning           of Python. TorchDynamo hooks into the Python frame eval-
+Through Dynamic Python Bytecode Transformation and Graph                 uation API [9] in CPython to dynamically modify Python
+Compilation. In 29th ACM International Conference on Architectural       bytecode right before it is executed. It rewrites Python byte-
+Support for Programming Languages and Operating Systems, Volume          code in order to extract sequences of PyTorch operations into
+2 (ASPLOS ’24), April 27-May 1, 2024, La Jolla, CA, USA. ACM, New        an FX graph [34] which is then just-in-time compiled with
+York, NY, USA, 18 pages. https://doi.org/10.1145/3620665.3640366         many extensible backends. It creates this FX graph through
+                                                                         bytecode analysis and is designed to generate smaller graph
+1    Introduction                                                        fragments that can be mixed with Python execution to get
+Modern machine learning frameworks can be divided into ea-               the best of both worlds: usability and performance.
+ger mode frameworks, such as PyTorch [32] and JAX [8], and                  TorchInductor is a new compiler backend for TorchDy-
+graph mode frameworks, such as TensorFlow [1], Caffe [25],               namo. It translates PyTorch programs into OpenAI’s Tri-
+Theano [5], and CNTK [37]. Eager mode frameworks use                     ton [46] for GPUs and C++/OpenMP [15] for CPUs. TorchIn-
+an imperative define-by-run [47] approach where a machine                ductor is able to support the flexibility and dynamism of Py-
+learning model is represented as code that is executed each              Torch by using similar abstractions to PyTorch eager mode.
+time one wants to run the model. Graph mode frameworks                   It introduces a new define-by-run loop-level intermediate
+take a more declarative define-and-run [47] approach, where              representation (IR) to make it easy to add new operator low-
+they expose a graph building API that requires users to first            erings. Additionally, it is implemented in Python, so it is easy
+construct a graph and then later execute that graph.                     for PyTorch users to extend and modify to meet their needs.
+   Users of machine learning frameworks, and especially re-                 Experimental results show that TorchDynamo is able to
+searchers, have shown an overwhelming preference for the                 capture graphs more robustly than prior approaches while
+eager programming model [22]. The eager mode model is                    adding minimal overhead. TorchDynamo is able to capture a
+easier to understand and can be debugged using standard                  single whole-program graph for most models and can grace-
+tools such as print and pdb in Python [23]. This user pref-              fully fall back to partial graphs when needed. Measurements
+erence towards eager mode has caused traditionally graph                 show TorchInductor produces faster code on average than six
+mode frameworks to switch to eager mode programming                      other PyTorch compiler backends. Performance comparisons
+models [4].                                                              include both training and inference, CPU and GPU, float32
+   The downside of eager mode frameworks is that they make               and float16, and three large benchmark suites containing
+it harder to apply graph-level optimizations through compil-             180+ full-sized models taken from real-world applications.
+ers. The framework only has visibility of a single operator at a
+time, and thus cannot automatically perform optimizations,
+                                                                     2
+2 Prior Attempts at PyTorch Graph Capture                              of Python. Experimental results show that torch.jit.script
+Graph capture in PyTorch presents unique challenges when               works only about half the time on real-world models in the
+compared to graph mode frameworks [1, 25, 5, 37], where                TorchBench benchmark suite, and anecdotally we have heard
+the user is restricted to only using constructs that are repre-        stories of it taking weeks or months to “torchscript” large
+sentable in the graph. With PyTorch and other eager mode               models, which leads to a frustrating user experience.
+frameworks, the user is free to embed arbitrary code, includ-
+ing non-PyTorch libraries, inside their models. This results           2.3    Lazy Tensors
+in frequent conversion from PyTorch Tensors to Python                  Lazy Tensors were introduced in the PyTorch/XLA [42, 39]
+types (via .item(), .tolist(), etc), usage of external libraries       project, which is primarily focused on supporting Google
+(numpy, logging, etc), and usage of Python constructs (classes,        TPUs [26] with PyTorch. Lazy Tensors is a C++ level graph
+closures, exceptions, control flow, etc) that do not map well          capture technology. Every iteration, it defers execution of
+to a fixed graph abstraction. Due to this mismatch between             operations to accumulate a graph and then sends the accumu-
+the flexibility provided by Python/PyTorch, and the inflexibil-        lated graph to the XLA [45] compiler. By hashing this graph,
+ity of graph representations, prior attempts at graph capture          Lazy Tensors can avoid recompilation when the captured
+in PyTorch have needed to place restrictions on the user               graph is identical across iterations. While this approach is
+experience. While this tension between flexibility and repre-          effective and sound, it has a few major downsides:
+sentation is solved by TorchDynamo, we examine prior art
+in the space to provide context and background.                              • Higher overheads: Lazy Tensors incurs additional work
+                                                                               when compared to PyTorch eager. Besides running
+2.1   torch.jit.trace                                                          the same Python code and PyTorch dispatcher stack
+torch.jit.trace uses record/replay with example inputs to                      that eager does, it must maintain additional graph data
+produce a TorchScript [17] graph. The recording is done at                     structures that incur added runtime costs.
+the PyTorch dispatcher level, which is inside the C++ portion                • Introduced delays: PyTorch eager issues the first kernel
+of PyTorch and used to dispatch operators to device-specific                   on the first operation of the model, after which point
+kernels and for autograd. Because the recording is done in                     host-side code is run in parallel with kernels on the
+C++, torch.jit.trace does not capture any control flow in                      GPU or accelerator thus hiding overheads. In contrast,
+Python. Consider this example:                                                 Lazy Tensors doesn’t issue the first kernel until the
+def example1(x):
+                                                                               model’s code has finished executing, resulting in added
+    if len(torch.nonzero(x)) > 1:                                              delays before the first kernel is issued and after any
+       return x + 1                                                            operation that requires a round trip to the CPU (which
+    return x - 1
+                                                                               are common in real-world models). Thus, Lazy Tensors
+  With example input torch.tensor([0, 0]), torch.jit.trace                     often serializes host execution with GPU/accelerator
+would capture a graph equivalent to:                                           utilization, which amplifies host side overheads. Mod-
+def example1_incorrect_capture(x):                                             els, loss logging, and optimizers need to be modified
+    torch.nonzero(x)                                                           to work around this issue.
+    return x - 1
+                                                                             • Recompilation: Whenever the captured graph has a
+   Since the path through the program is specialized on the                    new hash, Lazy Tensors must recompile. This can lead
+example input, a different input (such as torch.tensor([1,1]))                 to some pathological cases where recompilation hap-
+will give incorrect results. Additionally, any non-PyTorch                     pens frequently.
+operators (such as external libraries, prints, logging, side
+effects, etc.) will be omitted from the captured graph.                The PyTorch/XLA project has built [10] an integration with
+                                                                       TorchDynamo which uses a hybrid of both Lazy Tensors
+2.2   torch.jit.script                                                 and TorchDynamo. This integration hides the overheads of
+torch.jit.script   also constructs a TorchScript [17] graph,           Lazy Tensors by only running Lazy Tensors once, rather than
+but does so by parsing the Python AST and performing static            every iteration, and using TorchDynamo to figure out when
+analysis. It is able to capture example1 above correctly and,          recapture is needed. The PyTorch/XLA results later in the
+unlike torch.jit.trace, it is a sound approach that should             paper use this integration.
+not produce incorrect results.
+   The major challenge torch.jit.script faces is that it is            2.4    torch.fx.symbolic_trace
+trying to reimplement all of Python as a static language. This         torch.fx.symbolic_trace [34] is the newest of these systems
+approach is all or nothing: encountering an unimplemented              and introduced the FX graph format that is shared by Torch-
+component of Python makes the entire program unfit for                 Dynamo. It takes a similar record/replay-based approach to
+capture. Emulating all of Python statically is a daunting              torch.jit.trace, but does its tracing at the Python level as
+task and, in practice, torch.jit.script only supports a subset         opposed to at the PyTorch C++ dispatcher level. It runs the
+                                                                   3
+user code using a Proxy Python object to record its behavior
+and uses the torch_function [3] extension point in PyTorch.
+   By recording higher up at the Python level, symbolic_trace
+is able to capture many operations that torch.jit.trace can-
+not. Since it records using Proxy objects instead of real ten-
+sors, it is able to detect many cases where torch.jit.trace
+would be incorrect, e.g., when trying to read sizes or values
+from Proxy tensors or when using them in control flow, such
+as example1 above. It also suffers from the all-or-nothing lim-
+itation of many solutions described above. For example, in
+the control flow case above, the user is still forced to rewrite
+the code they want to trace.
+   Unfortunately, torch.fx.symbolic_trace is still unsound
+and can produce incorrect results. Consider this example,
+which increments a global variable and calls a function not            Figure 1. Overview of how TorchDynamo modifies the
+dependent on the function input:                                       CPython interpreter to capture FX graphs
+def example3(x):
+    global call_count
+    call_count += 1
+    return torch.rand(10) + x                                          2.6 Comparison To Graph Capture In JAX
+If one runs torch.fx.symbolic_trace on this example it pro-            JAX [8] largely doesn’t face the same challenges being solved
+duces a graph equivalent to:                                           by TorchDynamo. The initial design of JAX was heavily
+                                                                       coupled to the design of XLA [45], and JAX has been backed
+def example3_incorrect_capture(x):
+    return _tensor_constant0 + x                                       by XLA from its inception. This has the effect of forcing
+                                                                       JAX programs to conform to the constraints built into the
+The call to torch.rand got removed and the result of it got
+                                                                       design coming up the stack from XLA. Thus, JAX uses a
+burned into the graph as a fixed constant. Subsequent uses
+                                                                       simpler capture mechanism, and expects users to write their
+of the graph will not get new randomness, but instead reuse
+                                                                       programs to meet the constraints of that capture mechanism.
+whatever value was generated during capture. This type
+                                                                       As an example, jax.jit does not support data-dependent
+of incorrect capture can be difficult to debug and may go
+                                                                       Python control flow and requires user code to be functionally
+unnoticed by users.
+                                                                       pure.
+    The call_count operations are completely lost because
+                                                                          In contrast, PyTorch started as an eager-only framework
+they did not interact with the Proxy object x. Instead, the
+                                                                       without any compiler-minded constraints built into its de-
+call_count got incremented to 1 during tracing and will not
+                                                                       sign. A large corpus of models has grown on top of PyTorch,
+be incremented when the graph is called. This is also an
+                                                                       most of which were written without any regard to how hard
+example of something that is not supported by any of the
+                                                                       to capture and compile they would be.
+graph representations. Nearly all graphs formats for ma-
+                                                                          On an implementation level, the capture mechanism in
+chine learning have no concept of a Python global, so even
+                                                                       JAX is similar to torch.fx.symbolic_trace (Section 2.4), but
+if this could be captured, it is not supported by downstream
+                                                                       somewhat simpler, because JAX programs are purely func-
+backend compilers.
+                                                                       tional and thus do not need to worry about state. The Torch
+2.5   torch.onnx.export                                                FX paper [34] contains a more detailed comparison with
+                                                                       JAX.
+ONNX [31] export is not actually a graph capture mechanism,
+but some people confuse it for one, so we include it here for
+completeness. Internally, ONNX export uses torch.jit.trace             3   TorchDynamo Design and
+and torch.jit.script (Section 2.1 and 2.2), so it faces all the            Implementation
+same limitations imposed by those systems. Additionally, the           TorchDynamo takes a fundamentally different approach
+conversion from TorchScript to the ONNX format can fail                from prior graph capture systems in PyTorch. Rather than
+due to ONNX not supporting all PyTorch operators. Thus,                trying to remove or replace Python, TorchDynamo tries to
+the set of models supported by ONNX is a subset of those               work with CPython by just-in-time (JIT) compiling Python
+supported by TorchScript.                                              bytecode. TorchDynamo is a Python bytecode to Python
+  The ONNX team is working on an integration with Torch-               bytecode translator, where it extracts PyTorch operations
+Dynamo that will replace TorchScript with a direct Torch-              from the original bytecode and replaces them with calls to
+Dynamo integration. Once finished, this will increase the              compiled artifacts that fuse many PyTorch operations to-
+number of models ONNX works on.                                        gether. Figure 1 provides an overview of how TorchDynamo
+                                                                   4
+operates and will be explained in the remainder of this sec-                     (Section 3.3) for each entry in the cache. If a guard func-
+tion.                                                                            tion returns True, run the matching cached compiled
+                                                                                 bytecode with _PyEval_EvalFrameDefault and return.
+3.1    Usage API                                                             •   Perform symbolic analysis (instruction by instruction)
+The primary API introduced in this paper is torch.compile.                       of the function bytecode to extract an FX graph [34],
+It can be used either by calling it on a PyTorch Module or as                    guards, and side effects. This analysis can stop partway
+a function decorator. It has the following keyword options:                      through the function if it encounters an unsupported
+      • backend: allows the user to provide a custom compile                     operation.
+        function which takes a torch.fx.Graph and a list of                  •   Compile the FX graph with a user-defined compiler
+        example inputs and returns a Python callable. This                       function specified by the backend= argument provided
+        defaults to TorchInductor, but can also be set to one                    to torch.compile.
+        of many builtin backends or a user-defined backend.                  •   Generate and compile a single Python function that
+      • options: An optional dictionary of backend-specific                      checks all of the guards. It returns True if the guards
+        configuration flags.                                                     pass and the existing compiled artifact can be reused.
+      • mode: Shorthand strings for a predefined set of op-                  •   If the analysis did not reach the end of the function,
+        tions: "default", "reduce-overhead", or "max-autotune".                  generate resume_at_XX continuation functions. Contin-
+                                                                                 uation functions run the remainder of the function in
+When you run a module with torch.compile, the module                             a new frame and are described in Section 3.8.
+is executed with the modified CPython behavior shown in                      •   Generate new Python bytecode. This new bytecode
+Figure 1. Specifically, a custom CPython frame evaluation                        will: 1) call the compiled FX graph; 2) store and recon-
+hook will rewrite the bytecode of of each Python function                        struct the local/stack state; 3) perform side effects the
+being executed in order to extract and compile sequences                         original function should have had, see Section 3.7; 4)
+of PyTorch operations. This bytecode rewriting process is                        either return or implement a graph break by falling
+cached, but the analysis relies on certain dynamic properties                    back to the original bytecode and calling the generated
+of the program that we use guards to check on subsequent                         continuation function(s).
+calls.                                                                       •   Install the generated Python bytecode and guard func-
+                                                                                 tion in the cache, run the generated bytecode with
+3.2    CPython Frame Evaluation Hook
+                                                                                 _PyEval_EvalFrameDefault, and return.
+PEP 523 [9] introduced the frame evaluation API into the
+CPython interpreter. A frame is the data structure in CPython          3.3       Guards
+used to represent a function call. This is the main extension          Guards are the mechanism TorchDynamo uses to recheck
+point used by TorchDynamo, and it was designed to facilitate           dynamic properties used by JIT compilation to determine is
+just in time (JIT) compilers and debuggers in Python. PEP 523          a cached compilation can be reused. TorchDynamo gener-
+added an eval_frame function pointer to PyInterpreterState,            ates a guard function for each transformed PyCodeObject that
+which allows overriding the core function used to interpret            returns True if it is safe to reuse a compiled artifact. Both
+a single function call in CPython. Whenever CPython calls              the guards and the transformed code are stored using the
+a function, it first creates a PyFrameObject, then it calls this       _PyCode_SetExtra extension point introduced in PEP 523 [9].
+user defined eval_frame hook. By default, eval_frame points               Guards are accumulated during analysis and can point to
+to _PyEval_EvalFrameDefault, which contains the main inter-            variables originating from globals/locals or nested within
+preter loop for CPython. TorchDynamo modifies eval_frame               Python data structures. At the time of writing there were
+to replace this standard CPython interpreter loop with one             30 different types of guards. Guards include: checking many
+that performs JIT compilation of Python frames.                        torch.Tensor properties, Python types, constant specializa-
+   The custom eval frame function installed by TorchDy-                tion, attributes, dicts/lists/tuples, nn.Module instances, and
+namo performs the following operations:                                global PyTorch state. The guard system spans across Torch-
+      • Check if the frame should be skipped due to filename           Dynamo, AOTAutograd, and TorchInductor. Any layer can
+        exclusion, previous failures in analysis (which mark           introduce guards to protect specializations. Guards are all
+        the frame to be skipped), or exceeded cache size limits.       independent checks and do not interact with each other
+        Filename exclusions are used for common libraries,             beyond deduplication.
+        like Python standard libraries and numpy, which will
+        not contain PyTorch operations. For skipped files, call        3.4       Symbolic Evaluation
+        _PyEval_EvalFrameDefault on the original bytecode and          A fundamental part of TorchDynamo is the symbolic Python
+        return.                                                        bytecode evaluator which is responsible for analyzing Python
+      • Check if the frame has previously been compiled and            bytecode and modeling effects of each instruction. Symbolic
+        is cached; if so, execute the generated guard function         evaluation contains data structures that keep track of: 1)
+                                                                   5
+stack state; 2) local variables; 3) exception contexts; 4) accu-             • UserDefinedClassVariable represent user-defined classes
+mulated FX graph [34]; 5) accumulated guards; and 6) side                      and UserDefinedObjectVariable represents instances. We
+effects. The algorithm operates one Python bytecode at a                       lazily specialize on these as their attributes are ac-
+time and contains a function corresponding to every Python                     cessed, and track mutation on them (Section 3.7).
+bytecode instruction type.                                             There are many other variable tracker types that represent
+   At the start of symbolic evaluation, function arguments             other situations. In addition to type-specific data, every
+are examined and converted to a symbolic representation,               VariableTracker instance also contains a set of guards, which
+VariableTracker. If bytecodes access data structures such as           are initialized when they are created and propagated through
+class attributes or global variables, new symbolic represen-           operations via union. Additionally, each instance also tracks
+tations for these constructs are added lazily. This representa-        where it came from so that it can be loaded or mutated in
+tion is discussed more in Section 3.5. The symbolic evaluator          output bytecode.
+starts at the first bytecode instruction of the function, and
+continues processing the function one bytecode at a time.              3.6    Inlining, Control Flow, and Closures
+The soundness of this analysis can be shown via induction:             Function calls can either happen directly from user code, or
+as long each individual bytecode is processed correctly, the           implicitly through magic methods such as __getitem__. To
+overall algorithm will be correct.                                     collect bigger graphs, TorchDynamo will attempt to inline
+   As an example, suppose the first instruction was LOAD_FAST,         function calls and flatten programs. When a function call
+a Python bytecode that pushes a local variable on to the               is encountered, TorchDynamo first creates a checkpoint of
+stack. The handler for LOAD_FAST will take the representation          the current symbolic state. Next, it recursively tries to sym-
+variable from the symbolic local variables and push it on to           bolically evaluate the called functions, passing in any input
+the symbolic stack data structure. The handler for BINARY_ADD,         symbolic state and recording any changes that are made. If
+will pop two symbolic variables off the stack then push their          this recursive analysis hits a case that would cause a graph
+result on to the stack. The result is computed depending on            break (Section 3.8) or other errors, TorchDynamo rolls back
+the types of those variables and the dispatch will vary based          to the symbolic state before the function call and generates
+on those types. If the value represents a PyTorch tensor, then         a graph break on that function call. Otherwise, the recur-
+a new add node will be added to the FX graph [34], and a new           sive analysis returns and the analysis of the parent function
+symbolic tensor pointing to the result node will be created.           continues.
+                                                                          Most cases of control flow in Python bytecode are opti-
+3.5    Modeling Python Data Structures                                 mized away and handled through specialization. For example,
+                                                                       when iterating over a list of torch.nn.Module, TorchDynamo
+Many semantics of Python are in libraries and data structures,
+                                                                       will guard that the list doesn’t change and unroll the loop.
+so any Python analysis must model the behavior of these
+                                                                       For control flow based on the type, size, and shape of tensors,
+different types. To analyze the behavior of each variable or
+                                                                       TorchDynamo will guard on those properties and remove
+stack entry, TorchDynamo has a class hierarchy that models
+                                                                       the control flow. In less common cases where there is control
+common behaviors of different data types. Each of these data
+                                                                       flow that cannot be removed (for example, branching on the
+structures is a subclass of VariableTracker. Notable types of
+                                                                       value of a tensor rather than the metadata), TorchDynamo
+variable trackers include:
+                                                                       will generate a graph break that will trigger the branch byte-
+                                                                       code to run in CPython, and analysis will resume after the
+      • TensorVariable represents a torch.Tensor. It does not          jump.
+        store an underlying tensor value, but instead stores a            Another challenge is closures. Consider this example:
+        fx.Proxy which points into the partially constructed
+                                                                       def closure_example(x):
+        FX graph [34] as well as a “fake” tensor (see Section 5)
+                                                                          y = torch.sigmoid(x)
+        that represents the metadata of a tensor without its              return lambda z: y + z
+        actual data.
+      • ConstDictVariable and DataClassVariable are used to            Here the variable 𝑦 is in a closure which is represented by
+        represent key/value pairs where the keys are con-              what CPython calls a cell, which adds a layer of indirection
+        stant strings and the values can be anything, including        to allow variables in closures to be mutated. There are a
+        nested dicts/lists.                                            number of different cases of closures that TorchDynamo
+      • ListVariable and TupleVariable represent list/tuple and        must handle:
+        can contain any other type of symbolic variable.                     • Cell variables created outside the captured region must
+      • UserFunctionVariable and UserMethodVariable represent                  be accessed differently than other variables. If they are
+        user defined functions that can be inlined. They also                  accessed from the top-level function, they can be ac-
+        support functions constructed dynamically containing                   cessed by generating the LOAD_DEREF and STORE_DEREF
+        closures.                                                              bytecodes. When inlining, this bytecode cannot be
+                                                                   6
+        used and instead TorchDynamo generates code to read-                     a global/attribute. The VariableTracker representations
+        /write directly from the inlined function cell, for exam-                of dict/lists will guard on the initial symbolic state
+        ple fn.__closure__[0].cell_contents. If the content of                   of these objects, then symbolically track all changes
+        a cell is mutated, TorchDynamo tracks the mutation                       through the entire function. The captured FX graph [34]
+        in the same way as other mutations (Section 3.7).                        will have all of these operations optimized away. In
+      • Cell variables both created and destroyed within the                     the output bytecode, a new dict/list will be created to
+        captured region are the easiest to handle and most com-                  match the final state and the original list object will
+        mon. In this case, TorchDynamo statically optimizes                      be mutated to match that object. This recreation is not
+        away the closure.                                                        needed for lists/dicts that do not escape the captured
+      • Cell variables that are created in the captured region,                  region because their mutations cannot be observed,
+        but escape the frame are the most difficult to handle.                   and therefore they can be completely removed.
+        In this case, TorchDynamo will optimize away all uses
+        of the closure inside the captured region. Then, at the            3.8   Graph Breaks and Continuation Functions
+        very end in the generated bytecode, it will create any             When TorchDynamo encounters a Python bytecode it cannot
+        needed cells and Python function objects to return.                handle, for example a call to an external library, it generates
+        From the outside, callers will not be able to tell that            what we call a graph break to split the bytecode being an-
+        the returned closure was created differently than the              alyzed into multiple pieces. Essentially, TorchDynamo will
+        original program.                                                  mix compiled fragments into the original Python code to
+                                                                           get a hybrid execution. Any pending partial FX graph [34]
+3.7    Mutation and Side Effects                                           is compiled. In the output code when the partial graph will
+Python functions sometimes have side effects. TorchDynamo                  be called, the unsupported bytecode will be executed, and
+handles side effects by deferring them until after the FX                  then we will recursively use TorchDynamo to analyze the
+graph [34] has been called, then generating output bytecode                remainder of the function. To trigger this recursive analysis,
+that applies all side effects at the end. To do this, TorchDy-             TorchDynamo generates one or more continuation functions
+namo has a side effects data structure that tracks all side                which take the form:
+effects that the original code would have. If the code tries to            def resume_at_X(... livevars ...):
+                                                                             ... restore try/except/stack state ...
+read a value that would have been mutated by a pending side                  JUMP_ABSOLUTE X
+effect, it instead reads that pending value. After the graph                 ... original function bytecode ...
+is generated, a garbage collection pass removes side effects
+                                                                           This continuation function looks very similar to the orig-
+that didn’t escape the analysis context, and TorchDynamo
+                                                                           inal function except for a few changes: 1) the arguments
+generates output code to apply the needed side effects. Han-
+                                                                           are changed to reflect whatever variables are live across the
+dling side effects this way results in multiple writes to the
+                                                                           graph break; 2) a prefix is added to restore the stack/excep-
+same value being collapsed into a single write. TorchDynamo
+                                                                           tion state, which may also be passed in as an argument; 3) a
+supports the following types of side effects:
+                                                                           JUMP_ABSOLUTE instruction is created so execution resumes in
+      • Writes to global variables result in a STORE_GLOBAL byte-          the middle of the function.
+        code if the target global is in the same file. If it is in a          TorchDynamo will either generate one of these functions,
+        different file (because of inlining), code is generated            or two of these functions in the case of control flow (all
+        to mutate the global in the other module.                          control flow bytecodes have exactly two branches), to con-
+      • Writes to attributes (such as on classes) are handled              tinue execution right after the unsupported bytecode. The
+        similarly and mapped to STORE_ATTR in output byte-                 advantage of structuring continuations as Python functions
+        codes. We use the source on the VariableTracker to                 is that it will recursively trigger TorchDynamo through the
+        determine how to load a reference to the object that               frame evaluation API. When TorchDynamo processes a con-
+        must be mutated.                                                   tinuation function, it treats it exactly the same as any other
+      • Writes to cells/closures are tracked and handled in a              Python function.
+        number of ways (see Section 3.6).
+      • Class construction is handled by creating a placeholder            3.9   AOTAutograd
+        symbolic object, inlining the __init__ method, and                 AOTAutograd is a reusable component in PyTorch that is
+        tracking all the attribute mutation on that placeholder            called by many PyTorch compiler backends to add training
+        object. If the object is live at the end of the function,          support and use shared operator decompositions. TorchDy-
+        the output bytecode will create the object (bypassing              namo captures the forwards of a model, but, to support train-
+        the constructor) and set the needed attributes.                    ing, we also need to generate the backwards pass. In Pytorch
+      • Dictionary and list mutation can also cause side effect            eager, the backwards graph is generated dynamically using a
+        if the dict/list was passed in as an input or loaded from          tape-based autograd [32]. AOTAutograd turns the forwards
+                                                                       7
+graph into a forwards and backwards graph in a way that              intentionally put an early focus on supporting a wide variety
+supports partial program graphs.                                     of operators, hardware, and optimization. This helped make
+   AOTAutograd works by running the PyTorch eager mode               TorchInductor a general purpose compiler that can scale to
+autograd engine on fake tensor inputs and recording a joint          many scenarios. This is also why the early focus was on
+forwards and backwards graph. Data-dependent operations              training, since training is a much harder compiler problem
+do not work with fake tensors (since there is no backing             than inference.
+data), so we graph break on these operations in TorchDy-
+namo and run them outside the graph. AOTAutograd then                  Reuse State-Of-The-Art Languages: For an output lan-
+uses a min-cut algorithm [55] to split this joint graph into         guage, we took inspiration from how PyTorch users were
+separate forward and backward graphs in a way that opti-             writing high performance kernels. We observed rapidly in-
+mizes for memory usage. As part of this min-cut algorithm,           creasing popularity of the OpenAI Triton [46] DSL for writ-
+we apply backend-specific optimizations to rematerialize cer-        ing GPU kernels, and those kernels are often outperforming
+tain activations that are cheap to recompute in the backwards        other compilers and state-of-the-art libraries. High perfor-
+graph.                                                               mance CPU kernels are typically written in C++/OpenMP [15].
+   As part of AOTAutograd, other dispatcher-level transfor-          TorchInductor generates both Triton and C++ as output code,
+mations are also applied to the graph. Decompositions are            which allows us to leverage the technology of those projects
+where AOTAutograd maps some PyTorch operators into a                 as well as generate output code that is understandable by
+smaller set of more primitive operators. AOTAutograd also            PyTorch users.
+makes the graph purely functional by removing operations
+that perform mutation and replacing them with their func-            4.2   Decompositions
+tional equivalents.                                                  Rather than implementing lowerings for all operators in Py-
+                                                                     Torch to TorchInductor’s IR, many operators in PyTorch are
+4     TorchInductor Design and                                       decomposed into a simpler set of operators that are easier to
+      Implementation                                                 handle. These decompositions happen using AOTAutograd
+While TorchDynamo solves the graph capture problem in                (Section 3.9), which is called by TorchInductor with a dictio-
+PyTorch, to be useful it must be paired with a backend com-          nary of desired decompositions. Decompositions are written
+piler that can take the captured FX graph [34] and generate          as a Python implementation of a PyTorch operator in terms
+fast code from it. We created TorchInductor as a reference           of other operators, for example the following decomposes
+compiler backend. It is designed to be general purpose and           log2 into log and mul:
+can be used both directly by users and as a starting point for
+other backends.                                                      log2_scale = 1 / math.log(2)
+
+                                                                     @register_decomposition(torch.ops.aten.log2)
+4.1   Design Principles and Key Technologies                         def log2(x):
+Before diving into the design of TorchInductor, let’s first            return torch.log(x) * log2_scale
+discuss some principles and technologies that motivated its
+design:                                                              This decomposition will be recursively traced down and nor-
+   PyTorch Native: PyTorch made many design choices that             malized, and can possibly trigger additional decompositions
+differ from other frameworks and compilers: Tensors have             in that process until a fixed point is reached. Note that the
+exposed strides that can be manipulated by users, aliasing           active decomposition set must not contain cycles.
+views are commonplace, and both data and metadata can be                At the time of writing, TorchInductor used 191 decom-
+mutated in-place. Any compiler with a dramatically different         positions (387 including overloads). The majority of these
+model will face many challenges in representing PyTorch              decompositions are not specific to TorchInductor and are
+programs. We wanted TorchInductor to share similar abstrac-          available for any other backend to use via the torch._decomp
+tions to PyTorch eager to allow support of all of PyTorch,           module, while some are TorchInductor specific.
+with a thin translation layer.
+                                                                     4.3   Lowerings and Define-By-Run Loop-Level IR
+  Python First: The majority of PyTorch users are most
+                                                                     The next phase of compilation is lowering from an FX graph
+comfortable in Python. The Python parts of PyTorch get far
+                                                                     of PyTorch operations into TorchInductor’s define-by-run
+more community contribution than the C++ parts of PyTorch.
+                                                                     IR. A define-by-run IR means the IR uses executable Python
+We chose to implement TorchInductor in Python to make it
+                                                                     code to define the bodies of loops, giving TorchInductor’s
+easy to understand and hackable by PyTorch users.
+                                                                     IR much of the power of full Python, removing the need for
+ Breadth First: Rather than focusing on a narrow set of              a large amount of boilerplate, and allowing lowerings to be
+models (e.g. ResNet/BERT) that are already well studied, we          written concisely.
+                                                                 8
+def inner_fn_buf0(index):                                              perform actions like record memory accesses or high/low
+  i0, i1 = index                                                       watermarks for strength reduction optimizations. To perform
+  tmp0 = ops.load("arg0_1", i0 * s1 + i1)
+  tmp1 = ops.log(tmp0)                                                 codegen with this IR, we make ops point to something which
+  tmp2 = ops.constant(1.4426950408889634, torch.float32)               writes out Triton or C++ code. To transform this IR, we make
+  tmp3 = ops.mul(tmp1, tmp2)                                           use of FX tracing, which gives access to graph representation
+  return tmp3
+                                                                       for these Python functions.
+buf0_ir = TensorBox(StorageBox(ComputedBuffer(                            At the time of writing, the loop-level TorchInductor IR
+  name='buf0',                                                         consisted of 54 primitive operators:
+  layout=FixedLayout('cuda', torch.float32,
+                     size=[s0, s1], stride=[s1, 1]),
+  data=Pointwise(inner_fn=inner_fn_buf0,
+                                                                             • ops.load and ops.store access Tensor memory from a
+                 ranges=[s0, s1], ...))))                                      provided buffer name and a SymPy index specifying a
+                                                                               symbolic memory location.
+Figure 2. TorchInductor IR for torch.log2 on a 2D tensor.                    • ops.reduction operates like ops.store where the reduc-
+                                                                               tion happens implictly inside the write. It combines
+                                                                               stored values along the reduction dimension of the cur-
+   Lowering is done by symbolically interpreting the FX                        rent node using a supplied reduction type. Supported
+graph and applying lowering functions which do the conver-                     reduction types are: argmin, argmax, any, max, min,
+sion for a single operator. At the time of writing, TorchInduc-                prod, sum, xor_sum, and welford_combine [50].
+tor has lowerings for 433 PyTorch operators (1605 including                  • ops.index_expr converts from SymPy expressions used
+overloads). If an unknown operator is encountered, it is auto-                 for indexing into values used for compute.
+matically converted into a fallback kernel node which runs                   • ops.indirect_indexing converts from computed values
+the original PyTorch code.                                                     into SymPy expressions used for indexing by introduc-
+   In the example IR shown in Figure 2, inner_fn_buf0 is a                     ing a new SymPy variable bound dynamically.
+Python function that defines how to compute a single ele-                    • ops.masked implements conditional execution. It takes
+ment of the tensor buf0 in terms of calls to TorchInductor’s                   a condition and a Python function (recursively using
+primitive operators in the ops.* namespace. The function                       the same IR) with no args. This gets mapped to masks
+takes a list of SymPy [28] symbols (i0 and i1) representing                    in Triton and conditionals in C++.
+the symbolic coordinates of the element to be computed.                      • ops.load_seed, ops.rand, ops.randn, and ops.randint64
+SymPy symbols s0 and s1 represent the sizes of the tensor to                   are used for computing random numbers.
+be computed and are used for both sizes and strides. These                   • The remaining ops are elementwise math operations.
+size symbols are captured in a Python closure and registered
+on the graph object.                                                   4.4    Scheduling
+   TensorBox and StorageBox are abstractions that match Py-            The scheduling phase of TorchInductor determines which
+Torch torch.Tensor and torch.Storage objects and allow the             operators get fused, what order kernels run in, and does
+handling of views, aliasing, and mutation during the lower-            memory planning for buffer removal and/or reuse. Sched-
+ing process. ComputedBuffer represents a tensor that will be           uling starts by converting every buffer in the IR into a sub-
+computed using generated code (in contrast to ones created             class of BaseSchedulerNode. SchedulerNode represents a stan-
+via fallback kernels or inputs). Pointwise represents that the         dard kernel that TorchInductor will codegen the body of.
+ComputedBuffer is a data parallel pointwise computation. The           ExternKernelSchedulerNode represents calls to library code or
+IR also supports Reduction and Scatter for handling other              user-defined kernels. Additionally, NopKernelSchedulerNode
+types of operators.                                                    maps to nothing, but is used to add dependency edges to
+   The key advantage of this IR is that it is easy to construct        ensure the ordering of kernels (for example, a concatenate
+because it has the full power of Python. One can compose               kernel which has been handled by making producers write
+different IR nodes together and embed logic within them.               directly to the combined buffer). Finally, a FusedSchedulerNode
+The example above would not be initially constructed as a              represents a set of two or more SchedulerNodes fused into a
+single flat function, but rather many smaller function clo-            single kernel.
+sures defined in the lowering process. The function created               Next, the scheduler converts the memory read/write sets
+for ops.mul will call into another function created for ops.log,       of each kernel into dependency edges between nodes. De-
+which calls into another function created for loading the              pendency edges are annotated with the symbolic memory
+input argument.                                                        address being read. Symbolic memory addresses are impor-
+   The way to compile and analyze this IR rests in the virtu-          tant in determining which fusions are legal. For example,
+alized namespace for ops.*, which can be dynamically over-             if one kernel writes buf0 in forwards order, but a consumer
+ridden to perform different functions. To perform analysis             reads in reverse order (using ops.load("buf0", s0 - 1 - i0)),
+on this IR, we make ops point to an analysis pass which can            then those nodes cannot be fused.
+                                                                   9
+  Fusion is controlled by two key functions:                            @pointwise(...)
+                                                                        @triton.jit
+      • Scheduler.can_fuse(node1, node2) returns True if two            def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK : tl.constexpr):
+                                                                            xoffset = tl.program_id(0) * XBLOCK
+        nodes can be fused together. This checks dependency                 xindex = xoffset + tl.arange(0, XBLOCK)[:]
+        edges, and also checks many other properties to ensure              xmask = xindex < xnumel
+        correctness of a fusion. There are some heuristics here             x0 = xindex
+                                                                            tmp0 = tl.load(in_ptr0 + x0, xmask)
+        as well, for example, if config.aggressive_fusion=False,            tmp1 = tl.log(tmp0)
+        then can_fuse will prevent fusion of nodes that do not              tmp2 = 1.4426950408889634
+        share any common memory accesses. There is also                     tmp3 = tmp1 * tmp2
+                                                                            tl.store(out_ptr0 + x0, tmp3, xmask)
+        backend specific logic here, for example, TorchInduc-
+        tor supports reduction-broadcast-reduction fusions for
+        Triton but not C++.                                                    Figure 3. Generated Triton code for Figure 2.
+      • Scheduler.score_fusion(node1, node2) is used to order
+        different fusion possibilities. Some fusions are mutu-          loop using an entire block as an accumulator with a call to a
+        ally exclusive, so TorchInductor chooses the one with           Triton reduction at the end of the loop.
+        the higher score. The fusion score orders fusions by:             For more complex operations (matmuls and convolutions),
+        1) the category of the fusion (e.g. pointwise/reduc-            TorchInductor has its own template system for generating
+        tion/template); 2) estimated bytes of memory traffic            Triton code that mixes handwritten Triton with generated
+        saved by the fusion; and 3) shorter distance between            Triton. Templates are written using Jinja [29] with helper
+        nodes in the original graph                                     methods to interact with TorchInductor’s codegen system.
+In a loop, until no additional fusions remain (since some               4.6   C++ Code Generation
+fusions can open additional fusion opportunities), TorchIn-
+                                                                        For the CPU backend, TorchInductor generates C++ with
+ductor will perform the following greedy algorithm: 1) find
+                                                                        OpenMP [15]. Within the C++ backend there are two vari-
+all fusion opportunities; 2) score each of the fusion opportu-
+                                                                        ants, a vectorized variant and a non-vectorized variant. The
+nities and sort by that score; 3) for each fusion opportunity,
+                                                                        vectorized variant performs tiling and maps most opera-
+check if that fusion remains legal and if so apply it. When
+                                                                        tions to the at::vec::Vectorized class included in the Py-
+two nodes are fused, any pending fusion opportunities point-
+                                                                        Torch source code. This class operates on 16 elements at
+ing to the constituent nodes are updated to point to the new
+                                                                        a time, which is the same way standard PyTorch kernels
+fused node.
+                                                                        are vectorized and supports multiple SIMD instruction sets.
+                                                                        The non-vectorized variant generates relatively standard
+4.5    Triton Code Generation                                           C++ code using many C++ standard template library [24]
+Triton codegen is responsible for mapping TorchInductor’s               (STL) functions. Both of these variants are parallelized us-
+IR to output Triton [46] kernels. Figure 3 shows the code               ing #pragma omp for annotations, with some heuristics to
+generated for the log2 example above. This kernel operates              decide how many levels of loops to parallelize. Reductions
+on a block of XBLOCK elements at a time. If the number of               are mapped to the OpenMP reduction annotation if the re-
+elements is not a multiple of XBLOCK, some elements may be              duction dimension loop is parallelized, and a C++ loop with
+masked off at the end. During codegen, we simplify indexing.            accumulator otherwise.
+For example, the 2D strided load in the IR is converted to
+a contiguous load in this case. Codegen is also responsible             4.7   Wrapper Codegen
+for common subexpression elimination (CSE), which is done               Wrapper codegen is responsible for generating the code that
+via a cache while printing lines of code and assigning in-              calls the kernels from Triton, C++, and external sources.
+termediate variable names starting with tmp. The pointwise              It also does tensor size calculations and handles memory
+decorator encodes boilerplate code used to facilitate block             allocation and deallocation. There are two different wrapper
+size heuristics, auto-tuning, and ahead-of-time kernel com-             codegen implementations, one that generates Python code,
+pilation. The decorator is the type of kernel being generated           and another that generates C++ code. The Python backend
+(pointwise, reduction, or template), and its arguments are              is more flexible and supports some corner cases that the C++
+required metadata about the kernel like data alignments.                one does not, while the C++ one is lower overhead.
+   When generating reduction kernels, TorchInductor has                    When enabled with mode="reduce-overhead", TorchInduc-
+two modes of codegen. For smaller reductions, it will gener-            tor uses CUDA Graphs [20] to completely eliminate the over-
+ate a persistent reduction where the entire reduction is loaded         head from wrapper code. CUDA Graphs records and replays
+in a single block and retained in registers/shared memory;              kernel launches at the CUDA driver level and is lower over-
+in this case reductions map directly to Triton reduction op-            head than even the C++ wrapper code. To ensure soundness,
+erators. For larger reductions, TorchInductor generates a               CUDA Graphs is only used when safety requirements are
+                                                                   10
+met and is automatically disabled in some cases (for example                  • One particularly important case of data-dependent
+with dynamic shapes, non-CUDA tensors, etc).                                    shapes occurs when dealing with sparse representa-
+                                                                                tions, such as sparse tensors, jagged tensors, and graph
+4.8    Related Deep Learning Compilers                                          neural networks. In all of these cases, the amount of
+There is lots of exciting work in the deep learning com-                        data to be processed depends on the sparse structure
+piler space. Since most PyTorch users use GPUs, our main                        of the problem, which will typically vary in a data-
+reason for selecting Triton [46] as an output target was its                    dependent way.
+proven ability to generate kernels faster than handwritten                 In supporting dynamic shapes, we chose not to support
+libraries [30, 13, 43] with simple input code. Very few compil-         dynamic rank programs, e.g., programs whose inputs tensors
+ers have been able to do that consistently, and many widely             change in dimensionality, as this pattern rarely occurs in
+used deep learning compilers simply call those libraries di-            real-world deep learning programs, and it avoids the need
+rectly without trying to compete in GPU codegen for com-                to reason inductively over symbolic lists of shapes.
+plex kernels.
+   Many compilers use designs inspired by Halide [33], in-
+                                                                        5.1    Symbolic Shape Guards
+cluding: TVM [12], nvFuser [36], and NNC [60]. These de-
+signs have a split semantics language and scheduling lan-               The use of straight line traces in TorchDynamo was mo-
+guage that allow exploring different schedules without chang-           tivated by the need to reuse preexisting code written in
+ing the semantics of the program. Researchers have explored             Python/C++ targeting the PyTorch API. We continue this
+many different ways of expressing the search space [18,                 philosophy with dynamic shapes: unlike a fully symbolic
+38, 48, 51, 58, 7, 59, 19] and searching that space automati-           system which might capture both branches of a conditional,
+cally [57, 11, 54, 56, 6].                                              we always pick one branch and specialize our trace under
+   XLA [45] is the compiler behind TensorFlow [2] and JAX [8].          the assumption that this trace will only be reused when the
+XLA provides multiple levels of IR including a high level IR,           assumptions hold. To do this, we maintain a size hint for
+HLO, that has become a standard for TPUs [26] and sim-                  every symbolic size saying what its concrete value was on
+ilar accelerators. Many newer compilers are emerging in                 the first input that triggered the just-in-time compilation.
+the MLIR [27] ecosystem, including IREE [44] (now part of               When we perform a condition on the shape of a tensor, we
+OpenXLA [45]). The latest version of Triton [46] also uses              consult the hint to find out which branch to take and add a
+MLIR for its internal representation.                                   guard.
+                                                                           This greatly simplifies the symbolic shape formulas we
+5     Dynamic Shapes                                                    produce, as we do not need to represent conditionals, but it
+                                                                        means we have a much more involved system for managing
+Deep learning compilers commonly only work for static                   guards. Consider, for example, the following program:
+shapes, that is to say, they produce compiled programs which
+only work for a single specific configuration of input shapes,          def f(x, y):
+and must recompile if any input shape changes. This as-                     z = torch.cat([x, y])
+sumption works well for the majority of commonly run deep                   if z.size(0) > 2:
+                                                                                return z.mul(2)
+learning models today, but there are a few situations where                 return z.add(2)
+it is insufficient:
+      • Some dimensions, such as batch size or sequence length,            The final IR we will compile with TorchInductor will either
+        may vary. For example, an inference service perform-            be torch.cat([x, y]).add(2) or torch.cat([x, y]).mul(2) (with
+        ing adaptive batching will execute inference requests           the condition flattened away), but to determine which branch
+        with varying batch sizes depending on how many re-              we are in, we would need to know the size of z, an intermedi-
+        quests it received within its batching window. We may           ate. Because TorchDynamo must know up-front if a compiled
+        also want to consider padding out variable-size se-             trace is valid (we do not support bailouts, like some JIT com-
+        quences only to the maximum sequence length within              pilers), we must be able to reduce z.size(0) to an expression
+        a batch, which may vary from batch to batch.                    in terms of the inputs, x.size(0) + y.size(0). This is done
+      • Some models exhibit data-dependent output shapes,               by writing meta functions for all operators in PyTorch. Meta
+        that is to say, the size of their outputs and intermedi-        functions propagate size information to the output of a ten-
+        ates may depend on the actual input data which may              sor without actually performing computation on the node.
+        vary across runs. For example, detection models may             At the time of writing, coverage for meta functions was 2657
+        first generate a variable number of potential bounding          out of 3028 PyTorch ops (including overloads), which covers
+        boxes before running a more expensive image recog-              the vast majority of real-world models since there is a long
+        nition model to identify if the subject is in a bounding        tail of rarely/never used operators. There is also mechanism
+        box. The number of bounding boxes is data-dependent.            for defining your own meta functions for custom ops.
+                                                                   11
+5.2    Optimizing Dynamic Shapes Reasoning                                to work around these are: 1) On tensor creation, PyTorch
+A major motivation of dynamic shapes is to reduce compile                 precomputes data about a tensor; for example, when using
+time, as a compiler which supports only static shapes must                empty_strided to create a tensor, it will sort the strides and
+recompile a kernel for every possible combination of possi-               determine whether the tensor is non-overlapping and dense.
+ble input shapes. However, reasoning over symbolic shapes                 Sorts produce a lot of guards. However, it is more common
+comes with its own costs: in the limit, the shape expressions             to produce a tensor directly with a higher-level API like
+for output tensors may be quite complicated. We employ a                  empty, which is guaranteed to produce a non-overlapping
+variety of strategies to reduce the performance impact of                 and dense tensor. We modified PyTorch to avoid needlessly
+symbolic shapes reasoning:                                                recomputing these properties. 2) Even if nontrivial compute
+                                                                          is needed, sometimes a property is never used. Making these
+      • Our default API for dynamic shapes does not require               precomputed properties lazy allows us to avoid guarding on
+        any user annotation: we assume that all inputs are po-            unused properties. 3) It is generally unknown whether or not
+        tentially dynamic, model weights are static, and we in-           data within an integer tensor may be negative. However, we
+        fer the true dynamism by stepping through the model               provide an API constrain_range whereby a user can specify
+        and analyzing the interactions between the two. We                that a size is bounded above and below by known limits.
+        also support a mode assume_static_by_default which
+        forces all input dimensions to be assumed static un-
+        less a user explicitly marks them as dynamic with                 6     Experimental Results
+        mark_dynamic(tensor, dim).                                        We run our evaluation on three different benchmark suites.
+      • Code in PyTorch often performs tests on whether or                TorchBench [14] is a benchmark suite containing a diverse
+        not a size of a variable is zero or one; for example,             set of models taken from open source repositories selected
+        when constructing a tensor, PyTorch computes if it is             from highly cited projects as ranked by Papers with Code [35].
+        contiguous. A zero element tensor is always contigu-              HuggingFace [53] is a popular library for Transformer [49]
+        ous, so we always test if each dimension of a tensor is           models. TIMM [52] is a popular library containing vision
+        zero. Instead of forcing our symbolic reasoning system            models in PyTorch. To turn the last two libraries into a bench-
+        to rediscover this fact every trace, we instead proac-            mark suite, we selected representative models covering every
+        tively 0/1 specialize: if an input size is 0 or 1, instead        category of model available.
+        of assigning it a symbolic variable, we treat it as a con-           Our benchmarking infrastructure is open source [40] in
+        stant and add an appropriate guard. Specializing on               the hope that other publications will use it. Additional re-
+        1 is important to capture broadcasting semantics in               sults can be found in the TorchInductor Performance Dash-
+        PyTorch and performance optimizations. Importantly,               board [41], including: per-model performance, different TorchIn-
+        we can make a negative inference when we do allo-                 ductor settings, and daily updates for PyTorch nightly builds.
+        cate a symbolic variable: any symbolic variable must              Experiments were run on an NVIDIA A100 GPU, CUDA 11.6,
+        not equal 0/1, and so if we test if it is equal to 0/1, we        and an Intel Xeon 8275CL CPU. Experiments were repeated
+        can evaluate the expression to false without having to            100 times to reduce noise, with 3 warm up iterations. We ap-
+        introduce a additional guard.                                     plied a timeout of 30 minutes per model and count timeouts
+      • As we process the user program, we incrementally                  as failures. TorchInductor was run with a PyTorch nightly
+        simplify our symbolic expressions as we learn more                build from 8/30/2023, with max-autotune, freezing, and cud-
+        facts from guards. Our current implementation simpli-             agraphs enabled. Other versions used are: nvFuser 2.0; NNC
+        fies unification and divisibility on the fly, and we also         2.0; Hidet 0.2.2; TVM 0.11.1; ONNX Runtime (ONNXRT)
+        use SymPy [28] to help us determine if a requested                1.14.1; and PyTorch/XLA 2.1. For training experiments, we
+        guard is already statically known, in which case we               measure a single step of both the forwards and backwards
+        can eliminate it.                                                 pass excluding the optimizer.
+
+5.3    Hint-Free (Unbacked) Symbolic Integers                             6.1   TorchDynamo’s Ability to Capture Graphs
+To resolve control flow, we check the actual value of a sym-              The first section of Table 1 shows experimental results com-
+bolic integer to determine which branch to take and guard                 paring TorchDynamo to TorchScript [17] in terms of their
+on. Unbacked symbolic integers arise when a size variable                 ability to capture different benchmark suites. For Hugging-
+emerges from a data-dependent operation like .nonzero()                   Face, TorchScript fails on every model because HuggingFace
+or .item() and the actual value is unknown. It is illegal to              models returns a ModelOutput container class that TorchScript
+perform control flow on these symbolic integers, so we must               does not support. Most TIMM models work with TorchScript
+graph break on these operations.                                          because the maintainers of TIMM use TorchScript in their
+  Naively implemented, this is too restrictive and results in             workflows and have put in effort to adapt their models. On
+too many graph breaks. The most important enhancements                    TorchBench, TorchDynamo works on more than twice as
+                                                                     12
+                                   TorchBench   HuggingFace    TIMM             Tensor overheads are not uniform across models. For training
+                  Model Count 80                46             62               with cross-iteration pipelining: one third of models are better
+     Works with TorchDynamo 74 (93%)            46 (100%)      62 (100%)
+  Compare with TorchScript [17] 36 (45%)        0 (0%)         61 (98%)
+                                                                                than 10% overhead, one third of models are between 10% and
+                                                                                66% overhead, and one third of models are between 66% and
+            Operators Captured     91.8%        99.8%          100%
+     Mean Operators per Graph      252.8        612.6          450.7            1759% overhead.
+        Mean Graphs per Model      21.1         7.7            1                   One way to mitigate Lazy Tensor overheads in training
+    Models with 0 graph breaks     52 (70%)     41 (89%)       62 (100%)
+ Models with 1 to 9 graph breaks   6 (8%)       1 (2%)         0 (0%)
+                                                                                and offline inference is cross-iteration pipelining. This helps
+  Models with 10+ graph breaks     16 (22%)     4 (9%)         0 (0%)           with the fact that for a single iteration of Lazy Tensors, the
+Table 1. TorchDynamo statistics from each benchmark suite,                      GPU is idle while the CPU captures, then the CPU is idle
+measured using float32 inference on an NVIDIA A100 GPU.                         while the GPU executes what was captured. By running
+                                                                                multiple iterations one can overlap the capture of iteration
+                                                                                𝑁 with the execution of iteration 𝑁 − 1. Lazy Tensors + cross-
+                                                                                iteration pipelining in Table 2 measures this amortization
+                                                Inference Training
+                                                                                effect by measuring 10 iterations rather than 1 iteration.
+                           TorchDynamo          5%            1%                There is a small improvement in Lazy Tensor overheads
+                             Lazy Tensors       38%           90%
+ Lazy Tensors + cross-iteration pipelining      31%           86%               from this strategy.
+                                                                                   For many models, Lazy Tensor capture is too slow to sat-
+Table 2. Overheads (lower is better) as a percentage of eager
+                                                                                urate the GPU. This is especially true for smaller models
+PyTorch execution time for graph capture. This experiment
+                                                                                or ones with large numbers of operations. In these cases,
+uses the same kernels as eager PyTorch, so overheads are
+                                                                                pipelining does not help because the limiting factor is Lazy
+graph capture cost only. Measured using float32 TorchBench
+                                                                                Tensor overheads. For some PyTorch models, there is code
+on an NVIDIA V100 GPU.
+                                                                                like if torch.any(torch.isnan(x)) or print(loss.item()). Both of
+                                                                                these operations take values from within PyTorch tensors
+                                                                                and convert them into Python bool or float types. This type
+many models as TorchScript. TorchBench is the most repre-                       of code is fast in eager mode PyTorch, but defeats any cross
+sentative of the three benchmark suites for graph capture                       iteration pipelining, because with a (not yet computed) Lazy
+comparison because it is made up of models taken from                           Tensor, you have no way of knowing what torch.any() should
+diverse sources.                                                                return (which controls the branch the code will take) or the
+   The second section of Table 1 provides statistics about                      values to print. Since Lazy Tensors has zero visibility into
+the quality of graphs captured by TorchDynamo, normalized                       the Python code calling it, this pattern forces a flush of any
+as a percentage of working models. Unlike prior systems,                        accumulated pipeline of ops and requires the CPU capture
+which were all-or-nothing, TorchDynamo can capture par-                         to stall and wait for the GPU to catch up.
+tial programs and multiple graphs. TorchDynamo is able
+to capture a single whole-program graph most of the time,                       6.3   TorchInductor Speedups
+and even when there are graph breaks, typical graphs are                        Table 3 shows the geometric mean speedups of TorchInduc-
+hundreds of operators in size. The most common reason for                       tor and six other TorchDynamo backends over PyTorch eager
+graph breaks are: usage of non-PyTorch libraries such as                        across our three benchmark suites and many configurations.
+numpy [21]; conversion to Python types such as tolist();                        In this experiment, we hold the graph capture mechanism
+and data-dependent control flow operations. There is sup-                       (TorchDynamo) constant and only vary the backend com-
+port for compiling numpy operations with torch.compile,                         piler, so every backend gets the same input graphs and incurs
+which is not enabled for this experiment.                                       the same capture overheads. Figure 4 is based on the same
+                                                                                data as Table 3, but shows the Cumulative Distribution Func-
+6.2   Overheads of Graph Capture                                                tion (CDF) of speedups with the three benchmark suites
+Table 2 measures the runtime overheads introduced by graph                      combined. This helps better understand how speedups are
+capture for both TorchDynamo and Lazy Tensors. The other                        distributed.
+systems are ahead-of-time and do not introduce runtime                             TorchInductor is faster than other backends in most cases.
+overhead. We run each system using the same kernels as Py-                      nvFuser [36] and NNC [60] both have speedups clustered
+Torch eager, so slowdowns are from graph capture overhead                       around 1× because they make use of eager PyTorch ker-
+only. We take the geometric mean slowdown on TorchBench                         nels and only generate code for a subset of PyTorch. Py-
+and subtract 1 to get a percentage overhead added. As with                      Torch/XLA [42] has more varied performance, in many cases
+all our results, we exclude warm up iterations from timing,                     generating large speedups and, in other cases, large slow-
+so this is measuring steady-state performance.                                  downs which pull down the average. It performs better for
+   While the overheads of TorchDynamo are less than 5%,                         GPU float16 inference compared to other configurations, es-
+Lazy Tensors adds a large amount of overhead. These Lazy                        pecially on the vision models in TIMM. ONNX Runtime [16],
+                                                                           13
+                                                                     TorchBench                            HuggingFace                             TIMM
+                                                           Inference            Training         Inference             Training         Inference          Training
+                                                       Models    Geomean Models      Geomean Models    Geomean Models       Geomean Models    Geomean Models    Geomean
+                                                       Working Speedup Working Speedup Working Speedup Working Speedup Working Speedup Working Speedup
+                           None (TorchDynamo-only)     74/74    0.95×      59/59   0.99×        46/46                       1.01×      46/46          0.98×    62/62    1.00×     62/62   1.00×
+                                      TorchInductor    74/74    2.73×      58/59   1.38×        46/46                       1.47×      46/46          1.24×    62/62    2.48×     62/62   1.38×
+                                        nvFuser [36]   53/74    1.23×      45/59   1.04×        38/46                       1.09×      36/46          1.09×    57/62    1.16×     56/62   1.03×
+        NVIDIA
+                                           NNC [60]    53/74    1.12×      42/59   1.03×        21/46                       0.98×      21/46          0.94×    57/62    1.02×     58/62   0.96×
+        A100 GPU
+                                   PyTorch/XLA [42]    57/74    0.80×      42/59   0.73×        33/46                       1.03×      18/46          0.98×    53/62    1.24×     52/62   1.11×
+        float32
+                                      ONNXRT [16]      34/74    0.86×      N/A     N/A          21/46                       0.84×      N/A            N/A      29/62    0.92×     N/A     N/A
+                                          TVM [12]     41/74    0.16×      N/A     N/A          22/46                       0.09×      N/A            N/A      37/62    0.13×     N/A     N/A
+                                          Hidet [18]   15/74    0.54×      N/A     N/A          0/46                        N/A        N/A            N/A      5/62     0.30×     N/A     N/A
+                           None (TorchDynamo-only)     74/74    0.95×      57/57   0.99×        45/45                       1.00×      45/45          0.97×    60/60    1.00×     60/60   1.00×
+                                      TorchInductor    74/74    2.59×      57/57   1.50×        45/45                       1.91×      45/45          1.45×    60/60    2.77×     60/60   1.50×
+                                        nvFuser [36]   53/74    1.27×      45/57   1.04×        37/45                       1.07×      35/45          1.04×    56/60    1.13×     54/60   1.01×
+        NVIDIA
+                                           NNC [60]    53/74    1.14×      46/57   1.03×        35/45                       0.98×      37/45          0.94×    56/60    1.00×     56/60   0.95×
+        A100 GPU
+                                   PyTorch/XLA [42]    56/74    0.82×      42/57   0.80×        33/45                       1.16×      18/45          0.24×    53/60    1.59×     50/60   1.27×
+        float16
+                                      ONNXRT [16]      34/74    0.86×      N/A     N/A          21/45                       0.84×      N/A            N/A      29/60    0.92×     N/A     N/A
+                                          TVM [12]     40/74    0.17×      N/A     N/A          31/45                       0.18×      N/A            N/A      34/60    0.10×     N/A     N/A
+                                          Hidet [18]   15/74    0.57×      N/A     N/A          0/45                        N/A        N/A            N/A      5/60     0.46×     N/A     N/A
+                           None (TorchDynamo-only)     74/74    1.00×      57/57   0.99×        46/46                       1.00×      46/46          1.00×    62/62    1.06×     61/61   1.00×
+                                      TorchInductor    74/74    1.39×      57/57   1.35×        45/46                       2.54×      40/46          1.36×    58/62    2.55×     52/61   1.42×
+        Intel Xeon
+                                           NNC [60]    51/74    1.14×      47/57   0.99×        38/46                       1.15×      38/46          0.92×    58/62    1.04×     58/61   0.85×
+        8275CL CPU
+                                   PyTorch/XLA [42]    58/74    0.27×      43/57   0.21×        33/46                       0.38×      16/46          0.34×    50/62    0.38×     37/61   0.25×
+        float32
+                                      ONNXRT [16]      46/74    1.06×      N/A     N/A          35/46                       0.64×      N/A            N/A      54/62    1.02×     N/A     N/A
+                                          TVM [12]     44/74    0.64×      N/A     N/A          14/46                       0.10×      N/A            N/A      47/62    1.46×     N/A     N/A
+
+Table 3. Geometric mean speedups (higher is better) over PyTorch eager for different TorchDynamo backends and the number
+of models they work on in each benchmark suite. Only working models are included in speedup calculation. Comparisons use
+same precision in eager mode. N/A means the backend does not support that configuration. All backends use TorchDynamo
+as frontend to capture graphs in this experiment and receive the same initial graphs. None is included as a way to estimate
+overheads (or speedups) of TorchDynamo without any graph optimizations applied.
+
+
+                                            GPU Inference (float32)                                                                                     GPU Training (float32)
+                   200                                                                                                     200
+Number of models
+
+
+
+
+                                                                                                        Number of models
+
+
+
+
+                            TorchInductor                                                                                             TorchInductor
+                   150      nvFuser                                                                                        150        nvFuser
+                            NNC                                                                                                       NNC
+                   100      PyTorch/XLA                                                                                    100        PyTorch/XLA
+                            ONNXRT
+                   50       TVM                                                                                            50
+                            Hidet
+                    0                                                                                                       0
+                     10x   9x      8x       7x     6x    5x     4x    3x      2x   1x      0x                                    3x                      2x                  1x                   0x
+                                                 Speedup greater than                                                                                     Speedup greater than
+
+
+                                            GPU Inference (float16)                                                                                     GPU Training (float16)
+                   200                                                                                                     200
+Number of models
+
+
+
+
+                                                                                                        Number of models
+
+
+
+
+                            TorchInductor                                                                                             TorchInductor
+                   150      nvFuser                                                                                        150        nvFuser
+                            NNC                                                                                                       NNC
+                   100      PyTorch/XLA                                                                                    100        PyTorch/XLA
+                            ONNXRT
+                   50       TVM                                                                                            50
+                            Hidet
+                    0                                                                                                       0
+                     10x   9x      8x       7x     6x    5x     4x    3x      2x   1x      0x                                    3x                      2x                  1x                   0x
+                                                 Speedup greater than                                                                                     Speedup greater than
+
+
+                                                   CPU Inference                                                                                              CPU Training
+                   200                                                                                                     200
+Number of models
+
+
+
+
+                                                                                                        Number of models
+
+
+
+
+                            TorchInductor                                                                                             TorchInductor
+                   150      NNC                                                                                            150        NNC
+                            PyTorch/XLA                                                                                               PyTorch/XLA
+                   100      ONNXRT                                                                                         100
+                            TVM
+                   50                                                                                                      50
+
+                    0                                                                                                       0
+                     10x   9x      8x       7x     6x    5x     4x    3x      2x   1x      0x                                    3x                      2x                  1x                   0x
+                                                 Speedup greater than                                                                                     Speedup greater than
+
+
+Figure 4. Cumulative Distribution Function (CDF) of speedups over PyTorch eager mode. For speedups (x-axis) higher is
+better and PyTorch eager is 1×. Same underlying data as Table 3.
+
+
+                                                                                                14
+                                   Inference       Training             performed by TorchInductor break up larger optimized op-
+ All TorchInductor optimizations   1.91×           1.45×                erators into many smaller primitive operators, and we rely
+ Without loop/layout reordering    1.91× (-0.00)   1.28× (-0.17)        on fusions to recombine them to recover 1× performance.
+      Without matmul templates     1.85× (-0.06)   1.41× (-0.04)           The remaining optimizations measured in Table 4 are: 1)
+      Without parameter freezing   1.85× (-0.06)   1.45× (-0.00)        Loop/layout reordering uses a voting algorithm to reorder
+       Without pattern matching    1.83× (-0.08)   1.45× (-0.00)        loops in kernels and change data layouts to match usage. 2)
+            Without cudagraphs     1.81× (-0.10)   1.37× (-0.08)        Matmul templates use Triton templates with pointwise epi-
+                 Without fusion    1.68× (-0.23)   1.27× (-0.18)        logue fusion for matrix multiply instead of cuBLAS/cuDNN.
+                Without inlining   1.58× (-0.33)   1.31× (-0.14)        There is an autotuner (enabled by mode="max-autotune") to se-
+     Without fusion and inlining   0.80× (-1.11)   0.59× (-0.86)
+                                                                        lect when to use these templates. Without this optimization,
+Table 4. Ablation study measuring the impact of remov-                  TorchInductor does not use templates at all. 3) Parameter
+ing optimizations from TorchInductor. Geometric mean                    freezing is an inference-only optimization that constant-folds
+speedups over eager PyTorch on float16 HuggingFace on                   away parts of the model that only depend on parameters. 4)
+an NVIDIA A100 GPU. Parenthesis is difference from All                  Pattern matching uses graph-level peephole optimizations to
+TorchInductor optimizations.                                            rewrite the input graph before it is lowered to TorchInductor.
+                                                                        5) Cudagraphs is a way to reduce kernel launch overheads at
+                                                                        the CUDA driver level. TorchInductor will automatically use
+                                                                        this when static analysis shows it to be safe and it is enabled
+                                                                        in the configuration.
+TVM [12], and Hidet [18] are inference-only and fail to run
+many models due to missing operator implementations and
+                                                                        7     Conclusions
+other issues. On CPU, the ONNX runtime generates speedups               In this paper, we presented two extensions to PyTorch: Torch-
+above 8× for 5 models (compared to 1 for TorchInductor), but            Dynamo and TorchInductor, which deliver speedups through
+these results did not generalize – more than half of models             graph compilation in PyTorch programs while retaining the
+show slowdowns. On GPU, TVM and Hidet produce slow-                     flexibility and usability of the eager programming model
+downs for all except 4, and 2, models respectively. On CPU,             PyTorch is known for. By enabling graph compilation in
+TVM performs significantly better for some models while                 PyTorch programs, we hope to empower researchers and
+generating large slowdowns on others. TVM would have                    practitioners to tackle larger and more complex machine
+been the second fastest CPU inference backend on Torch-                 learning problems with greater efficiency and flexibility.
+Bench (behind TorchInductor) if we excluded the models
+where it generated large slowdowns.                                     Acknowledgements
+                                                                        We gratefully thank the anonymous reviewers and our shep-
+6.4   Sources of TorchInductor Speedups                                 herd, Martin Maas, for their suggestions and feedback that
+                                                                        helped improve this paper. Thanks to Brett Simmers for
+Table 4 explores where TorchInductor’s speedups are coming
+                                                                        proofreading. Thanks to everyone working on Triton, TorchIn-
+from by disabling optimizations one at a time an measuring
+                                                                        ductor’s GPU backend would not have been possible without
+the impact on geometric mean speedup on HuggingFace
+                                                                        it. Thanks to the Intel PyTorch team: Guobing Chen, Leslie
+models. If removing a specific optimization results in a bigger
+                                                                        Fang, Jiong Gong, Xuan Liao, Yudong Si, Chuanqi Wang,
+slowdown, this implies that it is responsible for more of the
+                                                                        Eikan Wang, Chunyuan Wu, Weiwen Xia, Xiaobing Zhang,
+speedup.
+                                                                        Fan Zhao, and Beilei Zheng. Their work greatly improved
+   The biggest speedups in TorchInductor come from com-
+                                                                        TorchInductor’s CPU backend. Finally, thanks to the thou-
+bining pointwise, reduction, and scatter kernels together into
+                                                                        sands of people who have contributed code to PyTorch. This
+a smaller number of fused kernels, which reduces memory
+                                                                        work would not have been possible without the countless
+traffic since values can be reused without requiring a round
+                                                                        contributions that collectively made PyTorch what is is to-
+trip to memory. In TorchInductor, these kernel combinations
+                                                                        day.
+happen in two places: 1) Inlining happens during lowering,
+and duplicates the body of pointwise kernels into all their
+                                                                        A     Artifact Appendix
+consumers when thresholds are met. 2) Fusion happens dur-
+ing scheduling, and combines remaining kernels together,                A.1    Abstract
+and also does horizontal consumer/consumer fusions. There               The source code for this work is included in PyTorch which
+is a lot of overlap between those passes, so we also include a          is available at https://github.com/pytorch/pytorch/. Torch-
+line without fusion and inlining that disables both. Without            Dynamo can be found in the torch/_dynamo directory and
+both of those passes, TorchInductor generates slowdowns                 TorchInductor can be found in the torch/_inductor di-
+rather than speedups. This is because the decompositions                rectory. Benchmarking code to reproduce the results in the
+                                                                   15
+paper can be found at https://github.com/pytorch/pytorch/t              # create a new conda environment
+ree/main/benchmarks/dynamo.                                             conda create --name=pt2 python=3.10
+                                                                        conda activate pt2
+  Since this paper includes a large number of experiments
+that in aggregate will take weeks to run, the instructions              # install dependencies for benchmark code
+here will focus on reproducing the TorchInductor GPU Hug-               conda install pandas scipy psutil tqdm
+
+gingFace results. The workflow to reproduce other results is            # install PyTorch using release build
+very similar to this and is described at the end. Additional            conda install pytorch torchvision torchaudio pytorch-cuda=12.1 \
+instructions are included in the README.md included in the                  -c pytorch -c nvidia
+
+benchmarks/dynamo directory in PyTorch.                                 Next, download the PyTorch source code in order to access
+                                                                        benchmarking scripts:
+A.2       Artifact check-list (meta-information)
+                                                                        # clone the PyTorch repository to get benchmark code
+      • Binary: distributions available at https://pytorch.org/         git clone --recursive --branch=release/2.1 \
+      • Hardware: NVIDIA A100 GPU, Intel Xeon 8275CL CPU                    https://github.com/pytorch/pytorch
+      • Metrics: Geomean speedup over PyTorch eager mode
+                                                                        # benchmark code should be run from the root PyTorch directory
+      • How much disk space required (approximately)?: 50 GB            cd pytorch
+      • How much time is needed to prepare workflow (ap-
+        proximately)?: 1 hour
+      • How much time is needed to complete experiments
+                                                                        A.5   Experiment workflow
+        (approximately)?: < 1 day per-backend, per-configuration        To reproduce TorchInductor speedups over eager PyTorch
+        for most experiments                                            on HuggingFace, float16, GPU, inference run:
+      • Publicly available?: Yes                                        TORCHINDUCTOR_MAX_AUTOTUNE=1 ./benchmarks/dynamo/huggingface.py \
+      • Code licenses (if publicly available)?: BSD-3                       --performance --no-skip \
+                                                                            -dcuda --float16 --inference \
+A.3       Description                                                       --inductor --freezing \
+                                                                            --output=`pwd`/results.csv
+A.3.1 How to access.
+                                                                        This downloads HuggingFace models and runs them both
+   • Source code and benchmark code: https://github.com                 with and without TorchDynamo to compute speedups com-
+     /pytorch/pytorch/                                                  pared to PyTorch eager mode. Results are written to results.csv
+   • PyTorch binaries: https://pytorch.org/                             in the current working directory. If one runs additional exper-
+   • TorchBench: https://github.com/pytorch/benchmark/                  iments, --output should be set to a unique absolute filename
+A.3.2 Hardware dependencies.                                            for each one.
+   • To match configurations in this paper: NVIDIA A100                 A.6   Evaluation and expected results
+     GPU and Intel Xeon 8275CL CPU
+   • Benchmarks can run with an NVIDIA GPU with SM80+                   The chosen output file (results.csv) should contain 46 en-
+     and 40GB+ of memory, most benchmarks can run with                  tries showing speedup numbers (and other metrics) for each
+     less                                                               model. All models should be working (failures are repre-
+   • CPU results can be run without a GPU                               sented as a zero speedup) and the geomean of all the speedups
+                                                                        should be similar to the speedups reported in the paper.
+A.3.3 Software dependencies.
+   • A recent Linux distribution                                        A.7   Experiment customization
+   • NVIDIA kernel drivers                                              The above command can be customized in many ways:
+   • CUDA version compatible with the chosen version of                    • ./benchmarks/dynamo/huggingface.py can be substituted
+     PyTorch                                                                 with the scripts ./benchmarks/dynamo/timm_models.py or
+   • gcc/g++ compatible with the chosen CUDA                                  ./benchmarks/dynamo/torchbench.py for the three bench-
+   • Miniconda installed (https://docs.conda.io/projects/m                    mark suites. Note that TorchBench requires additional
+     iniconda/en/latest/)                                                     installation steps, while the other two auto-download
+   • PyTorch (and dependencies)                                               dependencies.
+   • Additional python packages: pandas, scipy, psutil, and                • -dcuda can be replaced with -dcpu for CPU
+     tqdm                                                                  • --float16 can be replaced with --float32 or --amp
+                                                                           • --inference can be replaced with --training
+A.4       Installation                                                     • --inductor can be replaced with --backend=eager
+There are a number of options to install PyTorch which are                   (for "None"), --backend=nvfuser, --backend=nnc , --xla,
+described on https://pytorch.org/. A minimal installation                    --backend=onnxrt, --backend=tvm, or --backend=hidet.
+including dependencies can be achieved using the following                    Note that each backend has different dependencies
+commands:                                                                     and setup instructions.
+                                                                   16
+    • --freezing and/or TORCHINDUCTOR_MAX_AUTOTUNE=1 can be                         [10]   Jack Cao. 2022. PyTorch/XLA 2022 Q4 dev update. https://dev-discu
+      removed to disable those optimizations in TorchInduc-                                ss.pytorch.org/t/pytorch-xla-2022-q4-dev-update/961. (2022).
+      tor. Many more optimization flags can be found in                             [11]   Tianqi Chen, Lianmin Zheng, Eddie Yan, Ziheng Jiang, Thierry
+                                                                                           Moreau, Luis Ceze, Carlos Guestrin, and Arvind Krishnamurthy.
+      torch/_inductor/config.py.                                                           2018. Learning to optimize tensor programs. In Proceedings of the
+    • Many other options and backends are available via                                    32nd International Conference on Neural Information Processing Sys-
+     --help                                                                                tems (NIPS’18). Curran Associates Inc., Montréal, Canada, 3393–
+                                                                                           3404.
+The results in this paper include the combinatorial product
+                                                                                    [12]   Tianqi Chen et al. 2018. TVM: an automated End-to-End optimizing
+of most of these flags.                                                                    compiler for deep learning. In 13th USENIX Symposium on Operating
+                                                                                           Systems Design and Implementation (OSDI 18). USENIX Association,
+A.8     Notes                                                                              Carlsbad, CA, (Oct. 2018), 578–594. isbn: 978-1-939133-08-3. https:
+      • Speedups and model coverage results have improved in                               //www.usenix.org/conference/osdi18/presentation/chen.
+                                                                                    [13]   Sharan Chetlur, Cliff Woolley, Philippe Vandermersch, Jonathan
+        recent versions of PyTorch compared to results shown
+                                                                                           Cohen, John Tran, Bryan Catanzaro, and Evan Shelhamer. 2014.
+        in this paper. We recommend running the latest Py-                                 cuDNN: efficient primitives for deep learning. (2014). arXiv: 1410.07
+        Torch version for future comparisons.                                              59 [cs.NE].
+      • Performance results can be sensitive to environment                         [14]   Will Constable et al. 2020. TorchBench: a collection of open source
+        setup, such as hardware and CUDA versions, so some                                 benchmarks for PyTorch performance and usability evaluation. http
+                                                                                           s://github.com/pytorch/benchmark. (Sept. 2020).
+        small differences are expected.
+                                                                                    [15]   Leonardo Dagum and Ramesh Menon. 1998. OpenMP: an indus-
+      • Additional installation steps are required for Torch-                              try standard API for shared-memory programming. Computational
+        Bench and non-TorchInductor backends.                                              Science & Engineering, IEEE, 5, 1, 46–55.
+      • A performance dashboard based on these scripts is                           [16]   ONNX Runtime developers. 2021. ONNX runtime. https://www.onn
+        available at https://hud.pytorch.org/benchmark/comp                                xruntime.ai. (2021).
+                                                                                    [17]   Zachary DeVito et al. 2018. TorchScript. https://pytorch.org/docs/1
+        ilers.
+                                                                                           .9.0/jit.html. (Sept. 2018).
+                                                                                    [18]   Yaoyao Ding, Cody Hao Yu, Bojian Zheng, Yizhi Liu, Yida Wang, and
+References                                                                                 Gennady Pekhimenko. 2023. Hidet: task-mapping programming par-
+[1]    Martin Abadi et al. 2016. TensorFlow: A system for large-scale ma-                  adigm for deep learning tensor programs. In Proceedings of the 28th
+       chine learning. In 12th USENIX Symposium on Operating Systems                       ACM International Conference on Architectural Support for Program-
+       Design and Implementation (OSDI 16), 265–283. https://www.usenix                    ming Languages and Operating Systems, Volume 2 (ASPLOS 2023).
+       .org/system/files/conference/osdi16/osdi16-abadi.pdf.                               Association for Computing Machinery, Vancouver, BC, Canada, 370–
+[2]    [SW] Martín Abadi et al., TensorFlow, Large-scale machine learning                  384. isbn: 9781450399166. doi: 10.1145/3575693.3575702.
+       on heterogeneous systems Nov. 2015. doi: 10.5281/zenodo.4724125.             [19]   Siyuan Feng et al. 2022. TensorIR: an abstraction for automatic ten-
+[3]    Hameer Abbasi, Edward Z Yang, and Ralf Gommers. 2020. Improving                     sorized program optimization. (2022). arXiv: 2207.04296 [cs.LG].
+       subclassing Tensor by propagating subclass instances. https://githu          [20]   Alan Gray. 2019. Getting started with CUDA graphs. https://develo
+       b.com/pytorch/rfcs/blob/master/RFC-0001-torch-function-for-me                       per.nvidia.com/blog/cuda-graphs/. (2019).
+       thods.md. (Aug. 2020).                                                       [21]   Charles R. Harris et al. 2020. Array programming with NumPy. Na-
+[4]    Akshay Agrawal et al. 2019. TensorFlow Eager: A Multi-Stage, Python-                ture, 585, 357–362. doi: 10.1038/s41586-020-2649-2.
+       Embedded DSL for Machine Learning. CoRR, abs/1903.01855. http:               [22]   Horace He. 2019. The state of machine learning frameworks in 2019.
+       //arxiv.org/abs/1903.01855 arXiv: 1903.01855.                                       https://thegradient.pub/state-of-ml-frameworks-2019-pytorch-d
+[5]    Rami Al-Rfou et al. 2016. Theano: A Python framework for fast                       ominates-research-tensorflow-dominates-industry/. (2019).
+       computation of mathematical expressions. CoRR, abs/1605.02688.               [23]   Mike Innes et al. 2017. On machine learning and programming lan-
+       http://arxiv.org/abs/1605.02688 arXiv: 1605.02688.                                  guages. https://julialang.org/blog/2017/12/ml-pl/. (Dec. 2017).
+[6]    Jason Ansel, Shoaib Kamil, Kalyan Veeramachaneni, Jonathan Ragan-            [24]   ISO. 1998. ISO/IEC 14882:1998: Programming languages — C++. (Sept.
+       Kelley, Jeffrey Bosboom, Una-May O’Reilly, and Saman Amarasinghe.                   1998), 732. http://webstore.ansi.org/ansidocstore/product.asp?sku
+       2014. Opentuner: an extensible framework for program autotuning.                    =ISO%2FIEC+14882%2D1998.
+       In Proceedings of the 23rd International Conference on Parallel Ar-          [25]   Yangqing Jia, Evan Shelhamer, Jeff Donahue, Sergey Karayev, Jonathan
+       chitectures and Compilation (PACT ’14). Association for Computing                   Long, Ross B. Girshick, Sergio Guadarrama, and Trevor Darrell. 2014.
+       Machinery, Edmonton, AB, Canada, 303–316. isbn: 9781450328098.                      Caffe: Convolutional Architecture for Fast Feature Embedding. CoRR,
+       doi: 10.1145/2628071.2628092.                                                       abs/1408.5093. http://arxiv.org/abs/1408.5093 arXiv: 1408.5093.
+[7]    Riyadh Baghdadi, Jessica Ray, Malek Ben Romdhane, Emanuele                   [26]   Norman P. Jouppi et al. 2017. In-datacenter performance analysis
+       Del Sozzo, Abdurrahman Akkas, Yunming Zhang, Patricia Suriana,                      of a tensor processing unit. In Proceedings of the 44th Annual Inter-
+       Shoaib Kamil, and Saman Amarasinghe. 2019. Tiramisu: a polyhedral                   national Symposium on Computer Architecture (ISCA ’17). Associa-
+       compiler for expressing fast and portable code. In Proceedings of the               tion for Computing Machinery, Toronto, ON, Canada, 1–12. isbn:
+       2019 IEEE/ACM International Symposium on Code Generation and                        9781450348928. doi: 10.1145/3079856.3080246.
+       Optimization (CGO 2019). IEEE Press, Washington, DC, USA, 193–               [27]   Chris Lattner et al. 2021. MLIR: scaling compiler infrastructure for
+       205. isbn: 9781728114361.                                                           domain specific computation. In 2021 IEEE/ACM International Sym-
+[8]    [SW] James Bradbury et al., JAX: composable transformations of                      posium on Code Generation and Optimization (CGO), 2–14. doi: 10.1
+       Python+NumPy programs version 0.3.13, 2018. url: http://github.c                    109/CGO51591.2021.9370308.
+       om/google/jax.                                                               [28]   Aaron Meurer et al. 2017. SymPy: symbolic computing in Python.
+[9]    Dino Viehland Brett Cannon. 2016. PEP 523: adding a frame evalua-                   PeerJ Computer Science, 3, (Jan. 2017). doi: 10.7717/peerj-cs.103.
+       tion API to CPython. https://peps.python.org/pep-0523/. (2016).
+
+                                                                               17
+[29]   Adrian Mönnich, Armin Ronacher, David Lord, Grey Li, Joshua                         Adams, and Albert Cohen. 2018. Tensor comprehensions: framework-
+       Bronson, Markus Unterwaditzer, and Philip Jones. 2023. Jinja project.               agnostic high-performance machine learning abstractions. (2018).
+       https://github.com/pallets/jinja. (2023).                                           arXiv: 1802.04730 [cs.PL].
+[30]   NVIDIA, Péter Vingelmann, and Frank H.P. Fitzek. 2023. CUDA.                 [49]   Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion
+       https://developer.nvidia.com/cuda-toolkit. (2023).                                  Jones, Aidan N. Gomez, Łukasz Kaiser, and Illia Polosukhin. 2017.
+[31]   2023. ONNX. https://onnx.ai/. (2023).                                               Attention is all you need. In Proceedings of the 31st International
+[32]   2019. Pytorch: an imperative style, high-performance deep learning                  Conference on Neural Information Processing Systems (NIPS’17). Cur-
+       library. Proceedings of the 33rd International Conference on Neural                 ran Associates Inc., Long Beach, California, USA, 6000–6010. isbn:
+       Information Processing Systems. Curran Associates Inc., Red Hook,                   9781510860964.
+       NY, USA, 12 pages.                                                           [50]   B. P. Welford. 1962. Note on a method for calculating corrected
+[33]   Jonathan Ragan-Kelley, Connelly Barnes, Andrew Adams, Sylvain                       sums of squares and products. Technometrics, 4, 3, 419–420. doi:
+       Paris, Frédo Durand, and Saman Amarasinghe. 2013. Halide: a lan-                    10.1080/00401706.1962.10490022.
+       guage and compiler for optimizing parallelism, locality, and recom-          [51]   Jian Weng, Animesh Jain, Jie Wang, Leyuan Wang, Yida Wang, and
+       putation in image processing pipelines. In Proceedings of the 34th                  Tony Nowatzki. 2021. Unit: unifying tensorized instruction compila-
+       ACM SIGPLAN Conference on Programming Language Design and                           tion. In 2021 IEEE/ACM International Symposium on Code Generation
+       Implementation (PLDI ’13). Association for Computing Machinery,                     and Optimization (CGO), 77–89. doi: 10.1109/CGO51591.2021.93703
+       Seattle, Washington, USA, 519–530. isbn: 9781450320146. doi: 10.11                  30.
+       45/2491956.2462176.                                                          [52]   Ross Wightman. 2019. PyTorch image models. https://github.com/r
+[34]   James Reed, Zachary DeVito, Horace He, Ansley Ussery, and Jason                     wightman/pytorch-image-models. (2019). doi: 10.5281/zenodo.4414
+       Ansel. 2022. Torch.fx: practical program capture and transformation                 861.
+       for deep learning in python. In Proceedings of Machine Learning and          [53]   Thomas Wolf et al. 2020. Transformers: State-of-the-Art Natural
+       Systems. D. Marculescu, Y. Chi, and C. Wu, (Eds.) Vol. 4, 638–651.                  Language Processing. In Association for Computational Linguistics,
+       https://proceedings.mlsys.org/paper/2022/file/ca46c1b9512a7a831                     (Oct. 2020), 38–45. https://www.aclweb.org/anthology/2020.emnlp-
+       5fa3c5a946e8265-Paper.pdf.                                                          demos.6.
+[35]   Elvis Saravia. 2021. Papers with Code 2021: a year in review. https:         [54]   Jiarong Xing, Leyuan Wang, Shang Zhang, Jack Chen, Ang Chen,
+       //medium.com/paperswithcode/papers-with-code-2021-a-year-in-                        and Yibo Zhu. 2022. Bolt: bridging the gap between auto-tuners and
+       review-de75d5a77b8b. (2021).                                                        hardware-native performance. In Proceedings of Machine Learning
+[36]   Christian Sarofeen, Piotr Bialecki, Jie Jiang, Kevin Stephano, Masaki               and Systems. D. Marculescu, Y. Chi, and C. Wu, (Eds.) Vol. 4, 204–216.
+       Kozuki, Neal Vaidya, and Stas Bekman. 2022. Introducing nvFuser, a                  https://proceedings.mlsys.org/paper_files/paper/2022/file/38b3eff
+       deep learning compiler for PyTorch. https://pytorch.org/blog/introd                 8baf56627478ec76a704e9b52-Paper.pdf.
+       ucing-nvfuser-a-deep-learning-compiler-for-pytorch/. (2022).                 [55]   Shangdi Yu and Horace He. 2023. Transcending runtime-memory
+[37]   Frank Seide and Amit Agarwal. 2016. CNTK: microsoft’s open-source                   tradeoffs in checkpointing by being fusion aware. In Proceedings of
+       deep-learning toolkit. In Proceedings of the 22nd ACM SIGKDD Inter-                 Machine Learning and Systems.
+       national Conference on Knowledge Discovery and Data Mining (KDD              [56]   Bojian Zheng et al. 2022. Dietcode: automatic optimization for dy-
+       ’16). Association for Computing Machinery, San Francisco, Califor-                  namic tensor programs. In Proceedings of Machine Learning and
+       nia, USA, 2135. isbn: 9781450342322. doi: 10.1145/2939672.2945397.                  Systems. D. Marculescu, Y. Chi, and C. Wu, (Eds.) Vol. 4, 848–863.
+[38]   Junru Shao et al. 2022. Tensor program optimization with probabilis-                https://proceedings.mlsys.org/paper_files/paper/2022/file/fa7cdfa
+       tic programs. (2022). arXiv: 2205.13603 [cs.LG].                                    d1a5aaf8370ebeda47a1ff1c3-Paper.pdf.
+[39]   Alex Suhan, Davide Libenzi, Ailing Zhang, Parker Schuh, Bren-                [57]   Lianmin Zheng et al. 2020. Ansor: generating high-performance ten-
+       nan Saeta, Jie Young Sohn, and Denys Shabalin. 2021. LazyTensor:                    sor programs for deep learning. In Proceedings of the 14th USENIX
+       combining eager execution with domain-specific compilers. arXiv                     Conference on Operating Systems Design and Implementation (OSDI’20)
+       preprint arXiv:2102.13267.                                                          Article 49. USENIX Association, USA, 17 pages. isbn: 978-1-939133-
+[40]   PyTorch Team. 2023. TorchDynamo Benchmarking Code. https://git                      19-9.
+       hub.com/pytorch/pytorch/tree/main/benchmarks/dynamo. (2023).                 [58]   Size Zheng et al. 2022. AMOS: enabling automatic mapping for tensor
+[41]   PyTorch Team. 2023. TorchInductor Performance Dashboard. https:                     computations on spatial accelerators with hardware abstraction. In
+       //hud.pytorch.org/benchmark/compilers. (2023).                                      Proceedings of the 49th Annual International Symposium on Computer
+[42]   PyTorch XLA Team. 2023. PyTorch/XLA. https://github.com/pytorc                      Architecture (ISCA ’22). Association for Computing Machinery, New
+       h/xla. (2023).                                                                      York, New York, 874–887. isbn: 9781450386104. doi: 10.1145/347049
+[43]   Vijay Thakkar et al. 2023. CUTLASS. https://github.com/NVIDIA/cu                    6.3527440.
+       tlass. Version 3.0.0. (Jan. 2023).                                           [59]   Hongyu Zhu et al. 2022. ROLLER: fast and efficient tensor compi-
+[44]   [SW] The IREE Authors, IREE Sept. 2019. url: https://github.com/o                   lation for deep learning. In 16th USENIX Symposium on Operating
+       penxla/iree.                                                                        Systems Design and Implementation (OSDI 22). USENIX Association,
+[45]   The XLA Team. 2017. XLA - Tensorflow, compiled. https://develop                     Carlsbad, CA, (July 2022), 233–248. isbn: 978-1-939133-28-1. https:
+       ers.googleblog.com/2017/03/xla-tensorflow-compiled.html. (Mar.                      //www.usenix.org/conference/osdi22/presentation/zhu.
+       2017).                                                                       [60]   Mikhail Zolotukhin. 2021. NNC walkthrough: how PyTorch ops get
+[46]   Philippe Tillet, H. T. Kung, and David Cox. 2019. Triton: an interme-               fused. https://dev-discuss.pytorch.org/t/nnc-walkthrough-how-pyt
+       diate language and compiler for tiled neural network computations.                  orch-ops-get-fused/125. (2021).
+       In (MAPL 2019). Association for Computing Machinery, Phoenix,
+       AZ, USA, 10–19. isbn: 9781450367196. doi: 10.1145/3315508.3329973.
+[47]   Seiya Tokui et al. 2019. Chainer: A Deep Learning Framework for
+       Accelerating the Research Cycle. CoRR, abs/1908.00213. http://arxiv
+       .org/abs/1908.00213 arXiv: 1908.00213.
+[48]   Nicolas Vasilache, Oleksandr Zinenko, Theodoros Theodoridis, Priya
+       Goyal, Zachary DeVito, William S. Moses, Sven Verdoolaege, Andrew
+
+                                                                               18
+

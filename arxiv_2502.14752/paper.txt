@@ -1,0 +1,912 @@
+                                          T RITON B ENCH: Benchmarking Large Language Model Capabilities for
+                                                             Generating Triton Operators
+                                              Jianling Li1,∗, Shangzhan Li2,∗, Zhenye Gao3 , Qi Shi4,†, Yuxuan Li4,†, Zefan Wang4 ,
+                                         Jiacheng Huang4 , Haojie Wang4 , Jianrong Wang1 , Xu Han4 , Zhiyuan Liu4 , Maosong Sun4
+                                                                                  1
+                                                                        Tianjin University, Tianjin, China
+                                                                          2
+                                                                 Harbin Institute of Technology, Harbin, China
+                                             3
+                                               The Hong Kong University of Science and Technology (Guangzhou), Guangzhou, China
+                                                                    4
+                                                                      Tsinghua University, Beijing, China
+                                                                   Abstract                          frameworks such as vLLM (Kwon et al., 2023),
+                                                                                                     LightLLM (ModelTC, 2025), Liger-kernel (Hsu
+                                                 Triton, a high-level Python-like language de-
+                                                                                                     et al., 2024) and unsloth (Daniel Han and team,
+                                                 signed for building efficient GPU kernels, is
+                                                 widely adopted in deep learning frameworks          2023). However, crafting high-performance oper-
+arXiv:2502.14752v1 [cs.CL] 20 Feb 2025
+
+
+
+
+                                                 due to its portability, flexibility, and accessi-   ators remains challenging, especially for the intri-
+                                                 bility. However, programming and parallel op-       cate balance between memory hierarchy manage-
+                                                 timization still require considerable trial and     ment, parallel thread coordination, and hardware-
+                                                 error from Triton developers. Despite advances      specific optimizations. Even though Triton ab-
+                                                 in large language models (LLMs) for conven-         stracts away many complexities of low-level pro-
+                                                 tional code generation, these models struggle
+                                                                                                     gramming architectures like CUDA, it still requires
+                                                 to generate accurate, performance-optimized
+                                                 Triton code, as they lack awareness of its speci-   developers to manually handle critical aspects such
+                                                 fications and the complexities of GPU program-      as pointer arithmetic and memory access patterns,
+                                                 ming. More critically, there is an urgent need      making performance tuning a labor-intensive pro-
+                                                 for systematic evaluations tailored to Triton. In   cess that often involves extensive trial and error.
+                                                 this work, we introduce T RITON B ENCH, the            Current research in AI-assisted coding has
+                                                 first comprehensive benchmark for Triton oper-
+                                                                                                     reached a human-competitive level (Hui et al.,
+                                                 ator generation. T RITON B ENCH features two
+                                                 evaluation channels: a curated set of 184 real-     2024; Zhu et al., 2024), yet it is primarily restricted
+                                                 world operators from GitHub and a collection        to general-purpose languages like Python. How-
+                                                 of operators aligned with PyTorch interfaces.       ever, LLMs still face challenges in generating Do-
+                                                 Unlike conventional code benchmarks priori-         main Specific Language (DSL) code. Specifically
+                                                 tizing functional correctness, T RITON B ENCH       for Triton, current models might be unfamiliar with
+                                                 also profiles efficiency performance on widely      Triton specification and the intricacies of GPU pro-
+                                                 deployed GPUs aligned with industry applica-
+                                                                                                     gramming (Nichols et al., 2024). Most importantly,
+                                                 tions. Our study reveals that current state-of-
+                                                 the-art code LLMs struggle to generate effi-
+                                                                                                     the ability of these models to produce high-quality
+                                                 cient Triton operators, highlighting a signifi-     Triton code remains unassessed. Therefore, a high-
+                                                 cant gap in high-performance code generation.       quality benchmark paired with performance-aware
+                                                 T RITON B ENCH will be available at https:          metrics is urgently required.
+                                                 //github.com/thunlp/TritonBench.                       In this study, we present T RITON B ENCH, a
+                                         1       Introduction                                        performance-aware benchmark framework for Tri-
+                                                                                                     ton generation, which contains two channels,
+                                         Triton (Tillet et al., 2019) language, a high-level         namely T RITON B ENCH -G and T RITON B ENCH -
+                                         Python-like programming language designed for               T. Specifically, T RITON B ENCH -G contains 184
+                                         implementing efficient GPU kernels, is playing an           carefully curated operators from existing GitHub
+                                         increasingly pivotal role in the ever-scaling deep          repositories, reflecting the realistic demand for
+                                         learning ecosystems (Abadi et al., 2016; Paszke             Triton operator development. As a complement,
+                                         et al., 2019). Due to the superior portability, flex-       T RITON B ENCH -T is composed of operator de-
+                                         ibility, lightweight design, and accessibility to           velopment tasks aligned with PyTorch interfaces,
+                                         less proficient programmers, Triton is prevalently          covering operators under-represented by public
+                                         adopted in modern Large Language Model (LLM)                sources. Moreover, unlike the majority of code
+                                             * Equal   contribution.                                 benchmarks merely prioritizing functional correct-
+                                             †
+                                                 Corresponding authors.                              ness (Chen et al., 2021; Austin et al., 2021a), T RI -
+                              Construction                                                        Evaluation
+ TRITONBENCH-G                     Collection                     Rating                            Similarity
+                   Crawl          Filter        Extract                        @triton.jit                       @triton.jit
+                                                                     Quality   def add_kernel(x_ptr, …) CodeBLEU def add_kernel(x_p, …)
+                                                                                 ...                               ...
+                                                                               def add_wrapper(x, y)             def add_wrapper(x, y)
+                       Instruction                                   Runtime     ...                               ...
+
+                                                                                                    Accuracy
+                       Test Code                   Operator            GPU                           Call              Execution
+                                                                                                              Output
+
+
+  TRITONBENCH-T                   Collection                      Fusing                                      Output
+
+                    Statis          Sample
+                                                                                                  Performance
+                                                                  Common
+                                                                           …
+                      Instruction
+                                                                  Uncommon               Speed Up                 GPU Efficiency
+                      Test Code                   Operator
+                                                                                   Reference Operator             Generated Operator
+
+
+
+                  Figure 1: Illustration of the construction and evaluation of T RITON B ENCH.
+
+
+TON B ENCH    emphasizes efficiency performance               2      Related Work
+profiling against reference programs on NVIDIA
+GPUs, better aligning industrial demands.                     2.1      Triton Development
+                                                              Triton (Mitkov et al., 2021) is an open-source,
+                                                              Python-like language and a compiler designed to
+   As shown in Figure 1, for T RITON B ENCH -
+                                                              simplify GPU programming in AI and HPC. It
+G, we follow three steps: 1) scrape and collect
+                                                              abstracts the complexities of CUDA by introduc-
+high-quality operators, 2) generate instructions via
+                                                              ing a block-based programming model, automat-
+prompts, and 3) annotate test code with LLMs.
+                                                              ing low-level optimizations such as memory coa-
+Moreover, HPC experts evaluate GPU performance
+                                                              lescing and tensor core utilization, and making it
+for all triton codes. For T RITON B ENCH -T, we
+                                                              more accessible to researchers without HPC back-
+provide operator generation tasks aligned with Py-
+                                                              ground. Nonetheless, Triton provides explicit con-
+Torch. To construct these tasks, we first perform a
+                                                              trol over memory access patterns and parallelism.
+frequency analysis to select torch operators, com-
+                                                              This balance of productivity and flexibility makes
+bine them into diverse sets, and provide paired
+                                                              it prevalently adopted in both academia and indus-
+instructions and test code. Our evaluation met-
+                                                              try (Kwon et al., 2023; ModelTC, 2025; Hsu et al.,
+rics include similarity, call and execution accuracy,
+                                                              2024; Daniel Han and team, 2023). However, Tri-
+speed up, and GPU efficiency.
+                                                              ton developers must still laboriously tune critical
+                                                              parameters to exploit hardware capabilities. LLM
+   We conduct extensive experiments across a                  code generation poses prospects for automating
+broad range of LLMs. Overall, the difficulty                  Triton development, which calls for a systematic
+of T RITON B ENCH -G is greater than that of                  evaluation of generated operators.
+T RITON B ENCH -T. The highest execution accuracy
+                                                              2.2      Code Benchmarks
+on T RITON B ENCH -G can reach 23.91%, while
+on T RITON B ENCH -T, it can reach 53.01%. For                The demand for proper measurement of coding ca-
+all correctly executed operators generated by the             pability arises as the program synthesis research
+models, the best speed up on T RITON B ENCH -G                advances. The primary practice of coding bench-
+is 1.56×, whereas, on T RITON B ENCH -T, it is                marks is functional correctness testing, usually re-
+1.91×. Additionally, we perform in-depth analyses             alized by test case construction and sandbox exe-
+of LLMs’ behavior on T RITON B ENCH and summa-                cution. For example, H UMAN E VAL (Belz et al.,
+rize the challenges in Triton generation. The results         2021) curate hand-written programs and test cases,
+reveal that current LLMs are not yet fully capable            and MBPP (Austin et al., 2021b) create program-
+of handling T RITON B ENCH, underscoring the chal-            ming problems by crowd-sourcing. The function-
+lenge of enabling LLMs to generate Triton code                ality test has recently extended to automated test
+effectively. We hope this work initiates evaluation           generation for better coverage (Liu et al., 2023)
+in this under-explored area and fosters advance-              and broader applications, including software en-
+ments in LLM-driven operator development.                     gineering (Jimenez et al., 2024). Another vital
+aspect of coding benchmarking is performance
+profiling (Shypula et al.; Liu et al., 2023; Huang
+et al., 2024; Qiu et al., 2024). However, most
+existing frameworks focus on competition-style,
+single-process execution. While there are some
+frameworks for evaluating parallel programming
+on CPUs (Nichols et al., 2024; Chaturvedi et al.,
+2024), benchmarks targeting GPU code remain
+scarce. As the deployment of deep learning models
+scales up, a comprehensive evaluation framework
+that considers both correctness and performance on
+GPU code becomes increasingly necessary.
+
+2.3    LLMs for Code Generation
+                                                         Figure 2: Implementation of the Triton “add” operator.
+LLMs have recently demonstrated impressive ca-           Lines 3-6 perform for tensor element addressing, fol-
+pabilities in generating code from natural lan-          lowed by the calculation and storage in lines 7-10. The
+guage instructions, as evidenced by models such          kernel is called in wrapper line 15.
+as DeepSeek-Coder (Guo et al., 2024; Zhu et al.,
+2024) and Qwen-Coder (Hui et al., 2024), which              We create T RITON B ENCH -G by curating high-
+have achieved strong performance on broad coding         quality human-authored Triton operators from
+benchmarks. Despite their versatility, they often        Github, which reflects Triton’s currently actual re-
+struggle with Domain-Specific Languages (DSLs)           quirements. The following sections will explain
+designed for higher levels of abstraction and im-        data collection (§ 3.1), data statistics (§ 3.2), opera-
+proved efficiency in targeted contexts (Wasowski
+                                             ˛           tor quality rating (§ 3.3), test code design (§ 3.4),
+and Berger, 2023). The main reason for this sta-         and evaluation metrics (§ 3.5).
+tus is the limited availability of DSL datasets and      3.1   Data Collection
+benchmarks (Cassano et al., 2024; Pujar et al.,
+2023), coupled with their unique syntax and se-          Our process starts by gathering Triton-related
+mantics (Pujar et al., 2023), posing significant chal-   GitHub repositories with more than 100 stars,
+lenges for LLMs (Buscemi, 2023). In this work,           which collectively encompass 95 repositories with
+we focus on DSLs within the high-performance             845 Python files. As Triton repositories with higher
+computing domain where the challenges we men-            star counts are rare, 100 stars serve as an optimal
+tioned are more pronounced for involving the par-        threshold, striking a balance between quality and
+allel programming model. We introduce the first          quantity. We then use prompt-based filtering (see
+comprehensive benchmark for Triton generation,           prompt D in the Appendix) to process the candidate
+providing a systematic evaluation framework that         Python files and select 250 that specifically contain
+aims to guide future improvements in DSL-centric         Triton code snippets.
+LLM code generation.                                        Afterward, we perform a rigorous manual in-
+                                                         spection of the Triton code to ensure its accuracy
+3     T RITON B ENCH -G                                  and clarity. This process involves filling in miss-
+                                                         ing components, removing redundant sections, and
+Triton (Tillet et al., 2019) is a DSL that abstracts     debugging the operators. When a file contains mul-
+away low-level complexities to simplify GPU pro-         tiple independent Triton operators, we split them
+gramming for computation-intensive tasks, with           into separate files. For operators that are solely ker-
+flexibility for specialized applications like machine    nels, we add the necessary wrappers to ensure they
+learning. Typically, a Triton operator includes at       work as intended. Additionally, to ensure unique-
+least a kernel and a wrapper. The kernel comprises       ness, we leverage C ODE B ERT S CORE (Zhou et al.,
+code executed on the GPU, focusing on tensor ele-        2023) to eliminate duplicates.
+ment addressing and thread parallel coordination.           Finally, we generate the LLM instruction for
+Meanwhile, the wrapper offers a Python function          each operator based on prompt D. The instructions
+that encapsulates the kernel call. Figure 2 shows        provide essential details, including the operator’s
+an example of Triton operator.                           functionality, corresponding function names, and
+              Instruction           Triton Operator
+ Difficulty
+                                                                                     19.6%
+                 tok#       func#   params#   line#    tok#
+                                                                                              19.0%   >70
+ d1 (1.6%)      296.67      2.00     1.33      26.00    369.0                                         50-70
+                                                                                                      30-50
+ d2 (14.7%)     363.26      2.41     2.70      45.56    678.1                27.7%                    10-30
+ d3 (35.3%)     353.80      3.80     3.34     102.42   1510.4                                 17.4%   <10
+ d4 (45.7%)     394.48      3.89     6.04     153.77   2689.1                         16.3%
+ d5 (2.7%)      469.60      6.60     6.00     249.80   4581.4
+
+       Table 1: Statistics of T RITON B ENCH -G.                Figure 3: Distribution of GPU efficiency of the Triton
+                                                                operators in T RITON B ENCH -G.
+a comprehensive input/output demonstration. All
+instructions are carefully reviewed and manually                3.4   Test Code Design
+verified to ensure they correctly reflect the intended
+behavior of each operator.                                      In contrast to traditional CPU-language bench-
+                                                                marks (Shypula et al.; Liu et al., 2023; Huang et al.,
+3.2   Data Statistics                                           2024; Qiu et al., 2024) that predominantly rely on
+Table 1 summarizes statistics of T RITON B ENCH -               scalar test inputs,T RITON B ENCH -G is built around
+G. In this benchmark, each operator is assigned                 tensor-based test inputs. We employ PyTorch to
+a difficulty level, from d1 (easiest) to d5 (most               generate random tensors as replacements for con-
+challenging), by an LLM guided by prompt D,                     ventional test cases. Specifically, we leverage a
+with subsequent manual verification by two do-                  prompt D to generate the corresponding test code
+main experts. For each difficulty level, we report              for each operator. In the case of the multi-branch
+statistics including the average number of func-                operators, the generated test code is designed to
+tions (func#), parameters (params#), lines (lines#),            invoke every branch within the operator. More-
+and tokens (tok#). Notably, the upward trend ob-                over, we rigorously debug all branches to guarantee
+served in these statistics as the difficulty level in-          test reliability. On average, we generate 3.6 test
+creases suggests the expert-driven grading scheme               branches per operator.
+is largely reasonable.
+   Compared to existing code generation tasks                   3.5   Evaluation Metrics
+(Chen et al., 2021; Austin et al., 2021a), the av-              In contrast to traditional code evaluations, which
+erage instruction length in T RITON B ENCH -G is                mainly emphasize accuracy (Chen et al., 2021;
+substantially longer, which is a deliberate design              Austin et al., 2021a), our T RITON B ENCH -G intro-
+decision. The extended instructions provide richer              duces dedicated performance evaluations. Specifi-
+context, which can help the model understand nu-                cally, the systematic evaluation of Triton operators
+anced requirements and generate high-quality op-                covers five key metrics:
+erators. Additionally, this approach better reflects
+real-world operator development practices where                 Similarity assesses text-level resemblance us-
+detailed requirements are indispensable.                        ing C ODE BLEU (Ren et al., 2020). In our experi-
+                                                                ments, we assign equal weights of 0.25 to N-gram,
+3.3   Operators Quality Rating                                  weighted N-gram, syntax, and dataflow compo-
+To systematically evaluate the quality of the Triton            nents to ensure a balanced evaluation.
+operators in T RITON B ENCH -G, we compute the
+                                                                Call & Execution Accuracy assess whether
+GPU efficiency for each operator. Detailed method-
+                                                                the code can run without error and whether its input-
+ology for calculating GPU efficiency can be found
+                                                                output behavior is correct, respectively.
+in Appendix B. Our statistics indicate an average
+GPU efficiency of 43.0%, which reflects the over-               Speed Up measures the relative execution time
+all reliability of the operators in T RITON B ENCH -G.          improvement for correctly executed operators.
+The distribution of efficiency scores is shown in               Specifically, if tgen and tref represent the running
+Figure 3. As shown in the figure, 19.6% of opera-               times of the generated and reference operators, re-
+tors developed by professional Triton programmers                                                    tref
+                                                                spectively, then SpeedUp(gen) = tgen      .
+have GPU performance below 10%, which under-
+scores the challenges in developing and optimizing              GPU Efficiency evaluates how effectively the
+Triton operators.                                               generated operator utilizes GPU resources, follow-
+ing the operator quality rating in § 3.3. For further      Difficulty
+                                                                                    Torch-Align Operator
+details, please refer to Appendix B.                                    torch-op#   params#    math#   description#
+                                                           d1 (13.3%)     1.36        2.82     23.50       50.41
+4     T RITON B ENCH -T                                    d2 (22.3%)     1.97        3.78     40.73       61.19
+                                                           d3 (32.5%)     2.70        4.91     74.64       67.89
+The real-world Triton operators introduced in § 3          d4 (29.5%)     2.16        5.24     47.31       71.02
+                                                           d5 (2.4%)      2.75        2.75     30.50       88.50
+primarily focus on highly frequent operations. As
+a complement, we propose T RITON B ENCH -T,                      Table 2: Statistics of T RITON B ENCH -T.
+which aligns the Triton wrapper with interfaces of
+the PyTorch library (Paszke et al., 2019). Together,
+T RITON B ENCH -G and T RITON B ENCH -T form a            (3)math#, the average token number of mathe-
+complementary evaluation framework. The fol-              matical expressions, and (4)description#, the av-
+lowing sections elaborate on the data construction        erage token count of the descriptions. These statis-
+(§ 4.1), data statistics (§ 4.2), test code and metrics   tics generally increase with the operator difficulty,
+(§ 4.3), and benchmark comparisons (§ 4.4).               similar trend that aligns with the observations in
+                                                          T RITON B ENCH -G.
+4.1    Data Construction
+                                                          4.3   Test Code and Metrics
+We construct T RITON B ENCH -T by selecting Py-
+Torch operators based on their usage frequency in         The design of the test code in T RITON B ENCH -T
+real-world coding and then fusing them ( hereafter        adheres to those of T RITON B ENCH -G, employing
+referred to simply as “operators” ). First, we select     randomly generated tensors for operator evalua-
+operators that require GPU interactions, ensuring         tion. For correctness and performance assessment,
+alignment with Triton’s scope. Next, we sample            we utilize Call Accuracy, Execution Accuracy,
+40 high-frequency operators and 40 low-frequency          and Speed Up, whose computation methods are
+operators from the remaining pool. The frequency          consistent with those used in T RITON B ENCH -G.
+of each operator is determined by its usage prob-         4.4   Benchmark Comparison
+ability in PyTorch-related code from The Stack
+                                                          This section provides comparisons between
+V2 (Lozhkov et al., 2024) with those exceeding a
+                                                          T RITON B ENCH -G and T RITON B ENCH -T, which
+predefined threshold 45% as common operators.
+                                                          differ in key aspects and together provide a well-
+   Subsequently, we fuse these operators in vari-
+                                                          rounded evaluation.
+ous configurations: combinations of common op-
+erators, combinations of common and uncommon              Source & Distribution: T RITON B ENCH -G is
+operators, and combinations of uncommon oper-             collected from GitHub and reflects real-world pro-
+ators. All combinations are valid, as the outputs         gramming demands with a concentration of fre-
+of preceding operators serve as appropriate inputs        quently used operators, e.g., Attention at 20.0%,
+for subsequent ones. The final set includes 166           MatMul at 10.9%, LayerNorm at 6.5%, SoftMax
+operators, based on the latest (v2.6.0) version of        at 3.8%. In contrast, T RITON B ENCH -T, sourced
+the PyTorch library. Each operator is paired with         from PyTorch, presents a more diverse operator set
+its corresponding standard PyTorch call and docu-         including both common and uncommon operators.
+ment, while fused operators combine descriptions
+from all involved operators.                              Instruction Generation: T RITON B ENCH -G
+                                                          combines LLM generation with expert verifi-
+4.2    Data Statistic                                     cation while T RITON B ENCH -T directly extracts
+                                                          instructions from PyTorch documentation. This
+The statistics of T RITON B ENCH -T are presented
+                                                          difference underlines their complementary roles in
+in Table 2. Similar to T RITON B ENCH -G, the oper-
+                                                          probing different facets of the Triton generation.
+ators are categorized into five difficulty levels (d1
+to d5) using an LLM guided by prompt D. These             Evaluation Metrics: Both benchmark channels
+initial categorizations are then validated through        assess correctness and performance. Addition-
+manual review by two domain experts.                      ally, T RITON B ENCH -G incorporates a similarity-
+   We report the following statistics: (1)torch-          based assessment that offers direct comparisons
+op# the average number of PyTorch operators,              with established implementations. In summary,
+(2)params# the average number of parameters,              the different designs of T RITON B ENCH -G and
+                                                           Call        Execution                        GPU
+    Model                 Size      Similarity                                        Speed Up
+                                                         Accuracy      Accuracy                       Efficiency
+                                                Domain-Specific Models
+    Qwen2.5-Coder          7B      9.19 / 14.54     0.00 / 0.00      0.00 / 0.00     0.00 / 0.00      0.00 / 0.00
+    DeepSeek-Coder        6.7B     9.38 / 14.52     0.00 / 0.00      0.00 / 0.00     0.00 / 0.00      0.00 / 0.00
+    Qwen2.5-Coder-sft      7B     29.98 / 25.96    4.89 / 10.87      4.89 / 10.87    1.56 / 1.22    51.71 / 46.70
+    DeepSeek-Coder-sft    6.7B    25.52 / 30.34    9.78 / 11.96     9.87 / 11.96     1.03 / 1.11     47.68 / 42.26
+                                                General-Purpose Models
+    GPT-4o                  -      9.87 / 20.67    10.87 / 17.93    10.33 / 16.84     0.97 / 1.19    48.80 / 53.33
+    Claude-3.5-Sonnet       -     12.46 / 22.48    10.33 / 20.11    9.79 / 19.57      0.90 / 1.54    59.31 / 49.32
+    Qwen2.5-72B            72B    14.86 / 26.25    11.41 / 16.85    10.87 / 16.31     0.96 / 1.19    23.28 / 49.40
+    DeepSeek-R1           685B    19.96 / 22.64    13.59 / 22.83    13.05 / 22.83     1.11 / 1.22    44.83 / 46.70
+    GPT-o1                  -     16.58 / 29.70 15.22 / 23.91 14.23 / 23.91           0.92 / 1.14    54.25 / 46.37
+
+Table 3: Main results of T RITON B ENCH -G across baseline models, where the left side of “/” represents the zero-shot
+results and the right side represents the one-shot results.
+
+
+T RITON B ENCH -T enable a comprehensive and nu-               5.2   Main results of T RITON B ENCH -G
+anced evaluation of Triton operator generation.
+                                                               Table 3 illustrates the performances of baselines
+                                                               on T RITON B ENCH -G. It is evident that domain-
+5       Experiments                                            specific models generally underperform compared
+                                                               to general-purpose models. However, fine-tuning
+We conduct an extensive set of experiments on T RI -           7B domain-specific models with domain data
+TON B ENCH to rigorously evaluate the performance              significantly boosts accuracy. Qwen’s accuracy
+and capabilities of current LLMs.                              rises from 0 to 4.89%, and DeepSeek’s from 0
+                                                               to 9.78% in zero-shot settings, with even more
+5.1      Baselines and Setup                                   pronounced enhancements in one-shot settings
+                                                               due to the retrieval data from the same source
+T RITON B ENCH generally requires strong capa-
+                                                               as T RITON B ENCH -G. The observed increase in
+bilities in code generation. Therefore, we se-
+                                                               Speed Up can be attributed to the relative simplicity
+lect state-of-the-art LLMs that excel in program-
+                                                               of the correctly generated operators, which makes
+ming tasks as baselines, including both specialized
+                                                               it easier for LLMs to produce efficient code. The
+open-source models and general-purpose models.
+                                                               high GPU efficiency shares the similar reasons.
+For specialized open-source models, we choose
+Qwen2.5-Coder-7B-Instruct (Hui et al., 2024)                      General-purpose models, particularly DeepSeek-
+and deepseek-coder-6.7b-instruct (Guo et al.,                  R1 and GPT-o1, excel across all metrics. Un-
+2024). For general-purpose models, we in-                      der one-shot conditions, DeepSeek-R1 achieves
+clude Claude-3.5-Sonnet-06201 , GPT-4o-0806                    22.83% in Call and Execution Accuracy, while
+2 , qwen2.5-72B-Instruct (Yang et al., 2024), as               GPT-o1 reaches 23.91%. The roughly 10% im-
+well as the thought-driven models DeepSeek-R1                  provement from zero-shot to one-shot highlights
+(Guo et al., 2025) and GPT-o1-2024-12-17 3 .                   the critical role of high-quality examples for Triton
+                                                               generation. Furthermore, the close alignment be-
+    In our experiments, all general-purpose mod-
+                                                               tween Call Accuracy and Execution Accuracy
+els are deployed for direct inference. In contrast,
+                                                               indicates that only a few operators fail to produce
+domain-specific models undergo an additional su-
+                                                               correct results despite successfully invoked.
+pervised fine-tuning phase. Details of the train-
+ing corpus can be found in § A. For evaluation,                   DeepSeek-R1 also leads in GPU execution times,
+we consider both zero-shot and one-shot scenar-                with an improvement of 1.11× in zero-shot and
+ios. In the one-shot setting, a BM25-based retrieval           1.22× in one-shot settings. While GPU efficiency
+method (Robertson et al., 2009) is utilized to select          is strong across most models, Qwen2.5-72B ex-
+the most relevant prompt from the training corpus.             hibits lower efficiency in zero-shot settings, likely
+                                                               due to a higher proportion of less efficient opera-
+    1
+      https://www.anthropic.com/news/claude-3-5-sonnet
+                                                               tors. Finally, Similarity provides corroborative
+    2
+      https://openai.com/index/hello-gpt-4o                    insights, as its variations mirror trends observed in
+    3
+      https://openai.com/o1/                                   other metrics.
+                  Model                 Size    Call Accuracy      Execution Accuracy    Speed Up
+                                               Domain-Specific Models
+                  Qwen2.5-Coder          7B       0.00 / 0.00         0.00 / 0.00       0.00 / 0.00
+                  DeepSeek-Coder        6.7B      0.00 / 1.81         0.00 / 1.81       0.00 / 0.94
+                  Qwen2.5-Coder-sft      7B      17.47 / 16.27      17.47 / 15.67       0.98 / 0.92
+                  DeepSeek-Coder-sft    6.7B    19.28 / 18.67      19.28 / 16.26        0.91 / 0.85
+                                               General-Purpose Models
+                  GPT-4o                  -      36.75 / 32.53      36.75 / 32.53       0.98 / 0.94
+                  Claude-3.5-Sonnet       -      29.52 / 37.95      29.52 / 33.70       0.93 / 0.89
+                  Qwen2.5-72B            72B     30.12 / 22.89      30.12 / 16.30       1.07 / 0.92
+                  DeepSeek-R1           685B    53.01 / 45.78      53.01 / 45.78        1.03 / 1.91
+                  GPT-o1                  -      32.53 / 43.37      32.53 / 43.37       1.21 / 1.10
+
+Table 4: Main results of T RITON B ENCH -T across baseline models, where the left side of “/” represents the zero-shot
+results and the right side represents the one-shot results.
+
+
+5.3    Main Results of T RITON B ENCH -T                     patterns of incorrect operators and summarize the
+From Table 4, we can observe that domain-specific            main challenges for each benchmark as detailed in
+models generally underperform general-purpose                Table 3 and Table 4. The zero-shot and one-shot
+models. Nonetheless, fine-tuning with an 8k cor-             settings are annotated as 0 and 1 respectively.
+pus considerably improves their performance. For
+instance, Qwen’s zero-shot Execution Accuracy
+rises from 0 to 17.47%. In contrast, its one-shot            6.1    Challenges for T RITON B ENCH -G
+improvement (15.67%) is slightly lower, likely
+due to the fact that the retrieved prompts and
+T RITON B ENCH -T operators come from different              Figure 4 clearly shows that most operators are gen-
+sources (Github vs. Pytorch).                                erated incorrectly. Both DeepSeek-R1 and GPT-
+   Among general-purpose models, DeepSeek-                   o1 exhibit similar trends, with DeepSeek-R1 out-
+R1 demonstrates the strongest overall perfor-                performing GPT-o1. Notably, when moving from
+mance, achieving 53.01% Call and Execution                   the zero-shot to the one-shot setting, both models
+Accuracy in the zero-shot setting. Although its              achieve significant improvements on d4. These
+accuracy drops by 7.23% in the one-shot setting,             improvements may stem from the prevalence of
+it still slightly surpasses GPT-o1. As for Speed             Attention and Softmax operators in d4, enabling
+Up, DeepSeek-R1 achieves the best performance of             models to leverage similar examples. In contrast,
+1.91× improvements. Most performance improve-                the simpler operators in d2 and d3 show only lim-
+ments in successfully executed operators stem from           ited gains in the one-shot setting, likely due to the
+operator fusion. Triton’s fused operators reduce             smaller, more idiosyncratic nature of these datasets
+redundant memory reads and writes compared to                that leads to lower retrieval similarity.
+PyTorch, enhancing memory bandwidth utilization                 For the incorrectly written operators, we classify
+and boosting performance.                                    the 16 error types into 4 major categories, detailed
+   Overall, most models achieve better performance           in Appendix C which is presented in Table 5. Note
+on T RITON B ENCH -T than to T RITON B ENCH -G,              that only compiler-reported errors were considered.
+likely because T RITON B ENCH -T features a more             The results show that, compared to the zero-shot
+balanced distribution of operator difficulty, whereas        setting, both DeepSeek-R1 and GPT-o1 in the one-
+T RITON B ENCH -G is predominantly composed of               shot setting demonstrate a significant increase in
+higher-difficulty operators, namely, d3 and d4.              Syntax and Name&Ref errors but a reduction in
+                                                             Attr&Type and Run&Logc errors. This trend sug-
+6     Analysis
+                                                             gests that the training corpus may provide help-
+In this section, we examine the distribution of              ful guidance on logical structure and Triton spec-
+correct and incorrect operators across difficulty            ifications, thus enhancing overall accuracy. Fur-
+levels (d1–d5) for the top-performing models,                thermore, error sensitivity differs between models:
+DeepSeek-R1 and GPT-o1, as shown in Figure 4                 DeepSeek-R1 is less susceptible to syntax errors,
+and Figure 5. Additionally, we analyze the error             whereas GPT-o1 handles logical errors better.
+         Failure             1.09                   Failure             6.52                       Failure   15.66                         Failure   13.25
+                             44.56                                      39.13                                16.87 18.07                             19.28 13.86
+         Success                                    Success                                        Success         11.45                   Success         15.66
+                   6.52                                       7.07
+                   28.81                                      28.26                                  9.64                                    7.83
+                                                                                                     12.65                                   14.46
+
+                                                                                            7.83                                   7.83
+           4.35                                       7.61                                  5.42                                   5.42
+           10.32                                      7.06
+
+                                     0.54                                        0.54                                       1.20                                       1.20
+  0.54                               2.18   1.09                                 2.18                                       1.21                                       1.21
+  1.09                                      0.54
+  d1        d2      d3        d4      d5       d1      d2      d3        d4       d5         d1       d2      d3       d4    d5       d1      d2      d3       d4       d5
+  (a) DeepSeek-R10 results.                 (b) DeepSeek-R11 results.                       (a) DeepSeek-R10 results.              (b) DeepSeek-R11 results.
+         Failure             1.09                   Failure             7.61                       Failure   9.04                          Failure   10.84
+                             44.56                                      38.04                                23.49 8.43                              21.69 13.25
+         Success                                    Success                                        Success         21.09                   Success         16.27
+                   5.43                                       6.52
+                   29.90                                      28.81                                  6.63                                    9.04
+                                                                                                     15.66                                   13.25
+
+                                                                                            7.23                                   9.64
+           5.43                                       7.61                                  6.02                                   3.61
+           9.24                                       7.06
+
+                                     0.54                                        0.00                                       1.20                                       0.60
+  1.63                               2.18   1.63                                 2.72                                       1.21                                       1.81
+  0.00                                      0.00
+  d1        d2      d3        d4      d5       d1      d2      d3        d4       d5         d1       d2      d3       d4    d5       d1      d2      d3       d4       d5
+                         0                                          1                                              0                                       1
+         (c) GPT-o1 results.                        (d) GPT-o1 results.                            (c) GPT-o1 results.                     (d) GPT-o1 results.
+
+Figure 4: Execution results distribution across difficulty                              Figure 5: Execution results distribution across difficulty
+levels in T RITON B ENCH -G.                                                            levels in T RITON B ENCH -T.
+
+ Model                   Syntax      Attr&Type        Name&Ref          Run&Logc            Model                  Syntax   Attr&Type        Name&Ref          Run&Logc
+ DeepSeek-R10             1.64         42.62             16.39                39.34         DeepSeek-R10           0.00       31.96             14.43               53.61
+ DeepSeek-R11             9.27         33.11             35.76                21.85         DeepSeek-R11           0.00       36.79             20.75               42.45
+ GPT-o10                  10.3         38.18             28.48                23.03         GPT-o10                24.06      26.32              7.52               42.11
+ GPT-o11                 20.83         24.31             43.06                11.81         GPT-o11                25.25      25.25             22.22               27.27
+
+
+Table 5: Error statistics of execution failures in                                      Table 6: Error statistics of execution failures in
+T RITON B ENCH -G.                                                                      T RITON B ENCH -T.
+
+
+6.2       Challenges for T RITON B ENCH -T                                              Errors. Conversely, GPT-o1 experiences a sig-
+The execution results of T RITON B ENCH -T (Fig-                                        nificant increase in Name&Ref errors with a no-
+ure 5) show the percentages of correctly gener-                                         table drop in Run&Logc errors.          Comparing
+ated operators. we can observe that DeepSeek-R1                                         T RITON B ENCH -G and T RITON B ENCH -T, the one-
+generated more correct than incorrect operators,                                        shot setting consistently reduces Run&Logc errors.
+which proves the point that the difficulty distri-                                      These variations in error patterns likely stem from
+butions in T RITON B ENCH -T are smoother than                                          the mixed influence of useful and irrelevant infor-
+T RITON B ENCH -G.                                                                      mation in the provided samples.
+   However, while DeepSeek-R1’s performance de-
+                                                                                        7         Conclusion
+clines for difficulty d2-d4 in the one-shot setting,
+GPT-o1 shows improved accuracy on these sub-                                            In this work, we present T RITON B ENCH, a dual-
+sets. This finding indicates that GPT-o1 might be                                       channel benchmark specifically designed for eval-
+more adept at logical reasoning for Triton genera-                                      uating LLMs’ generation for Triton operators.
+tion tasks, allowing it to efficiently use the provided                                 T RITON B ENCH -G integrates real-world Triton
+sample. The differing trends also imply that sample                                     operator samples from open repositories, while
+operators affect models in diverse ways.                                                T RITON B ENCH -T introduces complementary tasks
+   For execution error statistics in T RITON B ENCH -                                   that align with PyTorch interfaces. Our evaluation
+T (Table 6), DeepSeek-R1 notably avoids Syntax                                          framework addresses both functional accuracy and
+errors entirely, while GPT-o1 maintains a high                                          the performance on NVIDIA GPUs. We also con-
+rate of such errors. Under the one-shot setting,                                        duct extensive experiments and detailed analysis on
+DeepSeek-R1 shows a rise in Attr&Type and                                               our benchmark, and find that current LLMs strug-
+Name&Ref errors alongside a decline in Run&Logc                                         gle to generate high-quality Triton operators, un-
+derscoring the necessity for further advancement in      Mark Chen, Jerry Tworek, Heewoo Jun, Qiming Yuan,
+generating accurate as well as performance-aware          Henrique Ponde De Oliveira Pinto, Jared Kaplan,
+                                                          Harri Edwards, Yuri Burda, Nicholas Joseph, Greg
+Triton code. We anticipate T RITON B ENCH will
+                                                          Brockman, et al. 2021. Evaluating large lan-
+serve as an essential framework for advancing au-         guage models trained on code. ArXiv preprint,
+tomated operator generation for Triton.                   abs/2107.03374.
+                                                         Michael Han Daniel Han and Unsloth team. 2023. Un-
+Limitations                                                sloth.
+The primary limitation of this study is that the eval-   Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song,
+uations of T RITON B ENCH were conducted exclu-            Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma,
+sively on the NVIDIA A100 GPU, as it is widely             Peiyi Wang, Xiao Bi, et al. 2025. Deepseek-r1: In-
+adopted in industry and research applications. In          centivizing reasoning capability in llms via reinforce-
+                                                           ment learning. ArXiv preprint, abs/2501.12948.
+future work, we plan to expand the evaluation to
+include a broader range of hardware architectures        Daya Guo, Qihao Zhu, Dejian Yang, Zhenda Xie, Kai
+                                                           Dong, Wentao Zhang, Guanting Chen, Xiao Bi,
+for more comprehensive performance insights.
+                                                           Y Wu, YK Li, et al. 2024. Deepseek-coder: When
+                                                           the large language model meets programming-the
+                                                           rise of code intelligence. CoRR.
+References
+                                                         Pin-Lun Hsu, Yun Dai, Vignesh Kothapalli, Qingquan
+Martín Abadi, Paul Barham, Jianmin Chen, Zhifeng           Song, Shao Tang, Siyu Zhu, Steven Shimizu, Shivam
+ Chen, Andy Davis, Jeffrey Dean, Matthieu Devin,           Sahni, Haowen Ning, and Yanning Chen. 2024. Liger
+ Sanjay Ghemawat, Geoffrey Irving, Michael Isard,          kernel: Efficient triton kernels for llm training. ArXiv
+ et al. 2016. {TensorFlow}: a system for {Large-           preprint, abs/2410.10989.
+ Scale} machine learning. In 12th USENIX sympo-
+ sium on operating systems design and implementa-        Dong Huang, Weiyi Shang, Yuhao Qing, Heming Cui,
+ tion (OSDI 16), pages 265–283.                            and Jie M Zhang. 2024. Effibench: Benchmarking
+                                                           the efficiency of automatically generated code. ArXiv
+Jacob Austin, Augustus Odena, Maxwell Nye, Maarten         preprint, abs/2402.02037.
+   Bosma, Henryk Michalewski, David Dohan, Ellen
+   Jiang, Carrie Cai, Michael Terry, Quoc Le, et al.     Binyuan Hui, Jian Yang, Zeyu Cui, Jiaxi Yang, Day-
+   2021a. Program synthesis with large language mod-       iheng Liu, Lei Zhang, Tianyu Liu, Jiajun Zhang,
+   els. ArXiv preprint, abs/2108.07732.                    Bowen Yu, Keming Lu, et al. 2024. Qwen2. 5-coder
+                                                           technical report. ArXiv preprint, abs/2409.12186.
+Jacob Austin, Augustus Odena, Maxwell Nye, Maarten
+                                                         Carlos E Jimenez, John Yang, Alexander Wettig,
+   Bosma, Henryk Michalewski, David Dohan, Ellen
+                                                           Shunyu Yao, Kexin Pei, Ofir Press, and Karthik R
+   Jiang, Carrie Cai, Michael Terry, Quoc Le, et al.
+                                                           Narasimhan. 2024. SWE-bench: Can language mod-
+   2021b. Program synthesis with large language mod-
+                                                           els resolve real-world github issues? In The Twelfth
+   els. ArXiv preprint, abs/2108.07732.
+                                                           International Conference on Learning Representa-
+Anya Belz, Shubham Agarwal, Yvette Graham, Ehud            tions.
+  Reiter, and Anastasia Shimorina, editors. 2021. Pro-   Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying
+  ceedings of the Workshop on Human Evaluation of         Sheng, Lianmin Zheng, Cody Hao Yu, Joseph E.
+  NLP Systems (HumEval). Association for Computa-         Gonzalez, Hao Zhang, and Ion Stoica. 2023. Effi-
+  tional Linguistics, Online.                             cient memory management for large language model
+                                                          serving with pagedattention. In Proceedings of the
+Alessio Buscemi. 2023. A comparative study of code        ACM SIGOPS 29th Symposium on Operating Systems
+  generation using chatgpt 3.5 across 10 programming      Principles.
+  languages. ArXiv preprint, abs/2308.04477.
+                                                         Jiawei Liu, Chunqiu Steven Xia, Yuyao Wang, and Ling-
+Federico Cassano, John Gouwar, Francesca Lucchetti,         ming Zhang. 2023. Is your code generated by chatgpt
+  Claire Schlesinger, Anders Freeman, Carolyn Jane          really correct? rigorous evaluation of large language
+  Anderson, Molly Q Feldman, Michael Greenberg,             models for code generation. In Advances in Neural
+  Abhinav Jangda, and Arjun Guha. 2024. Knowl-              Information Processing Systems 36: Annual Confer-
+  edge transfer from high-resource to low-resource          ence on Neural Information Processing Systems 2023,
+  programming languages for code llms. Proceed-             NeurIPS 2023, New Orleans, LA, USA, December 10
+  ings of the ACM on Programming Languages,                 - 16, 2023.
+  8(OOPSLA2):677–708.
+                                                         Anton Lozhkov, Raymond Li, Loubna Ben Allal, Fed-
+Aman Chaturvedi, Daniel Nichols, Siddharth Singh,          erico Cassano, Joel Lamy-Poirier, Nouamane Tazi,
+ and Abhinav Bhatele. 2024. Hpc-coder-v2: Study-           Ao Tang, Dmytro Pykhtar, Jiawei Liu, Yuxiang Wei,
+ ing code llms across low-resource parallel languages.     et al. 2024. Starcoder 2 and the stack v2: The next
+ ArXiv preprint, abs/2412.15178.                           generation. ArXiv preprint, abs/2402.19173.
+Ruslan Mitkov, Vilelmini Sosoni, Julie Christine         Philippe Tillet, Hsiang-Tsung Kung, and David Cox.
+  Giguère, Elena Murgolo, and Elizabeth Deysel, ed-        2019. Triton: an intermediate language and com-
+  itors. 2021. Proceedings of the Translation and In-      piler for tiled neural network computations. In Pro-
+  terpreting Technology Online Conference. INCOMA          ceedings of the 3rd ACM SIGPLAN International
+  Ltd., Held Online.                                       Workshop on Machine Learning and Programming
+                                                           Languages, pages 10–19.
+ModelTC. 2025. Lightllm: A python-based llm in-
+ ference and serving framework. https://github.          Andrzej Wasowski
+                                                                    ˛     and Thorsten Berger. 2023. Domain-
+ com/ModelTC/lightllm.                                     Specific Languages. Springer.
+
+                                                         An Yang, Baosong Yang, Beichen Zhang, Binyuan Hui,
+Daniel Nichols, Joshua H Davis, Zhaojun Xie, Arjun
+                                                           Bo Zheng, Bowen Yu, Chengyuan Li, Dayiheng Liu,
+  Rajaram, and Abhinav Bhatele. 2024. Can large
+                                                           Fei Huang, Haoran Wei, et al. 2024. Qwen2. 5 tech-
+  language models write parallel code? In Proceed-
+                                                           nical report. ArXiv preprint, abs/2412.15115.
+  ings of the 33rd International Symposium on High-
+  Performance Parallel and Distributed Computing,        Shuyan Zhou, Uri Alon, Sumit Agarwal, and Graham
+  pages 281–294.                                           Neubig. 2023. CodeBERTScore: Evaluating code
+                                                           generation with pretrained models of code. In Pro-
+Adam Paszke, Sam Gross, Francisco Massa, Adam              ceedings of the 2023 Conference on Empirical Meth-
+  Lerer, James Bradbury, Gregory Chanan, Trevor            ods in Natural Language Processing, pages 13921–
+  Killeen, Zeming Lin, Natalia Gimelshein, Luca            13937, Singapore. Association for Computational
+  Antiga, Alban Desmaison, Andreas Köpf, Edward            Linguistics.
+  Yang, Zachary DeVito, Martin Raison, Alykhan Te-
+  jani, Sasank Chilamkurthy, Benoit Steiner, Lu Fang,    Qihao Zhu, Daya Guo, Zhihong Shao, Dejian Yang,
+  Junjie Bai, and Soumith Chintala. 2019. Pytorch: An      Peiyi Wang, Runxin Xu, Y Wu, Yukun Li, Huazuo
+  imperative style, high-performance deep learning li-     Gao, Shirong Ma, et al. 2024. Deepseek-coder-v2:
+  brary. In Advances in Neural Information Processing      Breaking the barrier of closed-source models in code
+  Systems 32: Annual Conference on Neural Informa-         intelligence. ArXiv preprint, abs/2406.11931.
+  tion Processing Systems 2019, NeurIPS 2019, De-
+  cember 8-14, 2019, Vancouver, BC, Canada, pages
+  8024–8035.                                             A        Training Corpus
+Saurabh Pujar, Luca Buratti, Xiaojie Guo, Nicolas        The training corpus for supervised fine-tuning com-
+  Dupuis, Burn Lewis, Sahil Suneja, Atin Sood,           prises two distinct components: real-world data
+  Ganesh Nalawade, Matt Jones, Alessandro Morari,        sourced from GitHub and synthetically generated
+  et al. 2023. Automated code generation for informa-
+  tion technology tasks in yaml through large language   data produced through compiler operations.
+  models. In 2023 60th ACM/IEEE Design Automation           The real-world data component incorporates Tri-
+  Conference (DAC), pages 1–4. IEEE.                     ton code extracted from GitHub repositories, which
+                                                         undergoes basic cleaning procedures as outlined
+Ruizhong Qiu, Weiliang Will Zeng, Hanghang
+  Tong, James Ezick, and Christopher Lott. 2024.
+                                                         in prompt D, undergoes a debugging process that
+  How efficient is llm-generated code? a rigor-          is less rigorous than the methodology applied to
+  ous & high-standard benchmark. ArXiv preprint,         T RITON B ENCH -G. To prevent potential data leak-
+  abs/2406.06647.                                        age and ensure benchmark integrity, we system-
+                                                         atically eliminate samples exhibiting high similar-
+Shuo Ren, Daya Guo, Shuai Lu, Long Zhou, Shujie Liu,
+  Duyu Tang, Neel Sundaresan, Ming Zhou, Ambrosio        ity to T RITON B ENCH -G entries using the C ODE -
+  Blanco, and Shuai Ma. 2020. Codebleu: a method         B ERT S CORE similarity metric (Zhou et al., 2023).
+  for automatic evaluation of code synthesis. ArXiv         The synthetic data component is generated us-
+  preprint, abs/2009.10297.                              ing Ninetoothed4 , a domain-specific language built
+                                                         upon Triton that offers enhanced abstraction capa-
+Stephen Robertson, Hugo Zaragoza, et al. 2009. The
+   probabilistic relevance framework: Bm25 and be-       bilities. This framework facilitates the automated
+  yond. Foundations and Trends® in Information Re-       synthesis of valid Triton code through the process-
+   trieval, 3(4):333–389.                                ing of well-formed expressions. Each part of data
+                                                         containing 4K samples. This combined corpus
+Alexander G Shypula, Aman Madaan, Yimeng
+  Zeng, Uri Alon, Jacob R Gardner, Yiming Yang,
+                                                         serves as the foundational training dataset for ex-
+  Milad Hashemi, Graham Neubig, Parthasarathy            perimental models in one-shot learning settings.
+  Ranganathan, Osbert Bastani, et al. Learning           For all experiments, the fine-tuning process is car-
+  performance-improving code edits. In The Twelfth       ried out over 3 epochs with a learning rate of 5e−5.
+  International Conference on Learning Representa-
+                                                             4
+  tions.                                                         https://github.com/InfiniTensor/ninetoothed
+                           Input Tensors
+                                                                      the performance report as the final measure of the
+                                                                      operator’s quality.
+                                                                         By following the evaluation workflow described
+                      Bytes       GB/s         Performance
+                                                                      above, we generate a detailed performance report
+                                                  Report              for each operator in T RITON B ENCH -G. Figure 7
+         OP           Flops       Tflops
+                                                                      illustrates the performance curves of several com-
+                                                                      mon operators. As the input dimensions increase,
+                                                                      as can be seen from the figure, the GB/s or Tflops
+        GPU        Runtime       GPU %                                of the operators show an upward trend, eventually
+                                                                      stabilizing. This suggests that the performance of
+Figure 6: The workflow of operator performance evalu-                 the operator reaches a bottleneck beyond a certain
+ation                                                                 scale, and further increases in input size result in
+                                                                      diminishing returns in performance, aligning with
+                                                                      the expected trend of operator performance.
+B        Operator Performance Evaluation
+                                                                      C     Error Categories
+For operator performance evaluation, we refer pri-
+marily to the official examples provided by Triton5 .                 We provide the error type statistics of failure op-
+We provide evaluation scripts for each operator in                    erators in T RITON B ENCH. A total of 16 error
+T RITON B ENCH -G. Figure 6 illustrates the work-                     types are identified in the integrated Call and Ex-
+flow of our operator performance evaluation.                          ecution error results. For convenience in presen-
+   First, we define a set of tensors with increasing                  tation, we categorize them into four main groups:
+dimensions based on the characteristics of the op-                    Syntax Errors: including SyntaxError and Inden-
+erator. Next, each tensor is sequentially fed into                    tationError; Attrb&Type Errors: including At-
+the operator for execution. During each execu-                        tributeError, TypeError, and NotImplementedError;
+tion, we use the expert annotations for each op-                      Name&Ref Errors: including NameError, KeyEr-
+erator to determine the total memory bandwidth                        ror, IndexError, ModuleNotFoundError, and Im-
+(Bytes) and the total number of floating-point oper-                  portError; Run&Logc Errors: including ValueEr-
+ations (Flops) based on the input tensors. More im-                   ror, ZeroDivisionError, RuntimeError, Recursion-
+portantly, we use the triton.testing.do_bench                         Error, AssertionError, CompilationError, and Re-
+method from the official Triton library6 to measure                   sultsError. ResultsError refers to the inconsistency
+the operator’s execution time on the GPU. Specifi-                    between the execution results of the reference op-
+cally, we gradually increase the warm-up time and                     erator and the generated operator.
+repetition time until the measured execution time
+stabilized, which means that most operators are                       D     Prompts
+run hundreds of thousands of times to ensure that                     Here are the four prompts we use in our work:
+the running time is measured accurately. After                        Filtering Prompt, Instruction Prompt, Difficulty
+obtaining the execution time, we calculate the op-                    Prompt, and Test Code Prompt. Specifically, the
+erator’s performance metrics by dividing the total                    first is used to extract Triton-related code from
+memory bandwidth and the total floating-point op-                     crawled code files; the second instructs the large
+erations by the execution time to obtain throughput                   model to generate corresponding instructions based
+in GB/s and Tflops, respectively. We then calculate                   on Triton code; the third prompts the large model
+the GPU efficiency by calculating the ratio of the                    to score the difficulty of Triton operators according
+measured performance metrics (GB/s and Tflops)                        to the standards we proposed; and the last asks the
+to the theoretical maximum performance of the                         large model to generate test code.
+NVIDIA A100 Tensor Core GPU. Repetition of
+the above process for tensors of increasing sizes
+obtains the performance metrics for each execution,
+which collectively form the operator performance
+report. We adopt the peak GPU efficiency from
+    5
+        https://triton-lang.org/main/getting-started/tutorials/
+    6
+        https://triton-lang.org/main/pythonapi/generated/triton.testing.do_bench.html
+                              add                                                                                  bmm                                                                 copy                                                            cross_entropy
+                                                                                                                                                                 1750                                                1600
+       1750
+                                                                                                                                                                                                                     1400
+                                                                                                                                                                 1500
+       1500                                                                     200
+                                                                                                                                                                                                                     1200
+                                                                                                                                                                 1250
+       1250
+                                                                                150                                                                                                                                  1000
+                                                                                                                                                                 1000
+       1000
+                                                                       TFLOPS
+
+
+
+
+                                                                                                                                                                                                                        800
+GB/s
+
+
+
+
+                                                                                                                                                          GB/s
+
+
+
+
+                                                                                                                                                                                                              GB/s
+                                                                                100                                                                              750
+       750
+                                                                                                                                                                                                                        600
+
+       500                                                                                                                                                       500
+                                                                                                                                                                                                                        400
+                                                                                50
+       250                                                                                                                                                       250                                                    200
+
+
+         0                                                                       0                                                                                 0                                                     0
+              104     105       106               107           108                             200          400         600           800         1000                 101   102         103    104    105                         101         102         103       104         105
+                              size                                                                                   N                                                                 length                                                               n_rows
+                            dropout                                                                                kldiv                                                             layernorm                                                              matmul
+       1750                                                                  1750                                                                                1000
+
+                                                                                                                                                                                                                        200
+       1500                                                                  1500
+                                                                                                                                                                 800
+
+       1250                                                                  1250
+                                                                                                                                                                                                                        150
+                                                                                                                                                                 600
+       1000                                                                  1000
+
+                                                                                                                                                                                                               TFLOPS
+GB/s
+
+
+
+
+                                                                      GB/s
+
+
+
+
+                                                                                                                                                          GB/s
+
+
+
+
+       750                                                                      750                                                                                                                                     100
+                                                                                                                                                                 400
+
+       500                                                                      500
+                                                                                                                                                                 200                                                    50
+       250                                                                      250
+
+
+         0                                                                       0                                                                                 0                                                     0
+              104   105      106            107         108                               104          105         106           107         108                        101   102        103     104    105                         500 1000 1500 2000 2500 3000 3500 4000
+                              size                                                                                  size                                                                 N                                                           M
+                            rms_norm                                                                         rope_embedding                                                          softmax                                                                swiglu
+       1600                                                                                                                                                                                                          1750
+                                                                                650
+                                                                                                                                                                 1600
+       1400
+                                                                                                                                                                                                                     1500
+
+       1200                                                                     600                                                                              1400
+                                                                                                                                                                                                                     1250
+       1000
+                                                                                550                                                                                                                                  1000
+                                                                                                                                                                 1200
+GB/s
+
+
+
+
+                                                                       GB/s
+
+
+
+
+                                                                                                                                                          GB/s
+
+
+
+
+                                                                                                                                                                                                              GB/s
+
+
+
+
+       800
+                                                                                                                                                                                                                        750
+       600
+                                                                                500                                                                              1000
+                                                                                                                                                                                                                        500
+       400
+
+                                                                                                                                                                 800                                                    250
+       200                                                                      450
+
+
+         0                                                                                                                                                                                                               0
+                    102               103                     104                     0          100         200           300         400         500                         103                     104                    101         102         103       104         105         106
+                              size                                                                                   B                                                                   N                                                                   size
+
+
+
+                                                                             Figure 7: Performance Curves of Common Operators
+Filtering Prompt
+{code}
+Please help me select all triton kernel functions decorated with @triton.jit and all code that calls these kernels, while
+only keeping the necessary imports (e.g., triton, torch) and the calling functions.
+
+Note 1: Retain necessary comments related to the Triton code. Code can be optimized, but do not remove all kernel
+code and its corresponding calls just for brevity.
+
+Note 2: If the triton kernel is decorated with a custom or third-party decorator other than triton, discard that kernel.
+
+Note 3: If @triton.jit appears as a string in the code or is nested within a function body, then discard it.
+
+Note 4: If there are multiple triton kernel functions decorated with @triton.jit and their calling wrapper functions,
+retain all of them, not just a subset.
+   1) Extract all triton operators (kernel functions decorated with @triton.jit and their calling functions) and output
+them in python code format. If no triton kernel function is found, discard it.
+   2) Provide a concise English description of each extracted operator (including both kernel and calling code) in the
+form of a python dictionary: "description": "Use triton language to..."
+
+
+Instruction Prompt
+{code}
+Based on the above Triton operator code, generate a detailed description so that the large model can accurately reproduce
+the corresponding kernel and wrapper function.
+Be clear about the logic and main functionality of the operator, specify the function name, inputs, and outputs, and
+describe any public variables clearly.
+Try to describe the function’s code implementation. Ensure that the large model can reproduce the corresponding
+function and parameter code based on these instructions.
+Note that the output should maintain correct python syntax.
+
+
+
+Test Code Prompt
+{code}
+Write a test code in Python for the above code. Ensure that all branch tests are in a single function starting with
+“test_”, with no parameters.
+
+Note 1: Particular attention should be paid to the fact that tensor parameters are of GPU type.
+
+Note 2: Try to limit the number of branches to no more than 4.
+
+Note 3: In branch tests, avoid modifying parameters that are later in the argument list with default values (especially if
+they have out parameters, do not assign them).
+
+Note 4: Store the results of all branch calculations in a dictionary, where the dictionary key is "test_case_n", with n
+representing the test case number.
+
+Note 5: Ensure that the import paths match exactly as described in the operator documentation to maintain accuracy.
+
+Note 6: The code should run directly, without if __name__ == "__main__".
+
+
+
+Difficulty Prompt
+{code}
+Please evaluate the complexity of the code in the following two aspects based on the requirements of the Triton operator
+and score it from simple to complex on a scale from 1 to 5:
+1) Memory layout complexity: Analyze the memory access pattern, including memory tiling, array transposition, address
+alignment, cache utilization, and the number of global memory accesses.
+2) Computation scheduling complexity: Examine instruction-level parallelism, computation-memory pipeline, thread
+block design, inter-thread communication, thread branch divergence, and hardware resource utilization.
+The final score is the ceiling of the average score from both aspects, and only one complexity score is output in [ ].
+
