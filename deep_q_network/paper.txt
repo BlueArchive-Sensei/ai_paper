@@ -1,0 +1,675 @@
+LETTER                                                                                                                                    doi:10.1038/nature14236
+
+
+
+
+Human-level control through deep reinforcement
+learning
+Volodymyr Mnih1*, Koray Kavukcuoglu1*, David Silver1*, Andrei A. Rusu1, Joel Veness1, Marc G. Bellemare1, Alex Graves1,
+Martin Riedmiller1, Andreas K. Fidjeland1, Georg Ostrovski1, Stig Petersen1, Charles Beattie1, Amir Sadik1, Ioannis Antonoglou1,
+Helen King1, Dharshan Kumaran1, Daan Wierstra1, Shane Legg1 & Demis Hassabis1
+
+
+The theory of reinforcement learning provides a normative account1,                   agent is to select actions in a fashion that maximizes cumulative future
+deeply rooted in psychological2 and neuroscientific3 perspectives on                  reward. More formally, we use a deep convolutional neural network to
+animal behaviour, of how agents may optimize their control of an                      approximate the optimal action-value function
+environment. To use reinforcement learning successfully in situations                                                                                  
+                                                                                          Q ðs,aÞ~ max rt zcrtz1 zc2 rtz2 z . . . jst ~s, at ~a, p ,
+approaching real-world complexity, however, agents are confronted                                         p
+with a difficult task: they must derive efficient representations of the              which is the maximum sum of rewards rt discounted by c at each time-
+environment from high-dimensional sensory inputs, and use these                       step t, achievable by a behaviour policy p 5 P(ajs), after making an
+to generalize past experience to new situations. Remarkably, humans                   observation (s) and taking an action (a) (see Methods)19.
+and other animals seem to solve this problem through a harmonious                        Reinforcement learning is known to be unstable or even to diverge
+combination of reinforcement learning and hierarchical sensory pro-                   when a nonlinear function approximator such as a neural network is
+cessing systems4,5, the former evidenced by a wealth of neural data                   used to represent the action-value (also known as Q) function20. This
+revealing notable parallels between the phasic signals emitted by dopa-               instability has several causes: the correlations present in the sequence
+minergic neurons and temporal difference reinforcement learning                       of observations, the fact that small updates to Q may significantly change
+algorithms3. While reinforcement learning agents have achieved some                   the policy and therefore change the data distribution, and the correlations
+successes in a variety of domains6–8, their applicability has previously              between the action-values (Q) and the target values rzc max      Qðs0 , a0 Þ.
+been limited to domains in which useful features can be handcrafted,                                                                                a0
+                                                                                      We address these instabilities with a novel variant of Q-learning, which
+or to domains with fully observed, low-dimensional state spaces.
+                                                                                      uses two key ideas. First, we used a biologically inspired mechanism
+Here we use recent advances in training deep neural networks9–11 to
+                                                                                      termed experience replay21–23 that randomizes over the data, thereby
+develop a novel artificial agent, termed a deep Q-network, that can
+                                                                                      removing correlations in the observation sequence and smoothing over
+learn successful policies directly from high-dimensional sensory inputs
+                                                                                      changes in the data distribution (see below for details). Second, we used
+using end-to-end reinforcement learning. We tested this agent on
+                                                                                      an iterative update that adjusts the action-values (Q) towards target
+the challenging domain of classic Atari 2600 games12. We demon-
+                                                                                      values that are only periodically updated, thereby reducing correlations
+strate that the deep Q-network agent, receiving only the pixels and                   with the target.
+the game score as inputs, was able to surpass the performance of all
+                                                                                         While other stable methods exist for training neural networks in the
+previous algorithms and achieve a level comparable to that of a pro-
+                                                                                      reinforcement learning setting, such as neural fitted Q-iteration24, these
+fessional human games tester across a set of 49 games, using the same
+                                                                                      methods involve the repeated training of networks de novo on hundreds
+algorithm, network architecture and hyperparameters. This work
+                                                                                      of iterations. Consequently, these methods, unlike our algorithm, are
+bridges the divide between high-dimensional sensory inputs and
+                                                                                      too inefficient to be used successfully with large neural networks. We
+actions, resulting in the first artificial agent that is capable of learn-
+                                                                                      parameterize an approximate value function Q(s,a;hi) using the deep
+ing to excel at a diverse array of challenging tasks.
+                                                                                      convolutional neural network shown in Fig. 1, in which hi are the param-
+   We set out to create a single algorithm that would be able to develop              eters (that is, weights) of the Q-network at iteration i. To perform
+a wide range of competencies on a varied range of challenging tasks—a                 experience replay we store the agent’s experiences et 5 (st,at,rt,st 1 1)
+central goal of general artificial intelligence13 that has eluded previous            at each time-step t in a data set Dt 5 {e1,…,et}. During learning, we
+efforts8,14,15. To achieve this, we developed a novel agent, a deep Q-network         apply Q-learning updates, on samples (or minibatches) of experience
+(DQN), which is able to combine reinforcement learning with a class                   (s,a,r,s9) , U(D), drawn uniformly at random from the pool of stored
+of artificial neural network16 known as deep neural networks. Notably,                samples. The Q-learning update at iteration i uses the following loss
+recent advances in deep neural networks9–11, in which several layers of               function:
+nodes are used to build up progressively more abstract representations                                            "                                      #   2
+of the data, have made it possible for artificial neural networks to learn
+concepts such as object categories directly from raw sensory data. We                    Li ðhi Þ~   ðs,a,r,s0 Þ*UðDÞ   rzc max
+                                                                                                                             0
+                                                                                                                                Q(s0 ,a0 ; h{
+                                                                                                                                            i ){Qðs,a; hi Þ
+                                                                                                                              a
+use one particularly successful architecture, the deep convolutional
+network17, which uses hierarchical layers of tiled convolutional filters              in which c is the discount factor determining the agent’s horizon, hi are
+to mimic the effects of receptive fields—inspired by Hubel and Wiesel’s               the parameters of the Q-network at iteration i and h{i are the network
+seminal work on feedforward processing in early visual cortex18—thereby               parameters used to compute the target at iteration i. The target net-
+exploiting the local spatial correlations present in images, and building             work parameters h{   i are only updated with the Q-network parameters
+in robustness to natural transformations such as changes of viewpoint                 (hi) every C steps and are held fixed between individual updates (see
+or scale.                                                                             Methods).
+   We consider tasks in which the agent interacts with an environment                    To evaluate our DQN agent, we took advantage of the Atari 2600
+through a sequence of observations, actions and rewards. The goal of the              platform, which offers a diverse array of tasks (n 5 49) designed to be
+1
+ Google DeepMind, 5 New Street Square, London EC4A 3TW, UK.
+*These authors contributed equally to this work.
+
+
+                                                                                                          2 6 F E B R U A RY 2 0 1 5 | VO L 5 1 8 | N AT U R E | 5 2 9
+                                                      ©2015 Macmillan Publishers Limited. All rights reserved
+ RESEARCH LETTER
+
+                                                            Convolution                         Convolution                                  Fully connected            Fully connected
+
+                                                                                                                                                                                    No input
+
+
+
+
+Figure 1 | Schematic illustration of the convolutional neural network. The                                       symbolizes sliding of each filter across input image) and two fully connected
+details of the architecture are explained in the Methods. The input to the neural                                layers with a single output for each valid action. Each hidden layer is followed
+network consists of an 84 3 84 3 4 image produced by the preprocessing                                           by a rectifier nonlinearity (that is, maxð0,xÞ).
+map w, followed by three convolutional layers (note: snaking blue line
+
+difficult and engaging for human players. We used the same network                                                  We compared DQN with the best performing methods from the
+architecture, hyperparameter values (see Extended Data Table 1) and                                              reinforcement learning literature on the 49 games where results were
+learning procedure throughout—taking high-dimensional data (210|160                                              available12,15. In addition to the learned agents, we also report scores for
+colour video at 60 Hz) as input—to demonstrate that our approach                                                 a professional human games tester playing under controlled conditions
+robustly learns successful policies over a variety of games based solely                                         and a policy that selects actions uniformly at random (Extended Data
+on sensory inputs with only very minimal prior knowledge (that is, merely                                        Table 2 and Fig. 3, denoted by 100% (human) and 0% (random) on y
+the input data were visual images, and the number of actions available                                           axis; see Methods). Our DQN method outperforms the best existing
+in each game, but not their correspondences; see Methods). Notably,                                              reinforcement learning methods on 43 of the games without incorpo-
+our method was able to train large neural networks using a reinforce-                                            rating any of the additional prior knowledge about Atari 2600 games
+ment learning signal and stochastic gradient descent in a stable manner—                                         used by other approaches (for example, refs 12, 15). Furthermore, our
+illustrated by the temporal evolution of two indices of learning (the                                            DQN agent performed at a level that was comparable to that of a pro-
+agent’s average score-per-episode and average predicted Q-values; see                                            fessional human games tester across the set of 49 games, achieving more
+Fig. 2 and Supplementary Discussion for details).                                                                than 75% of the human score on more than half of the games (29 games;
+                               a                            2,200                                                b                           6,000
+                                                            2,000
+                                Average score per episode
+
+
+
+
+                                                                                                                 Average score per episode
+
+
+
+
+                                                            1,800                                                                            5,000
+                                                            1,600
+                                                                                                                                             4,000
+                                                            1,400
+                                                            1,200
+                                                                                                                                             3,000
+                                                            1,000
+                                                              800                                                                            2,000
+                                                              600
+                                                              400                                                                            1,000
+                                                              200
+                                                                0                                                                               0
+                                                                      0    20 40 60 80 100 120 140 160 180 200                                       0   20 40 60 80 100 120 140 160 180 200
+                                                                                    Training epochs                                                               Training epochs
+
+                               c                             10                                                  d                             11
+                                                              9                                                                                10
+                                Average action value (Q)
+
+
+
+
+                                                                                                                  Average action value (Q)
+
+
+
+
+                                                              8                                                                                 9
+                                                              7                                                                                 8
+                                                                                                                                                7
+                                                              6
+                                                                                                                                                6
+                                                              5
+                                                                                                                                                5
+                                                              4
+                                                                                                                                                4
+                                                              3                                                                                 3
+                                                              2                                                                                 2
+                                                              1                                                                                 1
+                                                              0                                                                                 0
+                                                                  0       20 40 60 80 100 120 140 160 180 200                                       0    20 40 60 80 100 120 140 160 180 200
+                                                                                   Training epochs                                                                Training epochs
+
+Figure 2 | Training curves tracking the agent’s average score and average                                        on the curve is the average of the action-value Q computed over the held-out
+predicted action-value. a, Each point is the average score achieved per episode                                  set of states. Note that Q-values are scaled due to clipping of rewards (see
+after the agent is run with e-greedy policy (e 5 0.05) for 520 k frames on Space                                 Methods). d, Average predicted action-value on Seaquest. See Supplementary
+Invaders. b, Average score achieved per episode for Seaquest. c, Average                                         Discussion for details.
+predicted action-value on a held-out set of states on Space Invaders. Each point
+
+5 3 0 | N AT U R E | VO L 5 1 8 | 2 6 F E B R U A RY 2 0 1 5
+                                                                                  ©2015 Macmillan Publishers Limited. All rights reserved
+                                                                                                                                         LETTER RESEARCH
+
+                               Video Pinball
+                                      Boxing
+                                    Breakout
+                                Star Gunner
+                                   Robotank
+                                      Atlantis
+                              Crazy Climber
+                                      Gopher
+                              Demon Attack
+                           Name This Game
+                                         Krull
+                                      Assault
+                               Road Runner
+                                   Kangaroo
+                               James Bond
+                                       Tennis
+                                        Pong
+                             Space Invaders
+                                Beam Rider
+                                 Tutankham
+                            Kung-Fu Master
+                                     Freeway
+                                   Time Pilot
+                                      Enduro
+                              Fishing Derby
+                              Up and Down
+                                 Ice Hockey
+                                       Q*bert
+                                    H.E.R.O.                                                               At human-level or above
+                                       Asterix                                                                     Below human-level
+                                Battle Zone
+                              Wizard of Wor
+                         Chopper Command
+                                  Centipede
+                                 Bank Heist
+                                  River Raid
+                                      Zaxxon
+                                      Amidar
+                                         Alien
+                                      Venture
+                                   Seaquest
+                               Double Dunk
+                                     Bowling
+                               Ms. Pac-Man
+                                   Asteroids
+                                    Frostbite
+                                     Gravitar                                                                            DQN
+                                 Private Eye
+                       Montezuma's Revenge                                                                         Best linear learner
+
+
+                                                 0     100      200      300     400      500      600     1,000                     4,500%
+
+Figure 3 | Comparison of the DQN agent with the best reinforcement               outperforms competing methods (also see Extended Data Table 2) in almost all
+learning methods15 in the literature. The performance of DQN is normalized       the games, and performs at a level that is broadly comparable with or superior
+with respect to a professional human games tester (that is, 100% level) and      to a professional human games tester (that is, operationalized as a level of
+random play (that is, 0% level). Note that the normalized performance of DQN,    75% or above) in the majority of games. Audio output was disabled for both
+expressed as a percentage, is calculated as: 100 3 (DQN score 2 random play      human players and agents. Error bars indicate s.d. across the 30 evaluation
+score)/(human score 2 random play score). It can be seen that DQN                episodes, starting with different initial conditions.
+
+
+see Fig. 3, Supplementary Discussion and Extended Data Table 2). In              perceptually dissimilar (Fig. 4, bottom right, top left and middle), con-
+additional simulations (see Supplementary Discussion and Extended                sistent with the notion that the network is able to learn representations
+Data Tables 3 and 4), we demonstrate the importance of the individual            that support adaptive behaviour from high-dimensional sensory inputs.
+core components of the DQN agent—the replay memory, separate target              Furthermore, we also show that the representations learned by DQN
+Q-network and deep convolutional network architecture—by disabling               are able to generalize to data generated from policies other than its
+them and demonstrating the detrimental effects on performance.                   own—in simulations where we presented as input to the network game
+   We next examined the representations learned by DQN that under-               states experienced during human and agent play, recorded the repre-
+pinned the successful performance of the agent in the context of the game        sentations of the last hidden layer, and visualized the embeddings gen-
+Space Invaders (see Supplementary Video 1 for a demonstration of the             erated by the t-SNE algorithm (Extended Data Fig. 1 and Supplementary
+performance of DQN), by using a technique developed for the visual-              Discussion). Extended Data Fig. 2 provides an additional illustration of
+ization of high-dimensional data called ‘t-SNE’25 (Fig. 4). As expected,         how the representations learned by DQN allow it to accurately predict
+the t-SNE algorithm tends to map the DQN representation of percep-               state and action values.
+tually similar states to nearby points. Interestingly, we also found instances      It is worth noting that the games in which DQN excels are extremely
+in which the t-SNE algorithm generated similar embeddings for DQN                varied in their nature, from side-scrolling shooters (River Raid) to box-
+representations of states that are close in terms of expected reward but         ing games (Boxing) and three-dimensional car-racing games (Enduro).
+                                                                                                    2 6 F E B R U A RY 2 0 1 5 | VO L 5 1 8 | N AT U R E | 5 3 1
+                                                 ©2015 Macmillan Publishers Limited. All rights reserved
+ RESEARCH LETTER
+
+                          V
+
+
+
+
+Figure 4 | Two-dimensional t-SNE embedding of the representations in the           predicts high state values for both full (top right screenshots) and nearly
+last hidden layer assigned by DQN to game states experienced while playing         complete screens (bottom left screenshots) because it has learned that
+Space Invaders. The plot was generated by letting the DQN agent play for           completing a screen leads to a new screen full of enemy ships. Partially
+2 h of real game time and running the t-SNE algorithm25 on the last hidden layer   completed screens (bottom screenshots) are assigned lower state values because
+representations assigned by DQN to each experienced game state. The                less immediate reward is available. The screens shown on the bottom right
+points are coloured according to the state values (V, maximum expected reward      and top left and middle are less perceptually similar than the other examples but
+of a state) predicted by DQN for the corresponding game states (ranging            are still mapped to nearby representations and similar values because the
+from dark red (highest V) to dark blue (lowest V)). The screenshots                orange bunkers do not carry great significance near the end of a level. With
+corresponding to a selected number of points are shown. The DQN agent              permission from Square Enix Limited.
+
+
+Indeed, in certain games DQN is able to discover a relatively long-term            realization of such a process in the mammalian brain, with the time-
+strategy (for example, Breakout: the agent learns the optimal strategy,            compressed reactivation of recently experienced trajectories during
+which is to first dig a tunnel around the side of the wall allowing the ball       offline periods21,22 (for example, waking rest) providing a putative mech-
+to be sent around the back to destroy a large number of blocks; see Sup-           anism by which value functions may be efficiently updated through
+plementary Video 2 for illustration of development of DQN’s perfor-                interactions with the basal ganglia22. In the future, it will be important
+mance over the course of training). Nevertheless, games demanding more             to explore the potential use of biasing the content of experience replay
+temporally extended planning strategies still constitute a major chal-             towards salient events, a phenomenon that characterizes empirically
+lenge for all existing agents including DQN (for example, Montezuma’s              observed hippocampal replay29, and relates to the notion of ‘prioritized
+Revenge).                                                                          sweeping’30 in reinforcement learning. Taken together, our work illus-
+   In this work, we demonstrate that a single architecture can success-            trates the power of harnessing state-of-the-art machine learning tech-
+fully learn control policies in a range of different environments with only        niques with biologically inspired mechanisms to create agents that are
+very minimal prior knowledge, receiving only the pixels and the game               capable of learning to master a diverse array of challenging tasks.
+score as inputs, and using the same algorithm, network architecture and            Online Content Methods, along with any additional Extended Data display items
+hyperparameters on each game, privy only to the inputs a human player              and Source Data, are available in the online version of the paper; references unique
+would have. In contrast to previous work24,26, our approach incorpo-               to these sections appear only in the online paper.
+rates ‘end-to-end’ reinforcement learning that uses reward to continu-
+                                                                                   Received 10 July 2014; accepted 16 January 2015.
+ously shape representations within the convolutional network towards
+salient features of the environment that facilitate value estimation. This         1.   Sutton, R. & Barto, A. Reinforcement Learning: An Introduction (MIT Press, 1998).
+principle draws on neurobiological evidence that reward signals during             2.   Thorndike, E. L. Animal Intelligence: Experimental studies (Macmillan, 1911).
+perceptual learning may influence the characteristics of representations           3.   Schultz, W., Dayan, P. & Montague, P. R. A neural substrate of prediction and
+                                                                                        reward. Science 275, 1593–1599 (1997).
+within primate visual cortex27,28. Notably, the successful integration of          4.   Serre, T., Wolf, L. & Poggio, T. Object recognition with features inspired by visual
+reinforcement learning with deep network architectures was critically                   cortex. Proc. IEEE. Comput. Soc. Conf. Comput. Vis. Pattern. Recognit. 994–1000
+dependent on our incorporation of a replay algorithm21–23 involving the                 (2005).
+                                                                                   5.   Fukushima, K. Neocognitron: A self-organizing neural network model for a
+storage and representation of recently experienced transitions. Conver-                 mechanism of pattern recognition unaffected by shift in position. Biol. Cybern. 36,
+gent evidence suggests that the hippocampus may support the physical                    193–202 (1980).
+
+5 3 2 | N AT U R E | VO L 5 1 8 | 2 6 F E B R U A RY 2 0 1 5
+                                                  ©2015 Macmillan Publishers Limited. All rights reserved
+                                                                                                                                                                 LETTER RESEARCH
+
+6.    Tesauro, G. Temporal difference learning and TD-Gammon. Commun. ACM 38,                      23. Lin, L.-J. Reinforcement learning for robots using neural networks. Technical
+      58–68 (1995).                                                                                    Report, DTIC Document (1993).
+7.    Riedmiller, M., Gabel, T., Hafner, R. & Lange, S. Reinforcement learning for robot           24. Riedmiller, M. Neural fitted Q iteration - first experiences with a data efficient
+      soccer. Auton. Robots 27, 55–73 (2009).                                                          neural reinforcement learning method. Mach. Learn.: ECML, 3720, 317–328
+8.    Diuk, C., Cohen, A. & Littman, M. L. An object-oriented representation for efficient             (Springer, 2005).
+      reinforcement learning. Proc. Int. Conf. Mach. Learn. 240–247 (2008).                        25. Van der Maaten, L. J. P. & Hinton, G. E. Visualizing high-dimensional data using
+9.    Bengio, Y. Learning deep architectures for AI. Foundations and Trends in Machine                 t-SNE. J. Mach. Learn. Res. 9, 2579–2605 (2008).
+      Learning 2, 1–127 (2009).                                                                    26. Lange, S. & Riedmiller, M. Deep auto-encoder neural networks in reinforcement
+10.   Krizhevsky, A., Sutskever, I. & Hinton, G. ImageNet classification with deep                     learning. Proc. Int. Jt. Conf. Neural. Netw. 1–8 (2010).
+      convolutional neural networks. Adv. Neural Inf. Process. Syst. 25, 1106–1114 (2012).         27. Law, C.-T. & Gold, J. I. Reinforcement learning can account for associative
+11.   Hinton, G. E. & Salakhutdinov, R. R. Reducing the dimensionality of data with                    and perceptual learning on a visual decision task. Nature Neurosci. 12, 655
+      neural networks. Science 313, 504–507 (2006).                                                    (2009).
+12.   Bellemare, M. G., Naddaf, Y., Veness, J. & Bowling, M. The arcade learning                   28. Sigala, N. & Logothetis, N. K. Visual categorization shapes feature selectivity in the
+      environment: An evaluation platform for general agents. J. Artif. Intell. Res. 47,               primate temporal cortex. Nature 415, 318–320 (2002).
+      253–279 (2013).                                                                              29. Bendor, D. & Wilson, M. A. Biasing the content of hippocampal replay during sleep.
+13.   Legg, S. & Hutter, M. Universal Intelligence: a definition of machine intelligence.              Nature Neurosci. 15, 1439–1444 (2012).
+      Minds Mach. 17, 391–444 (2007).                                                              30. Moore, A. & Atkeson, C. Prioritized sweeping: reinforcement learning with less data
+14.   Genesereth, M., Love, N. & Pell, B. General game playing: overview of the AAAI                   and less real time. Mach. Learn. 13, 103–130 (1993).
+      competition. AI Mag. 26, 62–72 (2005).
+15.   Bellemare, M. G., Veness, J. & Bowling, M. Investigating contingency awareness               Supplementary Information is available in the online version of the paper.
+      using Atari 2600 games. Proc. Conf. AAAI. Artif. Intell. 864–871 (2012).
+16.   McClelland, J. L., Rumelhart, D. E. & Group, T. P. R. Parallel Distributed Processing:       Acknowledgements We thank G. Hinton, P. Dayan and M. Bowling for discussions,
+      Explorations in the Microstructure of Cognition (MIT Press, 1986).                           A. Cain and J. Keene for work on the visuals, K. Keller and P. Rogers for help with the
+17.   LeCun, Y., Bottou, L., Bengio, Y. & Haffner, P. Gradient-based learning applied to           visuals, G. Wayne for comments on an earlier version of the manuscript, and the rest of
+      document recognition. Proc. IEEE 86, 2278–2324 (1998).                                       the DeepMind team for their support, ideas and encouragement.
+18.   Hubel, D. H. & Wiesel, T. N. Shape and arrangement of columns in cat’s striate               Author Contributions V.M., K.K., D.S., J.V., M.G.B., M.R., A.G., D.W., S.L. and D.H.
+      cortex. J. Physiol. 165, 559–568 (1963).                                                     conceptualized the problem and the technical framework. V.M., K.K., A.A.R. and D.S.
+19.   Watkins, C. J. & Dayan, P. Q-learning. Mach. Learn. 8, 279–292 (1992).                       developed and tested the algorithms. J.V., S.P., C.B., A.A.R., M.G.B., I.A., A.K.F., G.O. and
+20.   Tsitsiklis, J. & Roy, B. V. An analysis of temporal-difference learning with function        A.S. created the testing platform. K.K., H.K., S.L. and D.H. managed the project. K.K., D.K.,
+      approximation. IEEE Trans. Automat. Contr. 42, 674–690 (1997).                               D.H., V.M., D.S., A.G., A.A.R., J.V. and M.G.B. wrote the paper.
+21.   McClelland, J. L., McNaughton, B. L. & O’Reilly, R. C. Why there are complementary
+      learning systems in the hippocampus and neocortex: insights from the successes               Author Information Reprints and permissions information is available at
+      and failures of connectionist models of learning and memory. Psychol. Rev. 102,              www.nature.com/reprints. The authors declare no competing financial interests.
+      419–457 (1995).                                                                              Readers are welcome to comment on the online version of the paper. Correspondence
+22.   O’Neill, J., Pleydell-Bouverie, B., Dupret, D. & Csicsvari, J. Play it again: reactivation   and requests for materials should be addressed to K.K. (korayk@google.com) or
+      of waking experience and memory. Trends Neurosci. 33, 220–229 (2010).                        D.H. (demishassabis@google.com).
+
+
+
+
+                                                                                                                         2 6 F E B R U A RY 2 0 1 5 | VO L 5 1 8 | N AT U R E | 5 3 3
+                                                           ©2015 Macmillan Publishers Limited. All rights reserved
+ RESEARCH LETTER
+
+METHODS                                                                                      Our experimental setup amounts to using the following minimal prior know-
+                                                                                          ledge: that the input data consisted of visual images (motivating our use of a con-
+Preprocessing. Working directly with raw Atari 2600 frames, which are 210 3 160
+                                                                                          volutional deep network), the game-specific score (with no modification), number
+pixel images with a 128-colour palette, can be demanding in terms of computation
+                                                                                          of actions, although not their correspondences (for example, specification of the
+and memory requirements. We apply a basic preprocessing step aimed at reducing
+                                                                                          up ‘button’) and the life count.
+the input dimensionality and dealing with some artefacts of the Atari 2600 emu-
+                                                                                          Evaluation procedure. The trained agents were evaluated by playing each game
+lator. First, to encode a single frame we take the maximum value for each pixel colour
+                                                                                          30 times for up to 5 min each time with different initial random conditions (‘no-
+value over the frame being encoded and the previous frame. This was necessary to
+                                                                                          op’; see Extended Data Table 1) and an e-greedy policy with e 5 0.05. This pro-
+remove flickering that is present in games where some objects appear only in even
+                                                                                          cedure is adopted to minimize the possibility of overfitting during evaluation. The
+frames while other objects appear only in odd frames, an artefact caused by the
+                                                                                          random agent served as a baseline comparison and chose a random action at 10 Hz
+limited number of sprites Atari 2600 can display at once. Second, we then extract
+                                                                                          which is every sixth frame, repeating its last action on intervening frames. 10 Hz is
+the Y channel, also known as luminance, from the RGB frame and rescale it to
+                                                                                          about the fastest that a human player can select the ‘fire’ button, and setting the
+84 3 84. The function w from algorithm 1 described below applies this preprocess-
+                                                                                          random agent to this frequency avoids spurious baseline scores in a handful of the
+ing to the m most recent frames and stacks them to produce the input to the
+                                                                                          games. We did also assess the performance of a random agent that selected an action
+Q-function, in which m 5 4, although the algorithm is robust to different values of
+                                                                                          at 60 Hz (that is, every frame). This had a minimal effect: changing the normalized
+m (for example, 3 or 5).
+                                                                                          DQN performance by more than 5% in only six games (Boxing, Breakout, Crazy
+Code availability. The source code can be accessed at https://sites.google.com/a/
+                                                                                          Climber, Demon Attack, Krull and Robotank), and in all these games DQN out-
+deepmind.com/dqn for non-commercial uses only.
+                                                                                          performed the expert human by a considerable margin.
+Model architecture. There are several possible ways of parameterizing Q using a
+                                                                                             The professional human tester used the same emulator engine as the agents, and
+neural network. Because Q maps history–action pairs to scalar estimates of their
+                                                                                          played under controlled conditions. The human tester was not allowed to pause,
+Q-value, the history and the action have been used as inputs to the neural network
+                                                                                          save or reload games. As in the original Atari 2600 environment, the emulator was
+by some previous approaches24,26. The main drawback of this type of architecture
+                                                                                          run at 60 Hz and the audio output was disabled: as such, the sensory input was
+is that a separate forward pass is required to compute the Q-value of each action,
+                                                                                          equated between human player and agents. The human performance is the average
+resulting in a cost that scales linearly with the number of actions. We instead use an
+                                                                                          reward achieved from around 20 episodes of each game lasting a maximum of 5 min
+architecture in which there is a separate output unit for each possible action, and
+                                                                                          each, following around 2 h of practice playing each game.
+only the state representation is an input to the neural network. The outputs cor-
+                                                                                          Algorithm. We consider tasks in which an agent interacts with an environment,
+respond to the predicted Q-values of the individual actions for the input state. The
+                                                                                          in this case the Atari emulator, in a sequence of actions, observations and rewards.
+main advantage of this type of architecture is the ability to compute Q-values for all
+                                                                                          At each time-step the agent selects an action at from the set of legal game actions,
+possible actions in a given state with only a single forward pass through the network.
+                                                                                          A~f1, . . . ,K g. The action is passed to the emulator and modifies its internal state
+   The exact architecture, shown schematically in Fig. 1, is as follows. The input to
+                                                                                          and the game score. In general the environment may be stochastic. The emulator’s
+the neural network consists of an 84 3 84 3 4 image produced by the preprocess-
+                                                                                          internal state is not observed by the agent; instead the agent observes an image
+ing map w. The first hidden layer convolves 32 filters of 8 3 8 with stride 4 with the
+                                                                                          xt [Rd from the emulator, which is a vector of pixel values representing the current
+input image and applies a rectifier nonlinearity31,32. The second hidden layer con-
+                                                                                          screen. In addition it receives a reward rt representing the change in game score.
+volves 64 filters of 4 3 4 with stride 2, again followed by a rectifier nonlinearity.
+                                                                                          Note that in general the game score may depend on the whole previous sequence of
+This is followed by a third convolutional layer that convolves 64 filters of 3 3 3 with
+                                                                                          actions and observations; feedback about an action may only be received after many
+stride 1 followed by a rectifier. The final hidden layer is fully-connected and con-
+                                                                                          thousands of time-steps have elapsed.
+sists of 512 rectifier units. The output layer is a fully-connected linear layer with a
+                                                                                             Because the agent only observes the current screen, the task is partially observed33
+single output for each valid action. The number of valid actions varied between 4
+                                                                                          and many emulator states are perceptually aliased (that is, it is impossible to fully
+and 18 on the games we considered.
+                                                                                          understand the current situation from only the current screen xt ). Therefore,
+Training details. We performed experiments on 49 Atari 2600 games where results
+                                                                                          sequences of actions and observations, st ~x1 ,a1 ,x2 ,:::,at{1 ,xt , are input to the
+were available for all other comparable methods12,15. A different network was trained
+                                                                                          algorithm, which then learns game strategies depending upon these sequences. All
+on each game: the same network architecture, learning algorithm and hyperpara-
+                                                                                          sequences in the emulator are assumed to terminate in a finite number of time-
+meter settings (see Extended Data Table 1) were used across all games, showing that       steps. This formalism gives rise to a large but finite Markov decision process (MDP)
+our approach is robust enough to work on a variety of games while incorporating           in which each sequence is a distinct state. As a result, we can apply standard rein-
+only minimal prior knowledge (see below). While we evaluated our agents on unmodi-        forcement learning methods for MDPs, simply by using the complete sequence st
+fied games, we made one change to the reward structure of the games during training       as the state representation at time t.
+only. As the scale of scores varies greatly from game to game, we clipped all posi-
+                                                                                             The goal of the agent is to interact with the emulator by selecting actions in a way
+tive rewards at 1 and all negative rewards at 21, leaving 0 rewards unchanged.
+                                                                                          that maximizes future rewards. We make the standard assumption that future rewards
+Clipping the rewards in this manner limits the scale of the error derivatives and
+                                                                                          are discounted by a factor of c per time-step (c was set to 0.99 throughout), and
+makes it easier to use the same learning rate across multiple games. At the same time,                                                             XT
+                                                                                                                                                         0
+it could affect the performance of our agent since it cannot differentiate between        define the future discounted return at time t as Rt ~        ct {t rt 0 , in which T is the
+rewards of different magnitude. For games where there is a life counter, the Atari                                                                  t 0 ~t
+                                                                                          time-step at which the game terminates. We define the optimal action-value
+2600 emulator also sends the number of lives left in the game, which is then used to
+                                                                                          function Q ðs,aÞ as the maximum expected return achievable by following any
+mark the end of an episode during training.
+                                                                                          policy, after seeing some sequence s and then taking some action a, Q ðs,aÞ~
+   In these experiments, we used the RMSProp (see http://www.cs.toronto.edu/
+                                                                                          maxp ½Rt Dst ~s,at ~a,p in which p is a policy mapping sequences to actions (or
+,tijmen/csc321/slides/lecture_slides_lec6.pdf ) algorithm with minibatches of size
+                                                                                          distributions over actions).
+32. The behaviour policy during training was e-greedy with e annealed linearly
+                                                                                             The optimal action-value function obeys an important identity known as the
+from 1.0 to 0.1 over the first million frames, and fixed at 0.1 thereafter. We trained
+                                                                                          Bellman equation. This is based on the following intuition: if the optimal value
+for a total of 50 million frames (that is, around 38 days of game experience in total)
+                                                                                          Q ðs0 ,a0 Þ of the sequence s9 at the next time-step was known for all possible actions
+and used a replay memory of 1 million most recent frames.
+                                                                                          a9, then the optimal strategy is to select the action a9 maximizing the expected value
+   Following previous approaches to playing Atari 2600 games, we also use a simple        of rzcQ ðs0 ,a0 Þ:
+frame-skipping technique15. More precisely, the agent sees and selects actions on                                                                           
+every kth frame instead of every frame, and its last action is repeated on skipped
+                                                                                                                  Q ðs,aÞ ~ s0 rzc max        Q  0 0
+                                                                                                                                                  ðs ,a ÞDs,a
+frames. Because running the emulator forward for one step requires much less                                                               a 0
+
+computation than having the agent select an action, this technique allows the agent
+to play roughly k times more games without significantly increasing the runtime.             The basic idea behind many reinforcement learning algorithms is to estimate
+We use k 5 4 for all games.                                                               the action-value function by using the Bellman equation as an iterative update,
+   The values of all the hyperparameters and optimization parameters were selected        Qiz1 ðs,aÞ~ s0 ½rzc maxa0 Qi ðs0 ,a0 ÞDs,a. Such value iteration algorithms converge
+by performing an informal search on the games Pong, Breakout, Seaquest, Space             to the optimal action-value function, Qi ?Q as i??. In practice, this basic approach
+Invaders and Beam Rider. We did not perform a systematic grid search owing to             is impractical, because the action-value function is estimated separately for each
+the high computational cost. These parameters were then held fixed across all other       sequence, without any generalization. Instead, it is common to use a function approx-
+games. The values and descriptions of all hyperparameters are provided in Extended        imator to estimate the action-value function, Qðs,a; hÞ<Q ðs,aÞ. In the reinforce-
+Data Table 1.                                                                             ment learning community this is typically a linear function approximator, but
+
+
+                                                       ©2015 Macmillan Publishers Limited. All rights reserved
+                                                                                                                                                              LETTER RESEARCH
+
+sometimes a nonlinear function approximator is used instead, such as a neural                     replay the behaviour distribution is averaged over many of its previous states,
+network. We refer to a neural network function approximator with weights h as a                   smoothing out learning and avoiding oscillations or divergence in the parameters.
+Q-network. A Q-network can be trained by adjusting the parameters hi at iteration                 Note that when learning by experience replay, it is necessary to learn off-policy
+i to reduce the mean-squared error in the Bellman equation, where the optimal                     (because our current parameters are different to those used to generate the sam-
+target values rzc maxa0 Q ðs0 ,a0 Þ are substituted with approximate target values              ple), which motivates the choice of Q-learning.
+y~rzc maxa0 Q s0 ,a0 ; h{                            {
+                          i , using parameters hi from some previous iteration.                      In practice, our algorithm only stores the last N experience tuples in the replay
+This leads to a sequence of loss functions Li(hi) that changes at each iteration i,               memory, and samples uniformly at random from D when performing updates. This
+                                                                                                approach is in some respects limited because the memory buffer does not differ-
+                 Li ðhi Þ~ s,a,r ðEs0 ½yDs,a{Qðs,a; hi ÞÞ2
+                                                                                                  entiate important transitions and always overwrites with recent transitions owing
+                                                    
+                         ~ s,a,r,s0 ðy{Qðs,a; hi ÞÞ2 zEs,a,r ½Vs0 ½ y:                          to the finite memory size N. Similarly, the uniform sampling gives equal impor-
+                                                                                                  tance to all transitions in the replay memory. A more sophisticated sampling strat-
+   Note that the targets depend on the network weights; this is in contrast with the              egy might emphasize transitions from which we can learn the most, similar to
+targets used for supervised learning, which are fixed before learning begins. At                  prioritized sweeping30.
+each stage of optimization, we hold the parameters from the previous iteration hi2                   The second modification to online Q-learning aimed at further improving the
+fixed when optimizing the ith loss function Li(hi), resulting in a sequence of well-              stability of our method with neural networks is to use a separate network for gen-
+defined optimization problems. The final term is the variance of the targets, which               erating the targets yj in the Q-learning update. More precisely, every C updates we
+                                                                                                  clone the network Q to obtain a target network Q        ^ and use Q  ^ for generating the
+does not depend on the parameters hi that we are currently optimizing, and may
+therefore be ignored. Differentiating the loss function with respect to the weights               Q-learning targets yj for the following C updates to Q. This modification makes the
+we arrive at the following gradient:                                                              algorithm more stable compared to standard online Q-learning, where an update
+                                                                                              that increases Q(st,at) often also increases Q(st 1 1,a) for all a and hence also increases
+                                                                                                 the target yj, possibly leading to oscillations or divergence of the policy. Generating
+   +hi Lðhi Þ ~ s,a,r,s0 rzc max   0
+                                     Q s0 ,a0 ; h{
+                                                 i {Qðs,a; hi Þ +hi Qðs,a; hi Þ :
+                                      a                                                           the targets using an older set of parameters adds a delay between the time an update
+                                                                                                  to Q is made and the time the update affects the targets yj, making divergence or
+    Rather than computing the full expectations in the above gradient, it is often                oscillations much more unlikely.
+computationally expedient to optimize the loss function by stochastic gradient                             also found it helpful to clip the error term from the update rzc maxa0 Q
+                                                                                                   0We
+descent. The familiar Q-learning algorithm19 can be recovered in this framework                    s ,a0 ; h{
+                                                                                                            i {Qðs,a; hi Þ to be between 21 and 1. Because the absolute value loss
+by updating the weights after every time step, replacing the expectations using                   function jxj has a derivative of 21 for all negative values of x and a derivative of 1
+single samples, and setting h{   i ~hi{1 .                                                        for all positive values of x, clipping the squared error to be between 21 and 1 cor-
+    Note that this algorithm is model-free: it solves the reinforcement learning task             responds to using an absolute value loss function for errors outside of the (21,1)
+directly using samples from the emulator, without explicitly estimating the reward                interval. This form of error clipping further improved the stability of the algorithm.
+and transition dynamics Pðr,s0 Ds,aÞ. It is also off-policy: it learns about the greedy           Algorithm 1: deep Q-learning with experience replay.
+policy a~argmaxa0 Qðs,a0 ; hÞ, while following a behaviour distribution that ensures              Initialize replay memory D to capacity N
+adequate exploration of the state space. In practice, the behaviour distribution is               Initialize action-value function Q with random weights h
+often selected by an e-greedy policy that follows the greedy policy with probability              Initialize target action-value function Q   ^ with weights h2 5 h
+1 2 e and selects a random action with probability e.                                             For episode 5 1, M do
+Training algorithm for deep Q-networks. The full algorithm for training deep
+                                                                                                     Initialize sequence s1 ~fx1 g and preprocessed sequence w1 ~wðs1 Þ
+Q-networks is presented in Algorithm 1. The agent selects and executes actions
+                                                                                                     For t 5 1,T do
+according to an e-greedy policy based on Q. Because using histories of arbitrary
+                                                                                                           With probability e select a random action at
+length as inputs to a neural network can be difficult, our Q-function instead works
+on a fixed length representation of histories produced by the function w described                         otherwise select at ~argmaxa Qðwðst Þ,a; hÞ
+above. The algorithm modifies standard online Q-learning in two ways to make it                            Execute action at in emulator and observe reward rt and image xt 1 1
+suitable for training large neural networks without diverging.                                             Set stz1 ~st ,at ,xtz1 and preprocess wtz1 ~wðstz1 Þ
+    First, we use a technique known as experience replay23 in which we store the                           Store transition wt ,at ,rt ,wtz1 in D
+agent’s experiences at each time-step, et 5 (st, at, rt, st 1 1), in a data set Dt 5 {e1,…,et},            Sample random minibatch of transitions wj ,aj ,rj ,wjz1 from D
+                                                                                                                   (
+pooled over many episodes (where the end of an episode occurs when a termi-                                                           rj               if episode terminates at step jz1
+nal state is reached) into a replay memory. During the inner loop of the algorithm,                        Set yj ~                  ^ wjz1 ,a0 ; h{
+                                                                                                                     rj zc maxa0 Q                                    otherwise
+we apply Q-learning updates, or minibatch updates, to samples of experience,                                                                                          2
+(s, a, r, s9) , U(D), drawn at random from the pool of stored samples. This approach                   Perform a gradient descent step on yj {Q wj ,aj ; h                with respect to the
+has several advantages over standard online Q-learning. First, each step of experience                 network parameters h
+is potentially used in many weight updates, which allows for greater data efficiency.                                      ^
+                                                                                                       Every C steps reset Q~Q
+Second, learning directly from consecutive samples is inefficient, owing to the strong              End For
+correlations between the samples; randomizing the samples breaks these correla-                   End For
+tions and therefore reduces the variance of the updates. Third, when learning on-
+policy the current parameters determine the next data sample that the parameters                  31.   Jarrett, K., Kavukcuoglu, K., Ranzato, M. A. & LeCun, Y. What is the best multi-stage
+are trained on. For example, if the maximizing action is to move left then the train-                   architecture for object recognition? Proc. IEEE. Int. Conf. Comput. Vis. 2146–2153
+                                                                                                        (2009).
+ing samples will be dominated by samples from the left-hand side; if the maximiz-
+                                                                                                  32.   Nair, V. & Hinton, G. E. Rectified linear units improve restricted Boltzmann
+ing action then switches to the right then the training distribution will also switch.                  machines. Proc. Int. Conf. Mach. Learn. 807–814 (2010).
+It is easy to see how unwanted feedback loops may arise and the parameters could get              33.   Kaelbling, L. P., Littman, M. L. & Cassandra, A. R. Planning and acting in partially
+stuck in a poor local minimum, or even diverge catastrophically20. By using experience                  observable stochastic domains. Artificial Intelligence 101, 99–134 (1994).
+
+
+
+
+                                                          ©2015 Macmillan Publishers Limited. All rights reserved
+ RESEARCH LETTER
+
+
+
+
+Extended Data Figure 1 | Two-dimensional t-SNE embedding of the                 points) and DQN play (blue points) suggests that the representations learned
+representations in the last hidden layer assigned by DQN to game states         by DQN do indeed generalize to data generated from policies other than its
+experienced during a combination of human and agent play in Space               own. The presence in the t-SNE embedding of overlapping clusters of points
+Invaders. The plot was generated by running the t-SNE algorithm25 on the last   corresponding to the network representation of states experienced during
+hidden layer representation assigned by DQN to game states experienced          human and agent play shows that the DQN agent also follows sequences of
+during a combination of human (30 min) and agent (2 h) play. The fact that      states similar to those found in human play. Screenshots corresponding to
+there is similar structure in the two-dimensional embeddings corresponding to   selected states are shown (human: orange border; DQN: blue border).
+the DQN representation of states experienced during human play (orange
+
+
+
+
+                                                ©2015 Macmillan Publishers Limited. All rights reserved
+                                                                                                                                             LETTER RESEARCH
+
+
+
+
+Extended Data Figure 2 | Visualization of learned value functions on two              all actions are around 0.7, reflecting the expected value of this state based on
+games, Breakout and Pong. a, A visualization of the learned value function on         previous experience. At time point 2, the agent starts moving the paddle
+the game Breakout. At time points 1 and 2, the state value is predicted to be ,17     towards the ball and the value of the ‘up’ action stays high while the value of the
+and the agent is clearing the bricks at the lowest level. Each of the peaks in        ‘down’ action falls to 20.9. This reflects the fact that pressing ‘down’ would lead
+the value function curve corresponds to a reward obtained by clearing a brick.        to the agent losing the ball and incurring a reward of 21. At time point 3,
+At time point 3, the agent is about to break through to the top level of bricks and   the agent hits the ball by pressing ‘up’ and the expected reward keeps increasing
+the value increases to ,21 in anticipation of breaking out and clearing a             until time point 4, when the ball reaches the left edge of the screen and the value
+large set of bricks. At point 4, the value is above 23 and the agent has broken       of all actions reflects that the agent is about to receive a reward of 1. Note,
+through. After this point, the ball will bounce at the upper part of the bricks       the dashed line shows the past trajectory of the ball purely for illustrative
+clearing many of them by itself. b, A visualization of the learned action-value       purposes (that is, not shown during the game). With permission from Atari
+function on the game Pong. At time point 1, the ball is moving towards the            Interactive, Inc.
+paddle controlled by the agent on the right side of the screen and the values of
+
+
+
+
+                                                  ©2015 Macmillan Publishers Limited. All rights reserved
+ RESEARCH LETTER
+
+Extended Data Table 1 | List of hyperparameters and their values
+
+
+
+
+The values of all the hyperparameters were selected by performing an informal search on the games Pong, Breakout, Seaquest, Space Invaders and Beam Rider. We did not perform a systematic grid search owing
+to the high computational cost, although it is conceivable that even better results could be obtained by systematically tuning the hyperparameter values.
+
+
+
+
+                                                               ©2015 Macmillan Publishers Limited. All rights reserved
+                                                                                                                                                                              LETTER RESEARCH
+
+Extended Data Table 2 | Comparison of games scores obtained by DQN agents with methods from the literature12,15 and a professional
+human games tester
+
+
+
+
+Best Linear Learner is the best result obtained by a linear function approximator on different types of hand designed features12. Contingency (SARSA) agent figures are the results obtained in ref. 15. Note the
+figures in the last column indicate the performance of DQN relative to the human games tester, expressed as a percentage, that is, 100 3 (DQN score 2 random play score)/(human score 2 random play score).
+
+
+
+
+                                                              ©2015 Macmillan Publishers Limited. All rights reserved
+ RESEARCH LETTER
+
+Extended Data Table 3 | The effects of replay and separating the target Q-network
+
+
+
+
+DQN agents were trained for 10 million frames using standard hyperparameters for all possible combinations of turning replay on or off, using or not using a separate target Q-network, and three different learning
+rates. Each agent was evaluated every 250,000 training frames for 135,000 validation frames and the highest average episode score is reported. Note that these evaluation episodes were not truncated at 5 min
+leading to higher scores on Enduro than the ones reported in Extended Data Table 2. Note also that the number of training frames was shorter (10 million frames) as compared to the main results presented in
+Extended Data Table 2 (50 million frames).
+
+
+
+
+                                                                 ©2015 Macmillan Publishers Limited. All rights reserved
+                                                                                                                       LETTER RESEARCH
+
+Extended Data Table 4 | Comparison of DQN performance with lin-
+ear function approximator
+
+
+
+
+The performance of the DQN agent is compared with the performance of a linear function approximator
+on the 5 validation games (that is, where a single linear layer was used instead of the convolutional
+network, in combination with replay and separate target network). Agents were trained for 10 million
+frames using standard hyperparameters, and three different learning rates. Each agent was evaluated
+every 250,000 training frames for 135,000 validation frames and the highest average episode score is
+reported. Note that these evaluation episodes were not truncated at 5 min leading to higher scores on
+Enduro than the ones reported in Extended Data Table 2. Note also that the number of training frames
+was shorter (10 million frames) as compared to the main results presented in Extended Data Table 2
+(50 million frames).
+
+
+
+
+                                                             ©2015 Macmillan Publishers Limited. All rights reserved
+

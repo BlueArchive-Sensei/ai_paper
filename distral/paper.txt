@@ -1,0 +1,691 @@
+                                             Distral: Robust Multitask Reinforcement Learning
+
+
+                                                   Yee Whye Teh, Victor Bapst, Wojciech Marian Czarnecki, John Quan,
+                                                     James Kirkpatrick, Raia Hadsell, Nicolas Heess, Razvan Pascanu
+                                                                         DeepMind, London, UK
+                                             {ywteh,vbapst,lejlot,johnquan,kirkpatrick,raia,heess,razp}@google.com
+arXiv:1707.04175v1 [cs.LG] 13 Jul 2017
+
+
+
+
+                                                                                      Abstract
+
+                                                  Most deep reinforcement learning algorithms are data inefficient in complex and
+                                                  rich environments, limiting their applicability to many scenarios. One direction
+                                                  for improving data efficiency is multitask learning with shared neural network
+                                                  parameters, where efficiency may be improved through transfer across related tasks.
+                                                  In practice, however, this is not usually observed, because gradients from different
+                                                  tasks can interfere negatively, making learning unstable and sometimes even less
+                                                  data efficient. Another issue is the different reward schemes between tasks, which
+                                                  can easily lead to one task dominating the learning of a shared model. We propose
+                                                  a new approach for joint training of multiple tasks, which we refer to as Distral
+                                                  (Distill & transfer learning). Instead of sharing parameters between the different
+                                                  workers, we propose to share a “distilled” policy that captures common behaviour
+                                                  across tasks. Each worker is trained to solve its own task while constrained to
+                                                  stay close to the shared policy, while the shared policy is trained by distillation
+                                                  to be the centroid of all task policies. Both aspects of the learning process are
+                                                  derived by optimizing a joint objective function. We show that our approach
+                                                  supports efficient transfer on complex 3D environments, outperforming several
+                                                  related methods. Moreover, the proposed learning process is more robust and more
+                                                  stable—attributes that are critical in deep reinforcement learning.
+
+
+                                         1   Introduction
+                                         Deep Reinforcement Learning is an emerging subfield of Reinforcement Learning (RL) that relies
+                                         on deep neural networks as function approximators that can scale RL algorithms to complex and
+                                         rich environments. One key work in this direction was the introduction of DQN [17] which is able
+                                         to play many games in the ATARI suite of games [2] at above human performance. However the
+                                         agent requires a fairly large amount of time and data to learn effective policies and the learning
+                                         process itself can be quite unstable, even with innovations introduced to improve wall clock time, data
+                                         efficiency, and robustness by changing the learning algorithm [23, 29] or by improving the optimizer
+                                         [16, 25]. A different approach was introduced by [12, 15, 14], whereby data efficiency is improved
+                                         by training additional auxiliary tasks jointly with the RL task.
+                                         With the success of deep RL has come interest in increasingly complex tasks and a shift in focus
+                                         towards scenarios in which a single agent must solve multiple related problems, either simultaneously
+                                         or sequentially. Due to the large computational cost, making progress in this direction requires
+                                         robust algorithms which do not rely on task-specific algorithmic design or extensive hyperparameter
+                                         tuning. Intuitively, solutions to related tasks should facilitate learning since the tasks share common
+                                         structure, and thus one would expect that individual tasks should require less data or achieve a
+                                         higher asymptotic performance. Indeed this intuition has long been pursued in the multitask and
+                                         transfer-learning literature [3, 27, 30, 6].
+                                         Somewhat counter-intuitively, however, the above is often not the result encountered in practice,
+                                         particularly in the RL domain [22, 19]. Instead, the multitask and transfer learning scenarios are
+frequently found to pose additional challenges to existing methods. Instead of making learning
+easier it is often observed that training on multiple tasks can negatively affect performances on the
+individual tasks, and additional techniques have to be developed to counteract this [22, 19]. It is likely
+that gradients from other tasks behave as noise, interfering with learning, or, in another extreme, one
+of the tasks might dominate the others.
+In this paper we develop an approach for multitask and transfer RL that allows effective sharing
+of behavioral structure across tasks, giving rise to several algorithmic instantiations. In addition to
+some instructive illustrations on a grid world domain, we provide a detailed analysis of the resulting
+algorithms via comparisons to A3C [16] baselines on a variety of tasks in a first-person, visually-rich,
+3D environment (DeepMind Lab [1]). We find that the Distral algorithms learn faster and achieve
+better asymptotic performance, are significantly more robust to hyperparameter settings, and learn
+more stably than multitask A3C baselines.
+
+2         Distral: Distill and Transfer Learning
+We propose a framework for simultaneous rein-
+forcement learning of multiple tasks which we π1
+                                                                   distill      regularise              π3
+call Distral. Figure 1 provides a high level il-
+lustration involving four tasks. The method is
+                                                       regularise                           distill
+founded on the notion of a shared policy (shown
+in the centre) which distills (in the sense of            distill
+                                                                             π 0             regularise
+Bucila and Hinton et al. [5, 11]) common be- π2
+haviours or representations from task-specific
+                                                                                                        π4
+policies [22, 19]. Crucially, the distilled policy                regularise        distill
+is then used to guide task-specific policies via
+regularization using a Kullback-Leibler (KL) di-
+vergence. The effect is akin to a shaping reward   Figure 1: Illustration of the Distral framework.
+which can, for instance, overcome random walk
+exploration bottlenecks. In this way, knowledge gained in one task is distilled into the shared policy,
+then transferred to other tasks.
+
+2.1        Mathematical framework
+
+In this section we describe the mathematical framework underlying Distral. A multitask RL setting is
+considered where there are n tasks, where for simplicity we assume an infinite horizon with discount
+factor γ.1 We will assume that the action A and state S spaces are the same across tasks; we use
+a ∈ A to denote actions, s ∈ S to denote states. The transition dynamics pi (s0 |s, a) and reward
+functions Ri (a, s) are different for each task i. Let πi be task-specific stochastic policies. The
+dynamics and policies give rise to joint distributions over state and action trajectories starting from
+some initial state, which we will also denote by πi by an abuse of notation.
+Our mechanism for linking the policy learning across tasks is via optimising an objective which con-
+sists of expected returns and policy regularizations. We designate π0 to be the distilled policy which
+we believe will capture agent behaviour that is common across the tasks. We regularize each task
+                                                                                         P
+policy πi towards the distilled policy using γ-discounted KL divergences Eπi [ t≥0 γ t log ππ0i (a             t |st )
+                                                                                                             (at |st ) ].
+In addition, we also use a γ-discounted entropy regularization to further encourage exploration. The
+resulting objective to be maximized is:
+                                                                                                              
+                          X       X                                   πi (at |st )
+     J(π0 , {πi }ni=1 ) =   Eπi      γ t Ri (at , st ) − cKL γ t log               − cEnt γ t log πi (at |st )
+                          i
+                                                                      π 0 (at |st )
+                                  t≥0
+                                                                                                       
+                          X       X                         t
+                                                          γ α                       γ t
+                        =   Eπi      γ t Ri (at , st ) +       log π0 (at |st ) −      log πi (at |st )          (1)
+                          i
+                                                           β                         β
+                                         t≥0
+
+where cKL , cEnt ≥ 0 are scalar factors which determine the strengths of the KL and entropy regular-
+izations, and α = cKL /(cKL + cEnt ) and β = 1/(cKL + cEnt ). The log π0 (at |st ) term can be thought
+      1
+          The method can be easily generalized to other scenarios like undiscounted finite horizon.
+
+
+                                                            2
+of as a reward shaping term which encourages actions which have high probability under the distilled
+policy, while the entropy term − log πi (at |st ) encourages exploration. In the above we used the same
+regularization costs cKL , cEnt for all tasks. It is easy to generalize to using task-specific costs; this can
+be important if tasks differ substantially in their reward scales and amounts of exploration needed,
+although it does introduce additional hyperparameters that are expensive to optimize.
+
+2.2   Soft Q-Learning and Distillation
+
+A range of optimization techniques in the literature can be applied to maximize the above objective,
+which we will expand on below. To build up intuition for how the method operates, we will start
+in the simple case of a tabular representation and an alternating maximization procedure which
+optimizes over πi given π0 and over π0 given πi . With π0 fixed, (1) decomposes into separate
+maximization problems for each task, and is an entropy regularized expected return with redefined
+(regularized) reward Ri0 (a, s) := Ri (a, s) + α  β log π0 (a|s). It can be optimized using soft Q-learning
+aka G learning, which are based on deriving the following “softened” Bellman updates for the state
+and action values (see [21, 8, 24, 18] for derivations):
+                                      1      X
+                           Vi (st ) = log          π0α (at |st ) exp [βQi (at , st )]                   (2)
+                                      β        at
+                                                         X
+                      Qi (at , st ) = Ri (at , st ) + γ       pi (st+1 |st , at )Vi (st+1 )             (3)
+                                                               st
+
+The Bellman updates are softened in the sense that the usual max operator over actions for the state
+values Vi is replaced by a soft-max at inverse temperature β, which hardens into a max operator as
+β → ∞. The optimal policy πi is then a Boltzmann policy at inverse temperature β:
+                  πi (at |st ) = π0α (at |st )eβQi (at |st )−βVi (st ) = π0α (at |st )eβAi (at |st )      (4)
+where Ai (a, s) = Qi (a, s) − Vi (s) is a softened advantage function. Note that the softened state
+values Vi (s) act as the log normalizers in the above. The distilled policy π0 can be interpreted as a
+policy prior, a perspective well-known in the literature on RL as probabilistic inference [28, 13, 21, 8].
+However, unlike in past works, it is raised to a power of α ≤ 1. This softens the effect of the prior π0
+on πi , and is the result of the additional entropy regularization beyond the KL divergence.
+Also unlike past works, we will learn π0 instead of hand-picking it (typically as a uniform distribution
+over actions). In particular, notice that the only terms in (1) depending on π0 are:
+                                                                        
+                                   αX           X
+                                           Eπi      γ t log π0 (at |st )                           (5)
+                                   β i
+                                                     t≥0
+
+which is simply a log likelihood for fitting a model π0 to a mixture of γ-discounted state-action
+distributions, one for each task i under policy πi . A maximum likelihood (ML) estimator can be
+derived from state-action visitation frequencies under roll-outs in each task, with the optimal ML
+solution given by the mixture of state-conditional action distributions. Alternatively, in the non-tabular
+case, stochastic gradient ascent can be employed, which leads precisely to an update which distills the
+task policies πi into π0 [5, 11, 22, 19]. Note however that in our case the distillation step is derived
+naturally from a KL regularized objective on the policies. Another difference from [22, 19] and from
+prior works on the use of distillation in deep learning [5, 11] is that the distilled policy is “fed back in”
+to improve the task policies when they are next optimized, and serves as a conduit in which common
+and transferable knowledge is shared across the task policies.
+It is worthwhile here to take pause and ponder the effect of the extra entropy regularization. First
+suppose that there is no extra entropy regularization, α = 1, and consider the simple scenario of only
+n = 1 task. Then (5) is maximized when the distilled policy π0 and the task policy π1 are equal,
+and the KL regularization term is 0. Thus the objective reduces to an unregularized expected return,
+and so the task policy π1 converges to a greedy policy which locally maximizes expected returns.
+Another way to view this line of reasoning is that the alternating maximization scheme is equivalent
+to trust-region methods like natural gradient or TRPO [20, 25] which use a KL ball centred at the
+previous policy, and which are understood to converge to greedy policies.
+If α < 1, there is an additional entropy term in (1). So even with π0 = π1 and KL(π1 kπ0 ) = 0,
+the objective (1) will no longer be maximized by greedy policies. Instead (1) reduces to an entropy
+
+
+                                                           3
+regularized expected returns with entropy regularization factor β 0 = β/(1 − α) = 1/cEnt , so that the
+optimal policy is of the Boltzmann form with inverse temperature β 0 [21, 8, 24, 18]. In conclusion,
+by including the extra entropy term, we can guarantee that the task policy will not turn greedy, and
+we can control the amount of exploration by adjusting cEnt appropriately.
+This additional control over the amount of exploration is essential when there are more than one task.
+To see this, imagine a scenario where one of the tasks is easier and is solved first, while other tasks
+are harder with much sparser rewards. Without the entropy term, and before rewards in other tasks
+are encountered, both the distilled policy and all the task policies can converge to the one that solves
+the easy task. Further, because this policy is greedy, it can insufficiently explore the other tasks to
+even encounter rewards, leading to sub-optimal behaviour. For single-task RL, the use of entropy
+regularization was recently popularized by Mnih et al. [16] to counter premature convergence to
+greedy policies, which can be particularly severe when doing policy gradient learning. This carries
+over to our multitask scenario as well, and is the reason for the additional entropy regularization.
+
+2.3       Policy Gradient and a Better Parameterization
+
+The above method alternates between maximization of the distilled policy π0 and the task policies
+πi , and is reminiscent of the EM algorithm [7] for learning latent variable models, with π0 playing
+the role of parameters, while πi plays the role of the posterior distributions for the latent variables.
+Going beyond the tabular case, when both π0 and πi are parameterized by, say, deep networks, such
+an alternating maximization procedure can be slower than simply optimizing (1) with respect to task
+and distilled policies jointly by stochastic gradient ascent. In this case the gradient update for πi
+is simply given by policy gradient with an entropic regularization [16, 24], and can be carried out
+within a framework like advantage actor-critic [16].
+A simple parameterization of policies would be to use a separate network for each task policy πi ,
+and another one for the distilled policy π0 . An alternative parameterization, which we argue can
+result in faster transfer, can be obtained by considering the form of the optimal Boltzmann policy (4).
+Specifically, consider parameterizing the distilled policy using a network with parameters θ0 ,
+                                                            exp(hθ0 (at |st )
+                                        π̂0 (at |st ) = P                0
+                                                                                                             (6)
+                                                            a0 exp(hθ0 (a |st ))
+
+and estimating the soft advantages2 using another network with parameters θi :
+                                                         1     X
+                       Âi (at |st ) = fθi (at |st ) −     log   π̂0α (a|st ) exp(βfθi (a|st ))              (7)
+                                                         β     a
+
+We used hat notation to denote parameterized approximators of the corresponding quantities. The
+policy for task i then becomes parameterized as,
+                                                                   exp(αhθ0 (at |st ) + βfθi (at |st ))
+            π̂i (at |st ) = π̂0α (at |st ) exp(β Âi (at |st )) = P                0               0
+                                                                                                             (8)
+                                                                   a0 exp((αhθ0 (a |st ) + βfθi (a |st ))
+
+This can be seen as a two-column architecture for the policy, with one column being the distilled
+policy, and the other being the adjustment required to specialize to task i.
+Given the parameterization above, we can now derive the policy gradients. The gradient wrt to the
+task specific parameters θi is given by the standard policy gradient theorem [26],
+                             hP                             P                            i
+                                                                        u    reg
+                ∇θi J =Eπ̂i           ∇
+                                  t≥1 θi   log π̂  (a
+                                                  i t t|s  )     u≥1  γ   (R i   (a ,
+                                                                                   u us  ))
+                             hP                            P                           i
+                                                                    u    reg
+                      =Eπ̂i      t≥1 ∇θi log π̂i (at |st )     u≥t γ (Ri (au , su ))           (9)
+
+where Rireg (a, s) = Ri (a, s) + α                  1
+                                  β log π̂0 (a|s) − β log π̂i (a|s) is the regularized reward. Note that the
+partial derivative of the entropy in the integrand has expectation Eπ̂i [∇θi log π̂i (at |st )] = 0 because
+of the log-derivative trick. If a value baseline is estimated, it can be subtracted from the regularized
+      2
+    In practice, we do not actually use these as advantage estimates. Instead we use (8) to parameterize a policy
+which is optimized by policy gradients.
+
+
+                                                             4
+                          DisTra Learning                                                            Baselines
+                    Returns                              Returns                     Returns                                    entropy
+         KL                                      KL
+                                                                                                             Returns                Returns
+    π0        πi                         π0     πi                          πi   entropy
+                                                                                                                                          i = 1, 2, ..
+                        entropy                           entropy
+                                                                                                            πi entropy              π0
+h                   f                  h                 f               h           f                            f             h
+
+
+
+                        i = 1, 2, ..                      i = 1, 2, ..                i = 1, 2, ..               i = 1, 2, ..
+                                                                                                                                 A3C
+         KL 2col                                KL 1col                      A3C 2col                      A3C                  multitask
+         KL+ent 2col                            KL+ent 1col
+Figure 2: Depiction of the different algorithms and baselines. On the left are two of the Distral
+algorithms and on the right are the three A3C baselines. Entropy is drawn in brackets as it is optional
+and only used for KL+ent 2col and KL+ent 1col.
+
+
+returns in order to reduce gradient variance. The gradient wrt θ0 is more interesting:
+                      X       hP                           P                     i
+                                                                  u  reg
+            ∇θ 0 J =     Eπ̂i    t≥1 ∇θ0 log π̂i (at |st )   u≥t γ (Ri (au , su )                                                             (10)
+                                       i
+                                           αX       hP        P                                                    i
+                                                            t             0               0                 0
+                                       +       Eπ̂i   t≥1 γ    a0t (π̂i (at |st ) − π̂0 (at |st ))∇θ0 hθ0 (at |st )
+                                           β i
+Note that the first term is the same as for the policy gradient of θi . The second term tries to match
+the probabilities under the task policy π̂i and under the distilled policy π̂0 . The second term would
+not be present if we simply parameterized πi using the same architecture π̂i , but do not use a KL
+regularization for the policy. The presence of the KL regularization gets the distilled policy to
+learn to be theP    centroid of all task policies, in the sense that the second term would be zero if
+π̂0 (a0t |st ) = n1 i π̂i (a0t |st ), and helps to transfer information quickly across tasks and to new tasks.
+The centroid and star-shaped structure of DisTraL is reminiscent of ADMM [4], elastic-averaging
+SGD [31] and hierarchical Bayes [10]. Though a crucial difference is that while ADMM, EASGD
+and hierarchical Bayes operate in the space of parameters, in Distral the distilled policy learns to be
+the centroid in the space of policies. We argue that this is semantically more meaningful, and may
+contribute to the observed robustness of Distral by stabilizing learning. In our experiments we find
+indeed that absence of the KL regularization significantly affects the stability of the algorithm.
+Our approach is also reminiscent of recent work on option learning [9], but with a few important
+differences. We focus on using deep neural networks as flexible function approximators, and applied
+our method to rich 3D visual environments, while Fox et al. [9] considered only the tabular case.
+We argue for the importance of an additional entropy regularization besides the KL regularization.
+This lead to an interesting twist in the mathematical framework allowing us to separately control the
+amounts of transfer and of exploration. On the other hand Fox et al. [9] focused on the interesting
+problem of learning multiple options (distilled policies here). Their approach treats the assignment of
+tasks to options as a clustering problem, which is not easily extended beyond the tabular case.
+
+3        Algorithms
+The framework we just described allows for a number of possible algorithmic instantiations, arising
+as combinations of objectives, algorithms and architectures, which we describe below and summarize
+in Table 1 and Figure 2. KL divergence vs entropy regularization: With α = 0, we get a purely
+entropy-regularized objective which does not couple and transfer across tasks [16, 24]. With α = 1,
+we get a purely KL regularized objective, which does couple and transfer across tasks, but might
+prematurely stop exploration if the distilled and task policies become similar and greedy. With
+0 < α < 1 we get both terms. Alternating vs joint optimization: We have the option of jointly
+optimizing both the distilled policy and the task policies, or optimizing one while keeping the other
+fixed. Alternating optimization leads to algorithms that resemble policy distillation/actor-mimic
+[19, 22], but are iterative in nature with the distilled policy feeding back into task policy optimization.
+Also, soft Q-learning can be applied to each task, instead of policy gradients. While alternating
+
+
+                                                                               5
+                            hθ0 (a|s)             fθi (a|s)          αhθ0 (a|s) + βfθi (a|s)
+             α=0            A3C multitask         A3C                A3C 2col
+             α=1                                  KL 1col            KL 2col
+             0<α<1                                KL+ent 1col        KL+ent 2col
+Table 1: The seven different algorithms evaluated in our experiments. Each column describes a
+different architecture, with the column headings indicating the logits for the task policies. The rows
+define the relative amount of KL vs entropy regularization loss, with the first row comprising the
+A3C baselines (no KL loss).
+
+
+
+optimization can be slower, evidence from policy distillation/actor-mimic indicate it might learn more
+stably, particularly for tasks which differ significantly. Separate vs two-column parameterization:
+Finally, the task policy can be parameterized to use the distilled policy (8) or not. If using the distilled
+policy, behaviour distilled into the distilled policy is “immediately available” to the task policies so
+transfer can be faster. However if the process of transfer occurs too quickly, it might prevent effective
+exploration of individual tasks.
+From this spectrum of possibilities we consider four concrete instances which differ in the underlying
+network architecture and distillation loss, identified in Table 1. In addition, we compare against three
+A3C baselines. In initial experiments we explored two variants of A3C: the original method [16]
+and the variant of Schulman et al. [24] which uses entropy regularized returns. We did not find
+significant differences for the two variants in our setting, and chose to report only the original A3C
+results for clarity in Section 4. Further algorithmic details are provided in the Appendix.
+
+4     Experiments
+
+We demonstrate the various algorithms derived from our framework, firstly using alternating opti-
+mization with soft Q-learning and policy distillation on a set of simple grid world tasks. Then all
+seven algorithms will be evaluated on three sets of challenging RL tasks in partially observable 3D
+environments [1].
+
+4.1   Two room grid world
+
+To give better intuition for the role of the distilled behaviour policy, we considered a set of tasks
+in a grid world domain with two rooms connected by a corridor (see Figure 3) [9]. Each task is
+distinguished by a different randomly chosen goal location and each MDP state consists of the map
+location, the previous action and the previous reward. A Distral agent is trained using only the KL
+regularization and an optimization algorithm which alternates between soft Q-learning and policy
+distillation. Each soft Q-learning iteration learns using a rollout of length 10.
+To determine the benefit of the distilled policy, we compared the Distral agent to one which soft Q
+learns a separate policy for each task. The learning curves are shown in Figure 3 (left). We see that
+the Distral agent is able to learn significantly faster than single-task agents. Figure 3 (right) visualizes
+the distilled policy (probability of next action given position and previous action), demonstrating
+that the agent has learnt a robust policy which guides the agent to move consistently in the corridor
+in order to reach the other room. This allows the agent to reach the other room faster and helps
+exploration, if the agent is shown new test tasks. In Fox et al. [9] two separate options are learnt,
+while here we learn a single distilled policy which conditions on more past information.
+
+4.2   Complex Tasks
+
+To assess Distral under more challenging conditions, we use a complex first-person partially observed
+3D environment with a variety of visually-rich RL tasks [1]. All agents were implemented with a dis-
+tributed Python/TensorFlow code base, using 32 workers for each task and learnt using asynchronous
+RMSProp. The network columns contain convolutional layers and an LSTM and are uniform across
+experiments and algorithms. We tried three values for the entropy costs β and three learning rates .
+Four runs for each hyperparameter setting were used. All other hyperparameters were fixed to the
+
+
+                                                     6
+                                  5                        Training tasks                             5                    Test tasks examples of GridWorld tasks
+                                                                                                                     Four different                                           Policy in the corridor if previous action was:
+                                                                                                                                                                                               left
+                                  0                                                                   0
+
+
+
+
+ Returns; averaged across tasks
+                                  5
+                                                                                                      5
+                                  10
+                                                                                                      10                               A                                  B
+                                  15
+                                                                                                                                                                              Policy in the corridor if previous action was:
+                                                                                                      15
+                                  20
+                                                                                                                                                                                              right
+                                  25                                                                  20
+                                                                                    Multi-task                                                          Multi-task
+                                                                                    Separately                                                          Separately
+                                  30                                                                  25
+                                       0        200         400        600        800          1000        0        200         400        600        800          1000
+                                           Iterations; each using 10 roll-outs of length 100                   Iterations; each using 10Croll-outs of length 100          D
+
+
+Figure 3: Left: Learning curves on two room grid world. The DisTraL agent (blue) learns faster,
+converges towards better policies, and demonstrates more stable learning overall. Center: Example
+of tasks. Green is goal position which is uniformly sampled for each task. Starting position is
+uniformly sampled at the beginning of each episode. Right: depiction of learned distilled policy π0
+only in the corridor, conditioned on previous action being left/right and no previous reward. Sizes of
+arrows depict probabilities of actions. Note that up/down actions have negligible probabilities. The
+model learns to preserve direction of travel in the corridor.
+
+
+single-task A3C defaults and, for the KL+ent 1col and KL+ent 2col algorithms, α was fixed at
+0.5.
+Mazes In the first experiment, each of n = 8 tasks is a different maze containing randomly placed
+rewards and a goal object. Figure 4.A1 shows the learning curves for all seven algorithms. Each
+curve is produced by averaging over all 4 runs and 8 tasks, and selecting the best settings for β and 
+(as measured by the area under the learning curves). The Distral algorithms learn faster and achieve
+better final performance than all three A3C baselines. The two-column algorithms learn faster than
+the corresponding single column ones. The Distral algorithms without entropy learn faster but achieve
+lower final scores than those with entropy, which we believe is due to insufficient exploration towards
+the end of learning.
+We found that both multitask A3C and two-column A3C can learn well on some runs, but are generally
+unstable—some runs did not learn well, while others may learn initially then suffer degradation
+later. We believe this is due to negative interference across tasks, which does not happen for Distral
+algorithms. The stability of Distral algorithms also increases their robustness to hyperparameter
+selection. Figure 4.A2 shows the final achieved average returns for all 36 runs for each algorithm,
+sorted in decreasing order. We see that Distral algorithms have a significantly higher proportion of
+runs achieving good returns, with KL+ent_2col being the most robust.
+DisTraL algorithms, along with multitask A3C, use a distilled or common policy which can be applied
+on all tasks. Panels B1 and B2 in Figure 4 summarize the performances of the distilled policies.
+Algorithms that use two columns (KL_2col and KL+ent_2col) obtain the best performance, because
+policy gradients are also directly propagated through the distilled policy in those cases. Moreover,
+panel B2 reveals that Distral algorithms exhibit greater stability as compared to traditional multitask
+A3C. We also observe that KL algorithms have better-performing distilled policies than KL+ent ones.
+We believe this is because the additional entropy regularization allows task policies to diverge more
+substantially from the distilled policy. This suggests that annealing the entropy term or increasing the
+KL term throughout training could improve the distilled policy performance, if that is of interest.
+Navigation We experimented with n = 4 navigation and memory tasks. In contrast to the previous
+experiment, these tasks use random maps which are procedurally generated on every episode. The
+first task features reward objects which are randomly placed in a maze, and the second task requires to
+return these objects to the agent’s start position. The third task has a single goal object which must be
+repeatedly found from different start positions, and on the fourth task doors are randomly opened and
+closed to force novel path-finding. Hence, these tasks are more involved than the previous navigation
+tasks. The panels C1 and C2 of Figure 4 summarize the results. We observe again that Distral
+algorithms yield better final results while having greater stability (Figure 4.C2). The top-performing
+algorithms are, again, the 2 column Distral algorithms (KL_2col and KL+ent_2col).
+Laser-tag In the final set of experiments, we use n = 8 laser-tag levels from DeepMind Lab. These
+tasks require the agent to learn to tag bots controlled by a built-in AI, and differ substantially: fixed
+versus procedurally generated maps, fixed versus procedural bots, and complexity of agent behaviour
+
+
+                                                                                                                                                               7
+Figure 4: Panels A1, C1, D1 show task specific policy performance (averaged across all the tasks)
+for the maze, navigation and laser-tag tasks, respectively. The x-axes are total numbers of training
+environment steps per task. Panel B1 shows the mean scores obtained with the distilled policies (A3C
+has no distilled policy, so it is represented by the performance of an untrained network.). For each
+algorithm, results for the best set of hyperparameters (based on the area under curve) are reported.
+The bold line is the average over 4 runs, and the colored area the average standard deviation over the
+tasks. Panels A2, B2, C2, D2 shows the corresponding final performances for the 36 runs of each
+algorithm ordered by best to worst (9 hyperparameter settings and 4 runs).
+
+
+(e.g. learning to jump in some tasks). Corresponding to this greater diversity, we observe (see panels
+D1 and D2 of Figure 4) that the best baseline is the A3C algorithm that is trained independently
+on each task. Among the Distral algorithms, the single column variants perform better, especially
+initially, as they are able to learn task-specific features separately. We observe again the early
+plateauing phenomenon for algorithms that do not possess an additional entropy term. While not
+significantly better than the A3C baseline on these tasks, the Distral algorithms clearly outperform
+the multitask A3C. Considering the 3 different sets of complex 3D experiments, we argue that the
+Distral algorithms are the most promising solution to the multitask RL problem.
+
+5   Discussion
+We have proposed Distral, a general framework for distilling and transferring common behaviours
+in multitask reinforcement learning. In experiments we showed that the resulting algorithms learn
+quicker, produce better final performances, and are more stable and robust to hyperparameter settings.
+We have found that Distral significantly outperforms the standard way of using shared neural network
+parameters for multitask or transfer reinforcement learning. Two ideas might be worth reemphasizing
+here. We observe that distillation arises naturally as one half of an optimization procedure when
+using KL divergences to regularize the output of task models towards a distilled model. The other
+half corresponds to using the distilled model as a regularizer for training the task models. Another
+observation is that parameters in deep networks do not typically by themselves have any semantic
+meaning, so instead of regularizing networks in parameter space, it is worthwhile considering
+regularizing networks in a more semantically meaningful space, e.g. of policies.
+Possible directions of future research include: combining Distral with techniques which use auxiliary
+losses [12, 15, 14], exploring use of multiple distilled policies or latent variables in the distilled policy
+to allow for more diversity of behaviours, exploring settings for continual learning where tasks are
+encountered sequentially, and exploring ways to adaptively adjust the KL and entropy costs to better
+control the amounts of transfer and exploration.
+
+
+                                                     8
+References
+
+ [1] Charles Beattie, Joel Z Leibo, Denis Teplyashin, Tom Ward, Marcus Wainwright, Heinrich Küttler, Andrew
+     Lefrancq, Simon Green, Víctor Valdés, Amir Sadik, et al. Deepmind lab. arXiv:1612.03801, 2016.
+ [2] M. G. Bellemare, Y. Naddaf, J. Veness, and M. Bowling. The arcade learning environment: An evaluation
+     platform for general agents. Journal of Artificial Intelligence Research, 47:253–279, june 2013.
+ [3] Yoshua Bengio. Deep learning of representations for unsupervised and transfer learning. In JMLR:
+     Workshop on Unsupervised and Transfer Learning, 2012.
+ [4] Stephen Boyd, Neal Parikh, Eric Chu, Borja Peleato, and Jonathan Eckstein. Distributed optimization and
+     statistical learning via the alternating direction method of multipliers. Found. Trends Mach. Learn., 3(1),
+     January 2011.
+ [5] Cristian Bucila, Rich Caruana, and Alexandru Niculescu-Mizil. Model compression. In Proc. of the Int’l
+     Conference on Knowledge Discovery and Data Mining (KDD), 2006.
+ [6] Rich Caruana. Multitask learning. Machine Learning, 28(1):41–75, July 1997.
+ [7] Arthur P Dempster, Nan M Laird, and Donald B Rubin. Maximum likelihood from incomplete data via the
+     em algorithm. Journal of the royal statistical society. Series B (methodological), pages 1–38, 1977.
+ [8] R. Fox, A. Pakman, and N. Tishby. Taming the noise in reinforcement learning via soft updates. In
+     Uncertainty in Artificial Intelligence (UAI), 2016.
+ [9] Roy Fox, Michal Moshkovitz, and Naftali Tishby. Principled option learning in markov decision processes.
+     In European Workshop on Reinforcement Learning (EWRL), 2016.
+[10] Andrew Gelman, John B Carlin, Hal S Stern, and Donald B Rubin. Bayesian data analysis, volume 2.
+     Chapman & Hall/CRC Boca Raton, FL, USA, 2014.
+[11] Geoffrey E. Hinton, Oriol Vinyals, and Jeffrey Dean. Distilling the knowledge in a neural network. NIPS
+     Deep Learning Workshop, 2014.
+[12] Max Jaderberg, Volodymyr Mnih, Wojciech Marian Czarnecki, Tom Schaul, Joel Z Leibo, David Silver,
+     and Koray Kavukcuoglu. Reinforcement learning with unsupervised auxiliary tasks. Int’l Conference on
+     Learning Representations (ICLR), 2016.
+[13] Hilbert J Kappen, Vicenç Gómez, and Manfred Opper. Optimal control as a graphical model inference
+     problem. Machine learning, 87(2):159–182, 2012.
+[14] Guillaume Lample and Devendra Singh Chaplot. Playing FPS games with deep reinforcement learning.
+     Association for the Advancement of Artificial Intelligence (AAAI), 2017.
+[15] Piotr Mirowski, Razvan Pascanu, Fabio Viola, Hubert Soyer, Andrew J. Ballard, Andrea Banino, Misha
+     Denil, Ross Goroshin, Laurent Sifre, Koray Kavukcuoglu, Dharshan Kumaran, and Raia Hadsell. Learning
+     to navigate in complex environments. Int’l Conference on Learning Representations (ICLR), 2016.
+[16] Volodymyr Mnih, Adria Puigdomenech Badia, Mehdi Mirza, Alex Graves, Timothy P Lillicrap, Tim
+     Harley, David Silver, and Koray Kavukcuoglu. Asynchronous methods for deep reinforcement learning. In
+     Int’l Conference on Machine Learning (ICML), 2016.
+[17] Volodymyr Mnih, Koray Kavukcuoglu, David Silver, Andrei A. Rusu, Joel Veness, Marc G. Bellemare,
+     Alex Graves, Martin Riedmiller, Andreas K. Fidjeland, Georg Ostrovski, Stig Petersen, Charles Beattie,
+     Amir Sadik, Ioannis Antonoglou, Helen King, Dharshan Kumaran, Daan Wierstra, Shane Legg, and Demis
+     Hassabis. Human-level control through deep reinforcement learning. Nature, 518(7540):529–533, 02
+     2015.
+[18] Ofir Nachum, Mohammad Norouzi, Kelvin Xu, and Dale Schuurmans. Bridging the gap between value
+     and policy based reinforcement learning. arXiv:1702.08892, 2017.
+[19] Emilio Parisotto, Jimmy Lei Ba, and Ruslan Salakhutdinov. Actor-mimic: Deep multitask and transfer
+     reinforcement learning. In Int’l Conference on Learning Representations (ICLR), 2016.
+[20] Razvan Pascanu and Yoshua Bengio. Revisiting natural gradient for deep networks. Int’l Conference on
+     Learning Representations (ICLR), 2014.
+[21] Konrad Rawlik, Marc Toussaint, and Sethu Vijayakumar. On stochastic optimal control and reinforcement
+     learning by approximate inference. In Robotics: Science and Systems (RSS), 2012.
+[22] Andrei A Rusu, Sergio Gomez Colmenarejo, Caglar Gulcehre, Guillaume Desjardins, James Kirkpatrick,
+     Razvan Pascanu, Volodymyr Mnih, Koray Kavukcuoglu, and Raia Hadsell. Policy distillation. In Int’l
+     Conference on Learning Representations (ICLR), 2016.
+
+
+                                                       9
+[23] Tom Schaul, John Quan, Ioannis Antonoglou, and David Silver. Prioritized experience replay. CoRR,
+     abs/1511.05952, 2015.
+[24] J. Schulman, P. Abbeel, and X. Chen. Equivalence between policy gradients and soft Q-Learning.
+     arXiv:1704.06440, 2017.
+[25] John Schulman, Sergey Levine, Pieter Abbeel, Michael Jordan, and Philipp Moritz. Trust region policy
+     optimization. In Int’l Conference on Machine Learning (ICML), 2015.
+[26] Richard S Sutton, David A McAllester, Satinder P Singh, Yishay Mansour, et al. Policy gradient methods
+     for reinforcement learning with function approximation. In Adv. in Neural Information Processing Systems
+     (NIPS), volume 99, pages 1057–1063, 1999.
+[27] Matthew E. Taylor and Peter Stone. An introduction to inter-task transfer for reinforcement learning. AI
+     Magazine, 32(1):15–34, 2011.
+[28] Marc Toussaint, Stefan Harmeling, and Amos Storkey. Probabilistic inference for solving (PO)MDPs.
+     Technical Report EDI-INF-RR-0934, University of Edinburgh, School of Informatics, 2006.
+[29] Hado van Hasselt, Arthur Guez, and David Silver. Deep reinforcement learning with double Q-learning.
+     Association for the Advancement of Artificial Intelligence (AAAI), 2016.
+[30] Jason Yosinski, Jeff Clune, Yoshua Bengio, and Hod Lipson. How transferable are features in deep neural
+     networks? In Adv. in Neural Information Processing Systems (NIPS), 2014.
+[31] Sixin Zhang, Anna Choromanska, and Yann LeCun. Deep learning with elastic averaging SGD. In Adv. in
+     Neural Information Processing Systems (NIPS), 2015.
+
+
+
+
+                                                     10
+                Num tasks      Inter-task      Map/maze layout              Objectives and Agent Behaviours
+                               variability
+Mazes                8         low             Fixed layout for each        Collect a goal object multiple times from
+                                               task.                        different start positions in the maze.
+Navigation           4         medium          Procedurally varied on       Various objectives requiring memory
+                                               every episode.               and exploration skills, including collect-
+                                                                            ing objects and navigating back to start
+                                                                            location, and finding a goal object from
+                                                                            multiple start positions with doors that
+                                                                            randomly open and close.
+Laser-tag            8         high            Fixed for some tasks         Tag bots controlled by the OpenArena
+                                               and procedurally varied      AI while collecting objects to increase
+                                               for others.                  score. May require jumping and other
+                                                                            agent behaviours.
+
+                         Table 2: Details on the various tasks used in Section 4.2.
+
+
+A     Algorithms
+A description of all the algorithms tested:
+
+        • A3C: A policy is trained separately for each task using A3C.
+        • A3C_multitask: A single policy is trained using A3C by simultaneously training on all tasks.
+        • A3C_2col: A policy is trained for each task using A3C, which is parameterized using a two-column
+          architecture with one column shared across tasks (8).
+        • KL_1col: Each policy including the distilled policy is parameterized by one network, and trained to
+          optimize (1) with α = 1, i.e. only using the KL regularization.
+        • KL+ent_1col: Same as KL_1col but using both KL and entropy regularization. We set α = 0.5 and
+          did not tune for it in our experiments.
+        • KL_2col: Same as KL_1col but using the two-column architecture (8) with one shared network
+          column which also produces the distilled policy π̂0 .
+        • KL+ent_2col: Same as KL+ent_1col but using the two-column architecture.
+
+
+B     Experimental details
+B.1    Two room grid world
+The agent can stay put or move in each of the four cardinal coordinates. A penalty of −0.1 is incurred for
+every time step and a penalty of −0.5 is incurred if the agent runs into the wall. On reaching the goal state the
+episode terminates and the agent gets a reward of +1. We used learning rate of 0.1, discount of 0.95 for soft
+Q-learning, β = 5, and regularized the distilled policy by using a pseudocount of 1 for each action in each state.
+The reported results are not sensitive to these settings and we did not tune for them.
+
+B.2    Complex 3D tasks
+The three sets of tasks are described in Table 2.
+We implemented the updates (9-10) by training a distributed agent a la A3C [16] with 32 workers for each task,
+coordinated using parameter servers. The agent receives a RGB observation from the environment in the form of
+a 3 × 84 × 84 tensor. Each network column has the same architecture as in Mnih et al. [16] and consists of two
+convolutional layers with ReLU nonlinearities, followed by a fully connected layer with 256 hidden units and
+ReLU nonlinearity, which then feeds into an LSTM. Policy logits and values are then read out linearly from the
+LSTM. We used RMSProp as an optimizer, and batches of length 20.
+We used a set of 9 hyperparameters (1/β, ) ∈ {3 · 10−4 , 10−3 , 3 · 10−3 } × {2 · 10−4 , 4 · 10−4 , 8 · 10−4 } for the
+entropy costs and initial learning rate. We kept α = 0.5 throughout all runs of KL+ent_1col and KL+ent_2col
+(and, by definition, we have α = 0 for A3C, A3C_multitask, A3C_2col and α = 1 for KL_1col and KL_2col.).
+The learning rate was annealed linearly from its initial value  down to /6 over a total of N environment steps
+per task, where N = 4 · 108 for the maze and navigation tasks, and N = 6.6 · 108 for the laser-tag tasks. We
+used an action-repeat of 4 (each action output by the network is fed 4 times to the environment), so the number
+
+
+                                                         11
+of training steps in each environment is respectively 108 and 1.65 · 108 . In addition to the updates (9-10), our
+implementation had small regularization terms over the state value estimates V̂i for each task, in the form of L2
+losses with a coefficient 0.005, to encourage a small amount of transfer of knowledge in value estimates too. We
+did not tune for this parameter, and believe it is not essential to our results.
+Because of the small values of β used, we parameterized β times the soft advantages using the network outputs
+instead, so that (7-8) read as:
+                                                    X α
+              β Âi (at |st ) = fθi (at |st ) − log  π̂0 (a|st ) exp(fθi (a|st ))                        (11)
+                                                        a
+                                                                             exp(αhθ0 (at |st ) + fθi (at |st ))
+               π̂i (at |st ) =   π̂0α (at |st ) exp(β Âi (at |st ))   = P                   0              0
+                                                                                                                     (12)
+                                                                             a0 exp((αhθ0 (a |st ) + fθi (a |st ))
+
+When reporting results for the navigation and laser-tag sets of tasks, we normalized the results by the best
+performance of a standard A3C agent on a task by task basis, to account for different rewards scales across tasks.
+
+
+C     Detailed learning curves
+
+
+
+
+Figure 5: Scores on the 8 different tasks of the navigation suite. Top two rows show the results
+with the task specific policies, bottom two rows show the results with the distilled policy. For each
+algorithm, results for the best set of hyperparameters are reported, as obtained by maximizing the
+averaged (over tasks and runs) areas under curves. For each algorithm, the 4 thin curves correspond
+to the 4 runs. The average over these runs is shown in bold. The x-axis shows the total number of
+training environment steps for each task.
+
+
+
+                                                                 12
+Figure 6: Scores on the 4 different tasks of the navigation suite. Top row shows the results with the
+task specific policies, bottom row shows the results with the distilled policy. For each algorithm,
+results for the best set of hyperparameters are reported, as obtained by maximizing the averaged (over
+tasks and seeds) area under curve. For each algorithm, the 4 curves correspond to the 4 different
+seeds. The average over these seeds is shown in bold. The x-axis shows the total number of training
+environment steps for the corresponding task.
+
+
+
+
+Figure 7: Scores on the 8 different tasks of the laser-tag suite. Only results with the task policies were
+computed for this set of tasks. For each algorithm, results for the best set of hyperparameters are
+reported, as obtained by maximizing the averaged (over tasks and seeds) area under curve. For each
+algorithm, the 4 curves correspond to the 4 different seeds. The average over these seeds is shown in
+bold. The x-axis shows the total number of training environment steps for the corresponding task.
+
+
+
+
+                                                   13
+

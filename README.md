@@ -1,11 +1,11 @@
 # Paper Reading Notes
 
-本仓库收录人工整理的论文原文、可检索文本、论文概要、中文详细解读与关键页面截图，主题主要覆盖 AI 安全和 Triton/GPU 编译。
+本仓库收录人工整理的论文原文、可检索文本、论文概要、中文详细解读与关键页面截图，主题覆盖 AI 安全、强化学习与知识蒸馏，以及 Triton/GPU 编译。
 
 ## 阅读索引
 
 - [AI 安全论文阅读索引](AI安全论文阅读索引.md)
-- [AI 安全论文详细解读索引](AI安全论文详细解读索引.md)
+- [强化学习与蒸馏论文阅读索引](强化学习与蒸馏论文阅读索引.md)
 - [Triton 论文阅读索引](Triton论文阅读索引.md)
 
 ## AI 安全论文
@@ -24,6 +24,19 @@
 | 2025 | [`emergent_misalignment`](emergent_misalignment/) | Emergent Misalignment |
 | 2025 | [`shade_arena`](shade_arena/) | SHADE-Arena |
 | 2026 | [`exploitgym`](exploitgym/) | ExploitGym |
+
+## 强化学习与知识蒸馏论文
+
+| 时间 | 目录 | 论文 |
+|---|---|---|
+| 2015 | [`deep_q_network`](deep_q_network/) | Human-level Control through Deep Reinforcement Learning |
+| 2015 | [`knowledge_distillation`](knowledge_distillation/) | Distilling the Knowledge in a Neural Network |
+| 2016 | [`policy_distillation`](policy_distillation/) | Policy Distillation |
+| 2017 | [`proximal_policy_optimization`](proximal_policy_optimization/) | Proximal Policy Optimization Algorithms |
+| 2017 | [`distral`](distral/) | Distral: Robust Multitask Reinforcement Learning |
+| 2017 | [`human_preferences_rl`](human_preferences_rl/) | Deep Reinforcement Learning from Human Preferences |
+| 2018 | [`soft_actor_critic`](soft_actor_critic/) | Soft Actor-Critic |
+| 2020 | [`muzero`](muzero/) | Mastering Atari, Go, Chess and Shogi by Planning with a Learned Model |
 
 ## Triton 与 GPU 编译论文
 

@@ -1,0 +1,662 @@
+                                                  Soft Actor-Critic:
+                         Off-Policy Maximum Entropy Deep Reinforcement
+                                  Learning with a Stochastic Actor
+
+
+                            Tuomas Haarnoja 1 Aurick Zhou 1 Pieter Abbeel 1 Sergey Levine 1
+
+
+                           Abstract                                 networks holds the promise of automating a wide range of
+       Model-free deep reinforcement learning (RL) al-              decision making and control tasks, but widespread adoption
+       gorithms have been demonstrated on a range of                of these methods in real-world domains has been hampered
+       challenging decision making and control tasks.               by two major challenges. First, model-free deep RL meth-
+       However, these methods typically suffer from two             ods are notoriously expensive in terms of their sample com-
+       major challenges: very high sample complexity                plexity. Even relatively simple tasks can require millions of
+       and brittle convergence properties, which necessi-           steps of data collection, and complex behaviors with high-
+       tate meticulous hyperparameter tuning. Both of               dimensional observations might need substantially more.
+       these challenges severely limit the applicability            Second, these methods are often brittle with respect to their
+       of such methods to complex, real-world domains.              hyperparameters: learning rates, exploration constants, and
+       In this paper, we propose soft actor-critic, an off-         other settings must be set carefully for different problem
+       policy actor-critic deep RL algorithm based on the           settings to achieve good results. Both of these challenges
+       maximum entropy reinforcement learning frame-                severely limit the applicability of model-free deep RL to
+       work. In this framework, the actor aims to maxi-             real-world tasks.
+       mize expected reward while also maximizing en-               One cause for the poor sample efficiency of deep RL meth-
+       tropy. That is, to succeed at the task while acting          ods is on-policy learning: some of the most commonly used
+       as randomly as possible. Prior deep RL methods               deep RL algorithms, such as TRPO (Schulman et al., 2015),
+       based on this framework have been formulated                 PPO (Schulman et al., 2017b) or A3C (Mnih et al., 2016),
+       as Q-learning methods. By combining off-policy               require new samples to be collected for each gradient step.
+       updates with a stable stochastic actor-critic formu-         This quickly becomes extravagantly expensive, as the num-
+       lation, our method achieves state-of-the-art per-            ber of gradient steps and samples per step needed to learn
+       formance on a range of continuous control bench-             an effective policy increases with task complexity. Off-
+       mark tasks, outperforming prior on-policy and                policy algorithms aim to reuse past experience. This is not
+       off-policy methods. Furthermore, we demonstrate              directly feasible with conventional policy gradient formula-
+       that, in contrast to other off-policy algorithms, our        tions, but is relatively straightforward for Q-learning based
+       approach is very stable, achieving very similar              methods (Mnih et al., 2015). Unfortunately, the combina-
+       performance across different random seeds.                   tion of off-policy learning and high-dimensional, nonlinear
+                                                                    function approximation with neural networks presents a ma-
+                                                                    jor challenge for stability and convergence (Bhatnagar et al.,
+1. Introduction                                                     2009). This challenge is further exacerbated in continuous
+Model-free deep reinforcement learning (RL) algorithms              state and action spaces, where a separate actor network is
+have been applied in a range of challenging domains, from           often used to perform the maximization in Q-learning. A
+games (Mnih et al., 2013; Silver et al., 2016) to robotic           commonly used algorithm in such settings, deep determinis-
+control (Schulman et al., 2015). The combination of RL              tic policy gradient (DDPG) (Lillicrap et al., 2015), provides
+and high-capacity function approximators such as neural             for sample-efficient learning but is notoriously challenging
+                                                                    to use due to its extreme brittleness and hyperparameter
+   1
+    Berkeley Artificial Intelligence Research, University of Cal-   sensitivity (Duan et al., 2016; Henderson et al., 2017).
+ifornia, Berkeley, USA. Correspondence to: Tuomas Haarnoja
+<haarnoja@berkeley.edu>.                                            We explore how to design an efficient and stable model-
+                                                                    free deep RL algorithm for continuous state and action
+Proceedings of the 35 th International Conference on Machine        spaces. To that end, we draw on the maximum entropy
+Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018
+by the author(s).                                                   framework, which augments the standard maximum reward
+                                                         Soft Actor-Critic
+
+reinforcement learning objective with an entropy maximiza-         starting from policy iteration, which alternates between pol-
+tion term (Ziebart et al., 2008; Toussaint, 2009; Rawlik et al.,   icy evaluation—computing the value function for a policy—
+2012; Fox et al., 2016; Haarnoja et al., 2017). Maximum en-        and policy improvement—using the value function to obtain
+tropy reinforcement learning alters the RL objective, though       a better policy (Barto et al., 1983; Sutton & Barto, 1998). In
+the original objective can be recovered using a tempera-           large-scale reinforcement learning problems, it is typically
+ture parameter (Haarnoja et al., 2017). More importantly,          impractical to run either of these steps to convergence, and
+the maximum entropy formulation provides a substantial             instead the value function and policy are optimized jointly.
+improvement in exploration and robustness: as discussed            In this case, the policy is referred to as the actor, and the
+by Ziebart (2010), maximum entropy policies are robust             value function as the critic. Many actor-critic algorithms
+in the face of model and estimation errors, and as demon-          build on the standard, on-policy policy gradient formulation
+strated by (Haarnoja et al., 2017), they improve exploration       to update the actor (Peters & Schaal, 2008), and many of
+by acquiring diverse behaviors. Prior work has proposed            them also consider the entropy of the policy, but instead of
+model-free deep RL algorithms that perform on-policy learn-        maximizing the entropy, they use it as an regularizer (Schul-
+ing with entropy maximization (O’Donoghue et al., 2016),           man et al., 2017b; 2015; Mnih et al., 2016; Gruslys et al.,
+as well as off-policy methods based on soft Q-learning and         2017). On-policy training tends to improve stability but
+its variants (Schulman et al., 2017a; Nachum et al., 2017a;        results in poor sample complexity.
+Haarnoja et al., 2017). However, the on-policy variants suf-
+                                                                   There have been efforts to increase the sample efficiency
+fer from poor sample complexity for the reasons discussed
+                                                                   while retaining robustness by incorporating off-policy sam-
+above, while the off-policy variants require complex approx-
+                                                                   ples and by using higher order variance reduction tech-
+imate inference procedures in continuous action spaces.
+                                                                   niques (O’Donoghue et al., 2016; Gu et al., 2016). How-
+In this paper, we demonstrate that we can devise an off-           ever, fully off-policy algorithms still attain better effi-
+policy maximum entropy actor-critic algorithm, which we            ciency. A particularly popular off-policy actor-critic method,
+call soft actor-critic (SAC), which provides for both sample-      DDPG (Lillicrap et al., 2015), which is a deep variant of the
+efficient learning and stability. This algorithm extends read-     deterministic policy gradient (Silver et al., 2014) algorithm,
+ily to very complex, high-dimensional tasks, such as the           uses a Q-function estimator to enable off-policy learning,
+Humanoid benchmark (Duan et al., 2016) with 21 action              and a deterministic actor that maximizes this Q-function.
+dimensions, where off-policy methods such as DDPG typi-            As such, this method can be viewed both as a determinis-
+cally struggle to obtain good results (Gu et al., 2016). SAC       tic actor-critic algorithm and an approximate Q-learning
+also avoids the complexity and potential instability associ-       algorithm. Unfortunately, the interplay between the deter-
+ated with approximate inference in prior off-policy maxi-          ministic actor network and the Q-function typically makes
+mum entropy algorithms based on soft Q-learning (Haarnoja          DDPG extremely difficult to stabilize and brittle to hyperpa-
+et al., 2017). We present a convergence proof for policy           rameter settings (Duan et al., 2016; Henderson et al., 2017).
+iteration in the maximum entropy framework, and then in-           As a consequence, it is difficult to extend DDPG to complex,
+troduce a new algorithm based on an approximation to this          high-dimensional tasks, and on-policy policy gradient meth-
+procedure that can be practically implemented with deep            ods still tend to produce the best results in such settings (Gu
+neural networks, which we call soft actor-critic. We present       et al., 2016). Our method instead combines off-policy actor-
+empirical results that show that soft actor-critic attains a       critic training with a stochastic actor, and further aims to
+substantial improvement in both performance and sample             maximize the entropy of this actor with an entropy maxi-
+efficiency over both off-policy and on-policy prior methods.       mization objective. We find that this actually results in a
+We also compare to twin delayed deep deterministic (TD3)           considerably more stable and scalable algorithm that, in
+policy gradient algorithm (Fujimoto et al., 2018), which is        practice, exceeds both the efficiency and final performance
+a concurrent work that proposes a deterministic algorithm          of DDPG. A similar method can be derived as a zero-step
+that substantially improves on DDPG.                               special case of stochastic value gradients (SVG(0)) (Heess
+                                                                   et al., 2015). However, SVG(0) differs from our method in
+2. Related Work                                                    that it optimizes the standard maximum expected return ob-
+                                                                   jective, and it does not make use of a separate value network,
+Our soft actor-critic algorithm incorporates three key in-         which we found to make training more stable.
+gredients: an actor-critic architecture with separate policy
+                                                                   Maximum entropy reinforcement learning optimizes poli-
+and value function networks, an off-policy formulation that
+                                                                   cies to maximize both the expected return and the ex-
+enables reuse of previously collected data for efficiency, and
+                                                                   pected entropy of the policy. This framework has been
+entropy maximization to enable stability and exploration.
+                                                                   used in many contexts, from inverse reinforcement learn-
+We review prior works that draw on some of these ideas in
+                                                                   ing (Ziebart et al., 2008) to optimal control (Todorov, 2008;
+this section. Actor-critic algorithms are typically derived
+                                                                   Toussaint, 2009; Rawlik et al., 2012). In guided policy
+                                                        Soft Actor-Critic
+
+search (Levine & Koltun, 2013; Levine et al., 2016), the          eral maximum entropy objective (see e.g. Ziebart (2010)),
+maximum entropy distribution is used to guide policy learn-       which favors stochastic policies by augmenting the objective
+ing towards high-reward regions. More recently, several           with the expected entropy of the policy over ρπ (st ):
+papers have noted the connection between Q-learning and
+                                                                             T
+policy gradient methods in the framework of maximum en-                      X
+tropy learning (O’Donoghue et al., 2016; Haarnoja et al.,           J(π) =         E(st ,at )∼ρπ [r(st , at ) + αH(π( · |st ))] . (1)
+                                                                             t=0
+2017; Nachum et al., 2017a; Schulman et al., 2017a). While
+most of the prior model-free works assume a discrete action       The temperature parameter α determines the relative im-
+space, Nachum et al. (2017b) approximate the maximum en-          portance of the entropy term against the reward, and thus
+tropy distribution with a Gaussian and Haarnoja et al. (2017)     controls the stochasticity of the optimal policy. The maxi-
+with a sampling network trained to draw samples from the          mum entropy objective differs from the standard maximum
+optimal policy. Although the soft Q-learning algorithm pro-       expected reward objective used in conventional reinforce-
+posed by Haarnoja et al. (2017) has a value function and          ment learning, though the conventional objective can be
+actor network, it is not a true actor-critic algorithm: the       recovered in the limit as α → 0. For the rest of this paper,
+Q-function is estimating the optimal Q-function, and the          we will omit writing the temperature explicitly, as it can
+actor does not directly affect the Q-function except through      always be subsumed into the reward by scaling it by α−1 .
+the data distribution. Hence, Haarnoja et al. (2017) moti-
+vates the actor network as an approximate sampler, rather         This objective has a number of conceptual and practical
+than the actor in an actor-critic algorithm. Crucially, the       advantages. First, the policy is incentivized to explore more
+convergence of this method hinges on how well this sampler        widely, while giving up on clearly unpromising avenues.
+approximates the true posterior. In contrast, we prove that       Second, the policy can capture multiple modes of near-
+our method converges to the optimal policy from a given           optimal behavior. In problem settings where multiple ac-
+policy class, regardless of the policy parameterization. Fur-     tions seem equally attractive, the policy will commit equal
+thermore, these prior maximum entropy methods generally           probability mass to those actions. Lastly, prior work has ob-
+do not exceed the performance of state-of-the-art off-policy      served improved exploration with this objective (Haarnoja
+algorithms, such as DDPG, when learning from scratch,             et al., 2017; Schulman et al., 2017a), and in our experi-
+though they may have other benefits, such as improved ex-         ments, we observe that it considerably improves learning
+ploration and ease of fine-tuning. In our experiments, we         speed over state-of-art methods that optimize the conven-
+demonstrate that our soft actor-critic algorithm does in fact     tional RL objective function. We can extend the objective to
+exceed the performance of prior state-of-the-art off-policy       infinite horizon problems by introducing a discount factor γ
+deep RL methods by a wide margin.                                 to ensure that the sum of expected rewards and entropies is
+                                                                  finite. Writing down the maximum entropy objective for the
+                                                                  infinite horizon discounted case is more involved (Thomas,
+3. Preliminaries
+                                                                  2014) and is deferred to Appendix A.
+We first introduce notation and summarize the standard and
+                                                                  Prior methods have proposed directly solving for the op-
+maximum entropy reinforcement learning frameworks.
+                                                                  timal Q-function, from which the optimal policy can be
+                                                                  recovered (Ziebart et al., 2008; Fox et al., 2016; Haarnoja
+3.1. Notation
+                                                                  et al., 2017). We will discuss how we can devise a soft
+We address policy learning in continuous action spaces.           actor-critic algorithm through a policy iteration formulation,
+We consider an infinite-horizon Markov decision process           where we instead evaluate the Q-function of the current
+(MDP), defined by the tuple (S, A, p, r), where the state         policy and update the policy through an off-policy gradient
+space S and the action space A are continuous, and the            update. Though such algorithms have previously been pro-
+unknown state transition probability p : S × S × A →              posed for conventional reinforcement learning, our method
+[0, ∞) represents the probability density of the next state       is, to our knowledge, the first off-policy actor-critic method
+st+1 ∈ S given the current state st ∈ S and action at ∈ A.        in the maximum entropy reinforcement learning framework.
+The environment emits a bounded reward r : S × A →
+[rmin , rmax ] on each transition. We will use ρπ (st ) and       4. From Soft Policy Iteration to Soft
+ρπ (st , at ) to denote the state and state-action marginals of
+the trajectory distribution induced by a policy π(at |st ).
+                                                                     Actor-Critic
+                                                                  Our off-policy soft actor-critic algorithm can be derived
+3.2. Maximum Entropy Reinforcement Learning                       starting from a maximum entropy variant of the policy it-
+                                                                  eration method. We will first present this derivation, verify
+Standard    RL maximizes the expected sum of rewards
+P                                                                 that the corresponding algorithm converges to the optimal
+  t E(st ,at )∼ρπ [r(st , at )]. We will consider a more gen-     policy from its density class, and then present a practical
+                                                              Soft Actor-Critic
+
+deep reinforcement learning algorithm based on this theory.             The partition function Z πold (st ) normalizes the distribution,
+                                                                        and while it is intractable in general, it does not contribute to
+4.1. Derivation of Soft Policy Iteration                                the gradient with respect to the new policy and can thus be
+                                                                        ignored, as noted in the next section. For this projection, we
+We will begin by deriving soft policy iteration, a general al-          can show that the new, projected policy has a higher value
+gorithm for learning optimal maximum entropy policies that              than the old policy with respect to the objective in Equa-
+alternates between policy evaluation and policy improve-                tion 1. We formalize this result in Lemma 2.
+ment in the maximum entropy framework. Our derivation
+is based on a tabular setting, to enable theoretical analysis           Lemma 2 (Soft Policy Improvement). Let πold ∈ Π and let
+and convergence guarantees, and we extend this method                   πnew be the optimizer of the minimization problem defined
+into the general continuous setting in the next section. We             in Equation 4. Then Qπnew (st , at ) ≥ Qπold (st , at ) for all
+will show that soft policy iteration converges to the optimal           (st , at ) ∈ S × A with |A| < ∞.
+policy within a set of policies which might correspond, for
+instance, to a set of parameterized densities.                          Proof. See Appendix B.2.
+In the policy evaluation step of soft policy iteration, we
+                                                                        The full soft policy iteration algorithm alternates between
+wish to compute the value of a policy π according to the
+                                                                        the soft policy evaluation and the soft policy improvement
+maximum entropy objective in Equation 1. For a fixed
+                                                                        steps, and it will provably converge to the optimal maxi-
+policy, the soft Q-value can be computed iteratively, starting
+                                                                        mum entropy policy among the policies in Π (Theorem 1).
+from any function Q : S × A → R and repeatedly applying
+                                                                        Although this algorithm will provably find the optimal solu-
+a modified Bellman backup operator T π given by
+                                                                        tion, we can perform it in its exact form only in the tabular
+   T π Q(st , at ) , r(st , at ) + γ Est+1 ∼p [V (st+1 )] ,      (2)    case. Therefore, we will next approximate the algorithm for
+                                                                        continuous domains, where we need to rely on a function
+where
+                                                                        approximator to represent the Q-values, and running the
+         V (st ) = Eat ∼π [Q(st , at ) − log π(at |st )]         (3)    two steps until convergence would be computationally too
+                                                                        expensive. The approximation gives rise to a new practical
+is the soft state value function. We can obtain the soft value
+                                                                        algorithm, called soft actor-critic.
+function for any policy π by repeatedly applying T π as
+formalized below.                                                       Theorem 1 (Soft Policy Iteration). Repeated application of
+Lemma 1 (Soft Policy Evaluation). Consider the soft Bell-               soft policy evaluation and soft policy improvement from any
+                                                                                                                          ∗
+
+man backup operator T π in Equation 2 and a mapping                     π ∈ Π converges to a policy π ∗ such that Qπ (st , at ) ≥
+Q0 : S ×A → R with |A| < ∞, and define Qk+1 = T π Qk .                  Qπ (st , at ) for all π ∈ Π and (st , at ) ∈ S × A, assuming
+Then the sequence Qk will converge to the soft Q-value of               |A| < ∞.
+π as k → ∞.
+                                                                        Proof. See Appendix B.3.
+Proof. See Appendix B.1.
+                                                                        4.2. Soft Actor-Critic
+In the policy improvement step, we update the policy to-                As discussed above, large continuous domains require us to
+wards the exponential of the new Q-function. This particular            derive a practical approximation to soft policy iteration. To
+choice of update can be guaranteed to result in an improved             that end, we will use function approximators for both the
+policy in terms of its soft value. Since in practice we prefer          Q-function and the policy, and instead of running evaluation
+policies that are tractable, we will additionally restrict the          and improvement to convergence, alternate between opti-
+policy to some set of policies Π, which can correspond, for             mizing both networks with stochastic gradient descent. We
+example, to a parameterized family of distributions such as             will consider a parameterized state value function Vψ (st ),
+Gaussians. To account for the constraint that π ∈ Π, we                 soft Q-function Qθ (st , at ), and a tractable policy πφ (at |st ).
+project the improved policy into the desired set of policies.           The parameters of these networks are ψ, θ, and φ. For
+While in principle we could choose any projection, it will              example, the value functions can be modeled as expressive
+turn out to be convenient to use the information projection             neural networks, and the policy as a Gaussian with mean
+defined in terms of the Kullback-Leibler divergence. In the             and covariance given by neural networks. We will next
+other words, in the policy improvement step, for each state,            derive update rules for these parameter vectors.
+we update the policy according to
+                                                                        The state value function approximates the soft value. There
+                                       exp (Qπold (st , · ))
+                                                            
+                             0                                          is no need in principle to include a separate function approx-
+ πnew = arg min     DKL π ( · |st )                            .
+              π 0 ∈Π                        Z πold (st )                imator for the state value, since it is related to the Q-function
+                                                             (4)        and policy according to Equation 3. This quantity can be
+                                                                           Soft Actor-Critic
+
+estimated from a single action sample from the current pol-                           Algorithm 1 Soft Actor-Critic
+icy without introducing a bias, but in practice, including a                            Initialize parameter vectors ψ, ψ̄, θ, φ.
+separate function approximator for the soft value can stabi-                            for each iteration do
+lize training and is convenient to train simultaneously with                               for each environment step do
+the other networks. The soft value function is trained to                                     at ∼ πφ (at |st )
+minimize the squared residual error                                                           st+1 ∼ p(st+1 |st , at )
+                  h
+                      1
+                                                                               2 i           D ← D ∪ {(st , at , r(st , at ), st+1 )}
+JV (ψ) = Est ∼D       2   Vψ (st ) − Eat ∼πφ [Qθ (st , at ) − log πφ (at |st )]
+                                                                                           end for
+                                                                               (5)         for each gradient step do
+                                                                                              ψ ← ψ − λV ∇   ˆ ψ JV (ψ)
+where D is the distribution of previously sampled states and
+actions, or a replay buffer. The gradient of Equation 5 can                                   θi ← θi − λQ ∇  ˆ θ JQ (θi ) for i ∈ {1, 2}
+                                                                                                                 i
+
+be estimated with an unbiased estimator                                                                     ˆ
+                                                                                              φ ← φ − λπ ∇φ Jπ (φ)
+                                                                                              ψ̄ ← τ ψ + (1 − τ )ψ̄
+ˆ ψ JV (ψ) = ∇ψ Vψ (st ) (Vψ (st ) − Qθ (st , at ) + log πφ (at |st )) ,
+∇
+                                                                                           end for
+                                                                               (6)      end for
+where the actions are sampled according to the current pol-
+icy, instead of the replay buffer. The soft Q-function param-
+eters can be trained to minimize the soft Bellman residual                            where t is an input noise vector, sampled from some fixed
+                                                         2                        distribution, such as a spherical Gaussian. We can now
+                           1                                                          rewrite the objective in Equation 10 as
+   JQ (θ) = E(st ,at )∼D       Qθ (st , at ) − Q̂(st , at )     ,
+                           2
+                                                                (7)                   Jπ (φ) = Est ∼D,t ∼N [log πφ (fφ (t ; st )|st ) − Qθ (st , fφ (t ; st ))] ,
+                                                                                                                                                              (12)
+with
+                                                       
+     Q̂(st , at ) = r(st , at ) + γ Est+1 ∼p Vψ̄ (st+1 ) ,                     (8)    where πφ is defined implicitly in terms of fφ , and we have
+                                                                                      noted that the partition function is independent of φ and can
+which again can be optimized with stochastic gradients                                thus be omitted. We can approximate the gradient of Equa-
+ˆ θ JQ (θ) = ∇θ Qθ (at , st ) Qθ (st , at ) − r(st , at ) − γVψ̄ (st+1 ) .
+                                                                                     tion 12 with
+∇
+                                                                               (9)    ˆ φ Jπ (φ) = ∇φ log πφ (at |st )
+                                                                                      ∇
+The update makes use of a target value network Vψ̄ , where                                   + (∇at log πφ (at |st ) − ∇at Q(st , at ))∇φ fφ (t ; st ),
+ψ̄ can be an exponentially moving average of the value                                                                                             (13)
+network weights, which has been shown to stabilize train-
+ing (Mnih et al., 2015). Alternatively, we can update the                             where at is evaluated at fφ (t ; st ). This unbiased gradient
+target weights to match the current value function weights                            estimator extends the DDPG style policy gradients (Lillicrap
+periodically (see Appendix E). Finally, the policy param-                             et al., 2015) to any tractable stochastic policy.
+eters can be learned by directly minimizing the expected                              Our algorithm also makes use of two Q-functions to mitigate
+KL-divergence in Equation 4:                                                          positive bias in the policy improvement step that is known to
+                      
+                                      exp (Qθ (st , · ))
+                                                                                    degrade performance of value based methods (Hasselt, 2010;
+ Jπ (φ) = Est ∼D DKL πφ ( · |st )                           .                         Fujimoto et al., 2018). In particular, we parameterize two Q-
+                                          Zθ (st )
+                                                                                      functions, with parameters θi , and train them independently
+                                                         (10)
+                                                                                      to optimize JQ (θi ). We then use the minimum of the the
+There are several options for minimizing Jπ . A typical                               Q-functions for the value gradient in Equation 6 and pol-
+solution for policy gradient methods is to use the likelihood                         icy gradient in Equation 13, as proposed by Fujimoto et al.
+ratio gradient estimator (Williams, 1992), which does not                             (2018). Although our algorithm can learn challenging tasks,
+require backpropagating the gradient through the policy and                           including a 21-dimensional Humanoid, using just a single
+the target density networks. However, in our case, the target                         Q-function, we found two Q-functions significantly speed
+density is the Q-function, which is represented by a neural                           up training, especially on harder tasks. The complete algo-
+network an can be differentiated, and it is thus convenient                           rithm is described in Algorithm 1. The method alternates
+to apply the reparameterization trick instead, resulting in a                         between collecting experience from the environment with
+lower variance estimator. To that end, we reparameterize                              the current policy and updating the function approximators
+the policy using a neural network transformation                                      using the stochastic gradients from batches sampled from a
+                                                                                      replay buffer. In practice, we take a single environment step
+                               at = fφ (t ; st ),                           (11)     followed by one or several gradient steps (see Appendix D
+                                                                                                                  Soft Actor-Critic
+                                                 Hopper-v1                                                              Walker2d-v1                                                                HalfCheetah-v1
+                     4000                                                                            6000
+                                                                                                                                                                            15000
+                                                                                                     5000
+                     3000
+    average return
+
+
+
+
+                                                                                    average return
+
+
+
+
+                                                                                                                                                             average return
+                                                                                                     4000
+                                                                                                                                                                            10000
+                     2000                                                                            3000
+
+                                                                                                     2000                                                                     5000
+                     1000
+                                                                                                     1000
+                        0                                                                                                                                                        0
+                                                                                                        0
+                            0.0     0.2          0.4         0.6     0.8    1.0                             0.0   0.2    0.4      0.6          0.8   1.0                             0.0    0.5   1.0       1.5       2.0       2.5   3.0
+                                                 million steps                                                           million steps                                                               million steps
+
+                                        (a) Hopper-v1                                                             (b) Walker2d-v1                                                          (c) HalfCheetah-v1
+                                                   Ant-v1                                                               Humanoid-v1                                                               Humanoid (rllab)
+
+                                                                                                     8000                                                                                    SAC
+                     6000                                                                                                                                                     6000
+                                                                                                                                                                                             DDPG
+                                                                                                                                                                                             PPO
+  average return
+
+
+
+
+                                                                                  average return
+
+
+
+
+                                                                                                                                                           average return
+                                                                                                     6000                                                                                    SQL
+                     4000
+                                                                                                                                                                              4000
+                                                                                                                                                                                             TD3 (concurrent)
+                                                                                                     4000
+                     2000
+                                                                                                                                                                              2000
+                                                                                                     2000
+                        0
+                                                                                                        0                                                                        0
+                            0.0   0.5      1.0         1.5     2.0    2.5   3.0                             0     2      4         6           8     10                              0        2         4         6         8         10
+                                             million steps                                                              million steps                                                               million steps
+
+                                          (d) Ant-v1                                                              (e) Humanoid-v1                                                          (f) Humanoid (rllab)
+
+Figure 1. Training curves on continuous control benchmarks. Soft actor-critic (yellow) performs consistently across all tasks and
+outperforming both on-policy and off-policy methods in the most challenging tasks.
+
+
+for all hyperparameter). Using off-policy data from a replay                                                                   dient (DDPG) (Lillicrap et al., 2015), an algorithm that
+buffer is feasible because both value estimators and the pol-                                                                  is regarded as one of the more efficient off-policy deep
+icy can be trained entirely on off-policy data. The algorithm                                                                  RL methods (Duan et al., 2016); proximal policy optimiza-
+is agnostic to the parameterization of the policy, as long as                                                                  tion (PPO) (Schulman et al., 2017b), a stable and effective
+it can be evaluated for any arbitrary state-action tuple.                                                                      on-policy policy gradient algorithm; and soft Q-learning
+                                                                                                                               (SQL) (Haarnoja et al., 2017), a recent off-policy algorithm
+5. Experiments                                                                                                                 for learning maximum entropy policies. Our SQL imple-
+                                                                                                                               mentation also includes two Q-functions, which we found
+The goal of our experimental evaluation is to understand                                                                       to improve its performance in most environments. We addi-
+how the sample complexity and stability of our method                                                                          tionally compare to twin delayed deep deterministic policy
+compares with prior off-policy and on-policy deep rein-                                                                        gradient algorithm (TD3) (Fujimoto et al., 2018), using
+forcement learning algorithms. We compare our method                                                                           the author-provided implementation. This is an extension
+to prior techniques on a range of challenging continuous                                                                       to DDPG, proposed concurrently to our method, that first
+control tasks from the OpenAI gym benchmark suite (Brock-                                                                      applied the double Q-learning trick to continuous control
+man et al., 2016) and also on the rllab implementation of                                                                      along with other improvements. We have included trust re-
+the Humanoid task (Duan et al., 2016). Although the easier                                                                     gion path consistency learning (Trust-PCL) (Nachum et al.,
+tasks can be solved by a wide range of different algorithms,                                                                   2017b) and two other variants of SAC in Appendix E. We
+the more complex benchmarks, such as the 21-dimensional                                                                        turned off the exploration noise for evaluation for DDPG
+Humanoid (rllab), are exceptionally difficult to solve with                                                                    and PPO. For maximum entropy algorithms, which do not
+off-policy algorithms (Duan et al., 2016). The stability of                                                                    explicitly inject exploration noise, we either evaluated with
+the algorithm also plays a large role in performance: eas-                                                                     the exploration noise (SQL) or use the mean action (SAC).
+ier tasks make it more practical to tune hyperparameters                                                                       The source code of our SAC implementation1 and videos2
+to achieve good results, while the already narrow basins of                                                                    are available online.
+effective hyperparameters become prohibitively small for                                                                               1
+                                                                                                                                           github.com/haarnoja/sac
+the more sensitive algorithms on the hardest benchmarks,                                                                               2
+                                                                                                                                           sites.google.com/view/soft-actor-critic
+leading to poor performance (Gu et al., 2016).
+We compare our method to deep deterministic policy gra-
+                                                       Soft Actor-Critic
+
+5.1. Comparative Evaluation                                                                                 Humanoid (rllab)
+Figure 1 shows the total average return of evaluation rollouts                              6000
+                                                                                                       stochastic policy
+                                                                                                       deterministic policy
+during training for DDPG, PPO, and TD3. We train five
+different instances of each algorithm with different random
+
+
+
+
+                                                                           average return
+seeds, with each performing one evaluation rollout every                                    4000
+
+1000 environment steps. The solid curves corresponds to the
+mean and the shaded region to the minimum and maximum                                       2000
+returns over the five trials.
+The results show that, overall, SAC performs comparably                                        0
+to the baseline methods on the easier tasks and outperforms                                        0   2         4
+                                                                                                                million steps
+                                                                                                                              6   8   10
+
+them on the harder tasks with a large margin, both in terms
+of learning speed and the final performance. For example,
+                                                                 Figure 2. Comparison of SAC (blue) and a deterministic variant of
+DDPG fails to make any progress on Ant-v1, Humanoid-             SAC (red) in terms of the stability of individual random seeds on
+v1, and Humanoid (rllab), a result that is corroborated by       the Humanoid (rllab) benchmark. The comparison indicates that
+prior work (Gu et al., 2016; Duan et al., 2016). SAC also        stochasticity can stabilize training as the variability between the
+learns considerably faster than PPO as a consequence of          seeds becomes much higher with a deterministic policy.
+the large batch sizes PPO needs to learn stably on more
+high-dimensional and complex tasks. Another maximum
+entropy RL algorithm, SQL, can also learn all tasks, but it      seeds. Soft actor-critic performs much more consistently,
+is slower than SAC and has worse asymptotic performance.         while the deterministic variant exhibits very high variability
+The quantitative results attained by SAC in our experiments      across seeds, indicating substantially worse stability. As
+also compare very favorably to results reported by other         evident from the figure, learning a stochastic policy with
+methods in prior work (Duan et al., 2016; Gu et al., 2016;       entropy maximization can drastically stabilize training. This
+Henderson et al., 2017), indicating that both the sample         becomes especially important with harder tasks, where tun-
+efficiency and final performance of SAC on these benchmark       ing hyperparameters is challenging. In this comparison, we
+tasks exceeds the state of the art. All hyperparameters used     updated the target value network weights with hard updates,
+in this experiment for SAC are listed in Appendix D.             by periodically overwriting the target network parameters
+                                                                 to match the current value network (see Appendix E for
+5.2. Ablation Study                                              a comparison of average performance on all benchmark
+                                                                 tasks).
+The results in the previous section suggest that algorithms
+based on the maximum entropy principle can outperform            Policy evaluation. Since SAC converges to stochastic
+conventional RL methods on challenging tasks such as the         policies, it is often beneficial to make the final policy deter-
+humanoid tasks. In this section, we further examine which        ministic at the end for best performance. For evaluation, we
+particular components of SAC are important for good perfor-      approximate the maximum a posteriori action by choosing
+mance. We also examine how sensitive SAC is to some of           the mean of the policy distribution. Figure 3(a) compares
+the most important hyperparameters, namely reward scaling        training returns to evaluation returns obtained with this strat-
+and target value update smoothing constant.                      egy indicating that deterministic evaluation can yield better
+                                                                 performance. It should be noted that all of the training
+Stochastic vs. deterministic policy. Soft actor-critic           curves depict the sum of rewards, which is different from
+learns stochastic policies via a maximum entropy objec-          the objective optimized by SAC and other maximum en-
+tive. The entropy appears in both the policy and value           tropy RL algorithms, including SQL and Trust-PCL, which
+function. In the policy, it prevents premature convergence of    maximize also the entropy of the policy.
+the policy variance (Equation 10). In the value function, it
+encourages exploration by increasing the value of regions of     Reward scale. Soft actor-critic is particularly sensitive to
+state space that lead to high-entropy behavior (Equation 5).     the scaling of the reward signal, because it serves the role
+To compare how the stochasticity of the policy and entropy       of the temperature of the energy-based optimal policy and
+maximization affects the performance, we compare to a            thus controls its stochasticity. Larger reward magnitudes
+deterministic variant of SAC that does not maximize the en-      correspond to lower entries. Figure 3(b) shows how learn-
+tropy and that closely resembles DDPG, with the exception        ing performance changes when the reward scale is varied:
+of having two Q-functions, using hard target updates, not        For small reward magnitudes, the policy becomes nearly
+having a separate target actor, and using fixed rather than      uniform, and consequently fails to exploit the reward signal,
+learned exploration noise. Figure 2 compares five individual     resulting in substantial degradation of performance. For
+runs with both variants, initialized with different random       large reward magnitudes, the model learns quickly at first,
+                                                                                                                  Soft Actor-Critic
+                                                Ant-v1                                                                         Ant-v1                                                               Ant-v1
+                                                                                                                   1                                                       6000
+                    6000                                                                            6000
+                                                                                                                   3
+                                                                                                                   10                                                      4000
+   average return
+
+
+
+
+                                                                                   average return
+
+
+
+
+                                                                                                                                                          average return
+                    4000                                                                            4000           30                                                                                              0.0001
+                                                                                                                   100                                                     2000                                    0.001
+                                                                                                                                                                                                                   0.01
+                    2000                                                                            2000                                                                                                           0.1
+                                                                                                                                                                              0
+
+                                                  deterministic evaluation
+                       0                                                                               0                                                          −2000
+                                                  stochastic evaluation
+
+                           0.0   0.5      1.0    1.5      2.0     2.5        3.0                           0.0   0.5     1.0    1.5     2.0   2.5   3.0                           0.0   0.5   1.0    1.5     2.0   2.5      3.0
+                                            million steps                                                                  million steps                                                        million steps
+
+                                       (a) Evaluation                                                             (b) Reward Scale                                         (c) Target Smoothing Coefficient (τ )
+
+Figure 3. Sensitivity of soft actor-critic to selected hyperparameters on Ant-v1 task. (a) Evaluating the policy using the mean action
+generally results in a higher return. Note that the policy is trained to maximize also the entropy, and the mean action does not, in general,
+correspond the optimal action for the maximum return objective. (b) Soft actor-critic is sensitive to reward scaling since it is related to the
+temperature of the optimal policy. The optimal reward scale varies between environments, and should be tuned for each task separately.
+(c) Target value smoothing coefficient τ is used to stabilize training. Fast moving target (large τ ) can result in instabilities (red), whereas
+slow moving target (small τ ) makes training slower (blue).
+
+
+but the policy then becomes nearly deterministic, leading                                                                         6. Conclusion
+to poor local minima due to lack of adequate exploration.
+With the right reward scaling, the model balances explo-                                                                          We present soft actor-critic (SAC), an off-policy maximum
+ration and exploitation, leading to faster learning and better                                                                    entropy deep reinforcement learning algorithm that provides
+asymptotic performance. In practice, we found reward scale                                                                        sample-efficient learning while retaining the benefits of en-
+to be the only hyperparameter that requires tuning, and its                                                                       tropy maximization and stability. Our theoretical results
+natural interpretation as the inverse of the temperature in                                                                       derive soft policy iteration, which we show to converge to
+the maximum entropy framework provides good intuition                                                                             the optimal policy. From this result, we can formulate a
+for how to adjust this parameter.                                                                                                 soft actor-critic algorithm, and we empirically show that it
+                                                                                                                                  outperforms state-of-the-art model-free deep RL methods,
+Target network update. It is common to use a separate                                                                             including the off-policy DDPG algorithm and the on-policy
+target value network that slowly tracks the actual value func-                                                                    PPO algorithm. In fact, the sample efficiency of this ap-
+tion to improve stability. We use an exponentially moving                                                                         proach actually exceeds that of DDPG by a substantial mar-
+average, with a smoothing constant τ , to update the target                                                                       gin. Our results suggest that stochastic, entropy maximizing
+value network weights as common in the prior work (Lill-                                                                          reinforcement learning algorithms can provide a promising
+icrap et al., 2015; Mnih et al., 2015). A value of one cor-                                                                       avenue for improved robustness and stability, and further
+responds to a hard update where the weights are copied                                                                            exploration of maximum entropy methods, including meth-
+directly at every iteration and zero to not updating the target                                                                   ods that incorporate second order information (e.g., trust
+at all. In Figure 3(c), we compare the performance of SAC                                                                         regions (Schulman et al., 2015)) or more expressive policy
+when τ varies. Large τ can lead to instabilities while small                                                                      classes is an exciting avenue for future work.
+τ can make training slower. However, we found the range
+of suitable values of τ to be relatively wide and we used
+the same value (0.005) across all of the tasks. In Figure 4
+                                                                                                                                  Acknowledgments
+(Appendix E) we also compare to another variant of SAC,                                                                           We would like to thank Vitchyr Pong for insightful discus-
+where instead of using exponentially moving average, we                                                                           sions and help in implementing our algorithm as well as
+copy over the current network weights directly into the tar-                                                                      providing the DDPG baseline code; Ofir Nachum for offer-
+get network every 1000 gradient steps. We found this variant                                                                      ing support in running Trust-PCL experiments; and George
+to benefit from taking more than one gradient step between                                                                        Tucker for his valuable feedback on an early version of this
+the environment steps, which can improve performance but                                                                          paper. This work was supported by Siemens and Berkeley
+also increases the computational cost.                                                                                            DeepDrive.
+                                                       Soft Actor-Critic
+
+References                                                       Levine, S. and Koltun, V. Guided policy search. In Interna-
+                                                                   tional Conference on Machine Learning (ICML), pp. 1–9,
+Barto, A. G., Sutton, R. S., and Anderson, C. W. Neuronlike
+                                                                   2013.
+  adaptive elements that can solve difficult learning con-
+  trol problems. IEEE transactions on systems, man, and          Levine, S., Finn, C., Darrell, T., and Abbeel, P. End-to-end
+  cybernetics, pp. 834–846, 1983.                                  training of deep visuomotor policies. Journal of Machine
+Bhatnagar, S., Precup, D., Silver, D., Sutton, R. S., Maei,        Learning Research, 17(39):1–40, 2016.
+  H. R., and Szepesvári, C. Convergent temporal-difference
+  learning with arbitrary smooth function approximation.         Lillicrap, T. P., Hunt, J. J., Pritzel, A., Heess, N., Erez,
+  In Advances in Neural Information Processing Systems             T., Tassa, Y., Silver, D., and Wierstra, D. Continuous
+ (NIPS), pp. 1204–1212, 2009.                                      control with deep reinforcement learning. arXiv preprint
+                                                                   arXiv:1509.02971, 2015.
+Brockman, G., Cheung, V., Pettersson, L., Schneider, J.,
+  Schulman, J., Tang, J., and Zaremba, W. OpenAI gym.            Mnih, V., Kavukcuoglu, K., Silver, D., Graves, A.,
+  arXiv preprint arXiv:1606.01540, 2016.                          Antonoglou, I., Wierstra, D., and Riedmiller, M. Playing
+                                                                  atari with deep reinforcement learning. arXiv preprint
+Duan, Y., Chen, X. Houthooft, R., Schulman, J., and Abbeel,       arXiv:1312.5602, 2013.
+  P. Benchmarking deep reinforcement learning for contin-
+  uous control. In International Conference on Machine           Mnih, V., Kavukcuoglu, K., Silver, D., Rusu, A. A., Veness,
+  Learning (ICML), 2016.                                          J., Bellemare, M. G., Graves, A., Riedmiller, M., Fidje-
+Fox, R., Pakman, A., and Tishby, N. Taming the noise in           land, A. K., Ostrovski, G., et al. Human-level control
+  reinforcement learning via soft updates. In Conference          through deep reinforcement learning. Nature, 518(7540):
+  on Uncertainty in Artificial Intelligence (UAI), 2016.          529–533, 2015.
+
+Fujimoto, S., van Hoof, H., and Meger, D. Addressing func-       Mnih, V., Badia, A. P., Mirza, M., Graves, A., Lillicrap,
+  tion approximation error in actor-critic methods. arXiv         T. P., Harley, T., Silver, D., and Kavukcuoglu, K. Asyn-
+  preprint arXiv:1802.09477, 2018.                                chronous methods for deep reinforcement learning. In
+                                                                  International Conference on Machine Learning (ICML),
+Gruslys, A., Azar, M. G., Bellemare, M. G., and Munos, R.         2016.
+  The reactor: A sample-efficient actor-critic architecture.
+  arXiv preprint arXiv:1704.04651, 2017.                         Nachum, O., Norouzi, M., Xu, K., and Schuurmans, D.
+Gu, S., Lillicrap, T., Ghahramani, Z., Turner, R. E., and          Bridging the gap between value and policy based rein-
+  Levine, S. Q-prop: Sample-efficient policy gradient with         forcement learning. In Advances in Neural Information
+  an off-policy critic. arXiv preprint arXiv:1611.02247,           Processing Systems (NIPS), pp. 2772–2782, 2017a.
+  2016.
+                                                                 Nachum, O., Norouzi, M., Xu, K., and Schuurmans, D.
+Haarnoja, T., Tang, H., Abbeel, P., and Levine, S. Rein-           Trust-PCL: An off-policy trust region method for contin-
+  forcement learning with deep energy-based policies. In           uous control. arXiv preprint arXiv:1707.01891, 2017b.
+  International Conference on Machine Learning (ICML),
+  pp. 1352–1361, 2017.                                           O’Donoghue, B., Munos, R., Kavukcuoglu, K., and Mnih, V.
+                                                                   PGQ: Combining policy gradient and Q-learning. arXiv
+Hasselt, H. V. Double Q-learning. In Advances in Neural            preprint arXiv:1611.01626, 2016.
+  Information Processing Systems (NIPS), pp. 2613–2621,
+  2010.                                                          Peters, J. and Schaal, S. Reinforcement learning of motor
+                                                                   skills with policy gradients. Neural networks, 21(4):682–
+Heess, N., Wayne, G., Silver, D., Lillicrap, T., Erez, T., and
+                                                                   697, 2008.
+  Tassa, Y. Learning continuous control policies by stochas-
+  tic value gradients. In Advances in Neural Information         Rawlik, K., Toussaint, M., and Vijayakumar, S. On stochas-
+  Processing Systems (NIPS), pp. 2944–2952, 2015.                  tic optimal control and reinforcement learning by approx-
+Henderson, P., Islam, R., Bachman, P., Pineau, J., Precup,         imate inference. Robotics: Science and Systems (RSS),
+  D., and Meger, D. Deep reinforcement learning that               2012.
+  matters. arXiv preprint arXiv:1709.06560, 2017.
+                                                                 Schulman, J., Levine, S., Abbeel, P., Jordan, M. I., and
+Kingma, D. and Ba, J. Adam: A method for stochastic                Moritz, P. Trust region policy optimization. In Inter-
+  optimization. In International Conference for Learning           national Conference on Machine Learning (ICML), pp.
+  Presentations (ICLR), 2015.                                      1889–1897, 2015.
+                                                         Soft Actor-Critic
+
+Schulman, J., Abbeel, P., and Chen, X. Equivalence be-
+  tween policy gradients and soft Q-learning. arXiv preprint
+  arXiv:1704.06440, 2017a.
+Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and
+  Klimov, O. Proximal policy optimization algorithms.
+  arXiv preprint arXiv:1707.06347, 2017b.
+
+Silver, D., Lever, G., Heess, N., Degris, T., Wierstra, D.,
+   and Riedmiller, M. Deterministic policy gradient algo-
+   rithms. In International Conference on Machine Learning
+  (ICML), 2014.
+Silver, D., Huang, A., Maddison, C. J., Guez, A., Sifre, L.,
+  van den Driessche, G., Schrittwieser, J., Antonoglou, I.,
+   Panneershelvam, V., Lanctot, M., Dieleman, S., Grewe,
+   D., Nham, J., Kalchbrenner, N., Sutskever, I., Lillicrap, T.,
+   Leach, M., Kavukcuoglu, K., Graepel, T., and Hassabis,
+   D. Mastering the game of go with deep neural networks
+   and tree search. Nature, 529(7587):484–489, Jan 2016.
+   ISSN 0028-0836. Article.
+Sutton, R. S. and Barto, A. G. Reinforcement learning: An
+  introduction, volume 1. MIT press Cambridge, 1998.
+Thomas, P. Bias in natural actor-critic algorithms. In Inter-
+  national Conference on Machine Learning (ICML), pp.
+  441–448, 2014.
+Todorov, E. General duality between optimal control and
+  estimation. In IEEE Conference on Decision and Control
+  (CDC), pp. 4286–4292. IEEE, 2008.
+
+Toussaint, M. Robot trajectory optimization using approxi-
+  mate inference. In International Conference on Machine
+  Learning (ICML), pp. 1049–1056. ACM, 2009.
+Williams, R. J. Simple statistical gradient-following algo-
+ rithms for connectionist reinforcement learning. Machine
+ learning, 8(3-4):229–256, 1992.
+
+Ziebart, B. D. Modeling purposeful adaptive behavior with
+  the principle of maximum causal entropy. Carnegie Mel-
+  lon University, 2010.
+Ziebart, B. D., Maas, A. L., Bagnell, J. A., and Dey, A. K.
+  Maximum entropy inverse reinforcement learning. In
+  AAAI Conference on Artificial Intelligence (AAAI), pp.
+  1433–1438, 2008.
+
