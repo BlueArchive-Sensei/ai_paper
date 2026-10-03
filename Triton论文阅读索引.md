@@ -8,10 +8,10 @@
 
 | 时间 | 论文 | 为什么读 | 本目录 |
 |---|---|---|---|
-| 2019-06 | *Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations*（MAPL 2019） | 奠基论文：说明 tile-level 编程模型、Triton-IR、自动并行化与 autotuning 从何而来 | [概要](triton_mapl_2019/论文概要.md) · [中文解读](triton_mapl_2019/论文中文解读.md) · [PDF](triton_mapl_2019/paper.pdf) |
-| 2024-04 | *PyTorch 2: Faster Machine Learning Through Dynamic Python Bytecode Transformation and Graph Compilation*（ASPLOS 2024） | 解释 Triton 如何成为 `torch.compile` 的 GPU 代码生成后端，并进入大规模真实模型编译链 | [概要](pytorch2_asplos_2024/论文概要.md) · [中文解读](pytorch2_asplos_2024/论文中文解读.md) · [PDF](pytorch2_asplos_2024/paper.pdf) |
-| 2025-02 | *TritonBench: Benchmarking Large Language Model Capabilities for Generating Triton Operators*（arXiv:2502.14752） | 从基准角度回答“写对、跑通、跑快 Triton kernel 到底有多难”，也是 LLM 生成 Triton 代码的重要公开基线 | [概要](arxiv_2502.14752/论文概要.md) · [中文解读](arxiv_2502.14752/论文中文解读.md) · [PDF](arxiv_2502.14752/paper.pdf) |
-| 2025-05 / 2026-03 | *Linear Layouts: Robust Code Generation of Efficient Tensor Computation Using F2*（ASPLOS 2026） | 解释现代 Triton 后端最棘手的 tensor layout 问题，以及为何用 GF(2) 线性代数统一布局表示与转换 | [概要](arxiv_2505.23819/论文概要.md) · [中文解读](arxiv_2505.23819/论文中文解读.md) · [PDF](arxiv_2505.23819/paper.pdf) |
+| 2019-06 | *Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations*（MAPL 2019） | 奠基论文：说明 tile-level 编程模型、Triton-IR、自动并行化与 autotuning 从何而来 | [概要](triton_compiler/论文概要.md) · [中文解读](triton_compiler/论文中文解读.md) · [PDF](triton_compiler/paper.pdf) |
+| 2024-04 | *PyTorch 2: Faster Machine Learning Through Dynamic Python Bytecode Transformation and Graph Compilation*（ASPLOS 2024） | 解释 Triton 如何成为 `torch.compile` 的 GPU 代码生成后端，并进入大规模真实模型编译链 | [概要](pytorch_2/论文概要.md) · [中文解读](pytorch_2/论文中文解读.md) · [PDF](pytorch_2/paper.pdf) |
+| 2025-02 | *TritonBench: Benchmarking Large Language Model Capabilities for Generating Triton Operators*（arXiv:2502.14752） | 从基准角度回答“写对、跑通、跑快 Triton kernel 到底有多难”，也是 LLM 生成 Triton 代码的重要公开基线 | [概要](tritonbench/论文概要.md) · [中文解读](tritonbench/论文中文解读.md) · [PDF](tritonbench/paper.pdf) |
+| 2025-05 / 2026-03 | *Linear Layouts: Robust Code Generation of Efficient Tensor Computation Using F2*（ASPLOS 2026） | 解释现代 Triton 后端最棘手的 tensor layout 问题，以及为何用 GF(2) 线性代数统一布局表示与转换 | [概要](linear_layouts/论文概要.md) · [中文解读](linear_layouts/论文中文解读.md) · [PDF](linear_layouts/paper.pdf) |
 
 > Linear Layouts 于 2025 年 5 月首次上 arXiv，正式发表于 2026 年 3 月的 ASPLOS 2026；这里用“首次公开时间 / 正式发表时间”同时标注，避免时间线误导。
 

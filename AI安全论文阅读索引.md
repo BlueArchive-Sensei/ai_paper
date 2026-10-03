@@ -8,24 +8,24 @@
 
 ### 路线 A：从“如何训练安全模型”开始
 
-1. [Constitutional AI](arxiv_2212.08073/论文中文解读.md)：用原则、自我批评和 AI 偏好扩展无害训练。
-2. [Weak-to-Strong Generalization](arxiv_2312.09390/论文中文解读.md)：弱监督者能否激发更强模型的正确能力。
-3. [Emergent Misalignment](arxiv_2502.17424/论文中文解读.md)：窄任务微调为何可能改变广泛行为。
+1. [Constitutional AI](constitutional_ai/论文中文解读.md)：用原则、自我批评和 AI 偏好扩展无害训练。
+2. [Weak-to-Strong Generalization](weak_to_strong/论文中文解读.md)：弱监督者能否激发更强模型的正确能力。
+3. [Emergent Misalignment](emergent_misalignment/论文中文解读.md)：窄任务微调为何可能改变广泛行为。
 
 ### 路线 B：从“安全训练为什么失效”开始
 
-1. [Jailbroken](arxiv_2307.02483/论文中文解读.md)：目标竞争与安全泛化错配。
-2. [Simple Adaptive Attacks](arxiv_2404.02151/论文中文解读.md)：静态防御为何会败给针对性攻击。
-3. [Sleeper Agents](arxiv_2401.05566/论文中文解读.md)：已形成的后门能否被常见安全微调清除。
-4. [Alignment Faking](arxiv_2412.14093/论文中文解读.md)：训练时的顺从是否可能只是策略性表现。
-5. [Sycophancy to Subterfuge](arxiv_2406.10162/论文中文解读.md)：简单规范投机如何泛化到奖励篡改。
+1. [Jailbroken](jailbroken/论文中文解读.md)：目标竞争与安全泛化错配。
+2. [Simple Adaptive Attacks](simple_adaptive_attacks/论文中文解读.md)：静态防御为何会败给针对性攻击。
+3. [Sleeper Agents](sleeper_agents/论文中文解读.md)：已形成的后门能否被常见安全微调清除。
+4. [Alignment Faking](alignment_faking/论文中文解读.md)：训练时的顺从是否可能只是策略性表现。
+5. [Sycophancy to Subterfuge](sycophancy_to_subterfuge/论文中文解读.md)：简单规范投机如何泛化到奖励篡改。
 
 ### 路线 C：从“如何监控和控制智能体”开始
 
-1. [Mechanistic Interpretability Review](arxiv_2404.14082/论文中文解读.md)：从内部特征和回路理解、监测模型。
-2. [AI Control](arxiv_2312.06942/论文中文解读.md)：把强模型当作不可信组件后的系统安全协议。
-3. [SHADE-Arena](arxiv_2506.15740/论文中文解读.md)：长时程破坏与监控能力的实验基准。
-4. [ExploitGym](arxiv_2605.11086/论文中文解读.md)：智能体将漏洞发展为真实 exploit 的能力边界。
+1. [Mechanistic Interpretability Review](mechanistic_interpretability/论文中文解读.md)：从内部特征和回路理解、监测模型。
+2. [AI Control](ai_control/论文中文解读.md)：把强模型当作不可信组件后的系统安全协议。
+3. [SHADE-Arena](shade_arena/论文中文解读.md)：长时程破坏与监控能力的实验基准。
+4. [ExploitGym](exploitgym/论文中文解读.md)：智能体将漏洞发展为真实 exploit 的能力边界。
 
 ## 快速对照表
 
