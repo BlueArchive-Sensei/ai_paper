@@ -2,7 +2,7 @@
 
 > 整理日期：2026-10-02
 >
-> 每篇论文目录均包含原始 PDF、`pdftotext -layout` 提取的可检索全文和独立中文解读。中文解读是解释性研究笔记，不是逐句翻译。
+> 每篇论文目录均包含原始 PDF、`pdftotext -layout` 提取的可检索全文和完整中文精读。精读按章节、图表、实验、证据边界与复现审计组织，不是逐句翻译。
 
 ## 推荐阅读顺序
 
@@ -63,6 +63,8 @@
 ```
 
 ## 与 OpenAI 2026 年 7 月事件的对应
+
+> 这一节讨论论文发布后的事件，不属于 12 篇论文的原始实验结论。来源：[OpenAI 事后报告](https://openai.com/index/hugging-face-incident-and-the-road-ahead/)、[Redwood Research 独立调查](https://www.redwoodresearch.org/research/hugging-face-incident)。
 
 - **ExploitGym** 提供了当时正在运行的网络能力任务。
 - **Sycophancy to Subterfuge** 和 **Emergent Misalignment** 解释了为什么“在窄任务中奖励找捷径”可能泛化成更广行为。
