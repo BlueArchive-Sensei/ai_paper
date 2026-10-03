@@ -1,0 +1,562 @@
+                                                 Chainer: A Deep Learning Framework for Accelerating the
+                                                                     Research Cycle
+                                                        Seiya Tokui, Ryosuke Okuta, Takuya Akiba, Yusuke Niitani, Toru Ogawa, Shunta Saito,
+                                                                 Shuji Suzuki, Kota Uenishi, Brian Vogel, Hiroyuki Yamazaki Vincent
+                                                                                                                        tokui@preferred.jp
+                                                                                                                      Preferred Networks, Inc.
+                                                                                                                           Tokyo, Japan
+
+                                        ABSTRACT                                                                                        many developers used open-source deep learning frameworks such
+arXiv:1908.00213v1 [cs.LG] 1 Aug 2019
+
+
+
+
+                                        Software frameworks for neural networks play a key role in the de-                              as Caffe [25] or Torch [11]. Because deep learning was first used
+                                        velopment and application of deep learning methods. In this paper,                              successfully in computer vision and speech recognition, early deep
+                                        we introduce the Chainer framework, which intends to provide a                                  learning frameworks were designed primarily for feed-forward net-
+                                        flexible, intuitive, and high performance means of implementing the                             works such as convolutional neural networks (CNNs), which are
+                                        full range of deep learning models needed by researchers and prac-                              effective for analyzing fixed-length data such as images.
+                                        titioners. Chainer provides acceleration using Graphics Processing                                 More recently, additional types of deep learning models have
+                                        Units with a familiar NumPy-like API through CuPy, supports gen-                                become a major research topic. Following the impressive results
+                                        eral and dynamic models in Python through Define-by-Run, and                                    in game playing [36], deep reinforcement learning has become a
+                                        also provides add-on packages for state-of-the-art computer vision                              promising research area. In addition, after recurrent neural net-
+                                        models as well as distributed training.                                                         works (RNNs) demonstrated promising results on variable-length
+                                                                                                                                        data such as text, the use of these models has increased. RNNs with
+                                        CCS CONCEPTS                                                                                    Long Short-Term Memory (LSTM) are currently being used with
+                                                                                                                                        success for machine translation [47] and conversation models [49].
+                                        • Computer systems organization → Neural networks.
+                                                                                                                                           However, as most of the existing deep learning frameworks
+                                                                                                                                        are designed for image processing using CNNs, they lack support
+                                        KEYWORDS                                                                                        for abstracting data structures and training models to implement
+                                        deep learning frameworks, GPU computing, distributed training,                                  more general deep learning models. In addition, many existing
+                                        computer vision                                                                                 frameworks use a domain-specific language for representing deep
+                                        ACM Reference Format:                                                                           learning models, along with an interpreter to translate them into
+                                        Seiya Tokui, Ryosuke Okuta, Takuya Akiba, Yusuke Niitani, Toru Ogawa,                           a data structure stored in memory. Therefore, developers using
+                                        Shunta Saito, and Shuji Suzuki, Kota Uenishi, Brian Vogel, Hiroyuki Ya-                         these frameworks cannot use standard programming language
+                                        mazaki Vincent. 2019. Chainer: A Deep Learning Framework for Accelerat-                         debuggers–a significant problem as debugging is a major aspect in
+                                        ing the Research Cycle. In The 25th ACM SIGKDD Conference on Knowledge                          developing and tuning deep learning models.
+                                        Discovery and Data Mining (KDD ’19), August 4–8, 2019, Anchorage, AK, USA.                         We herein introduce Chainer, an open-source framework for
+                                        ACM, New York, NY, USA, 10 pages. https://doi.org/10.1145/3292500.3330756
+                                                                                                                                        deep learning that provides a simple and efficient support for imple-
+                                                                                                                                        menting complex algorithms, training models, and tuning model
+                                        1     INTRODUCTION                                                                              parameters. The remainder of the paper is organized as follows. Sec-
+                                        Deep learning is driving the third wave of artificial intelligence                              tion 2 describes the standard architecture of the existing deep learn-
+                                        research [29]. Recent investigations indicate that deep learning                                ing frameworks. Section 3 introduces the architecture of Chainer.
+                                        is moving beyond its early successes in pattern recognition and                                 Section 4 describes the performance techniques such as memory us-
+                                        toward new applications in diverse domains and industries. To                                   age optimizations and double backpropagation techniques. Section
+                                        implement these research ideas, a software framework for deep                                   5 presents CuPy as a backend library for Graphics Processing Units
+                                        learning is required.                                                                           (GPUs). Section 6 describes distributed training capability. Section
+                                           Implementing neural networks (NNs) requires a set of specialized                             7 introduces ChainerCV, an add-on package for computer vision.
+                                        building blocks, including multidimensional arrays, activation func-                            Section 8 presents the related work. Finally, Section 9 provides a
+                                        tions, and automatic differentiation. To avoid duplicating these tools,                         summary and the directions for future work.
+
+                                        Permission to make digital or hard copies of all or part of this work for personal or           2   BACKGROUND AND MOTIVATION
+                                        classroom use is granted without fee provided that copies are not made or distributed
+                                        for profit or commercial advantage and that copies bear this notice and the full citation       In typical NN frameworks, models are built in two phases, in a
+                                        on the first page. Copyrights for components of this work owned by others than the              paradigm that we name as Define-and-Run (Figure 1a). In the Define
+                                        author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or
+                                        republish, to post on servers or to redistribute to lists, requires prior specific permission   phase, the computational graph of the model is first defined and
+                                        and/or a fee. Request permissions from permissions@acm.org.                                     constructed. This phase corresponds to the instantiation of a neural
+                                        KDD ’19, August 4–8, 2019, Anchorage, AK, USA                                                   network object based on a model definition that specifies the data
+                                        © 2019 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+                                        ACM ISBN 978-1-4503-6201-6/19/08. . . $15.00                                                    flow graph of inter-layer connections, initial weights, and activation
+                                        https://doi.org/10.1145/3292500.3330756                                                         functions. Automatic differentiation is typically used to define the
+                                                                                        (b) Define-by-Run: new approach
+                (a) Define-and-Run: existing approach
+
+                          Figure 1: Relationship between computational graph construction and training.
+
+
+computations for both the forward and backward passes, with              3.1    On Demand Graph Construction
+optional graph optimizations being performed as well. In the Run         Backpropagation is executed by bookkeeping the history of opera-
+phase, the actual forward and backward calculation of the graph is       tions applied to the input arrays and backtracking the history. In
+performed. Provided a set of training examples, the model is trained     the Define-by-Run paradigm, the history of operations is recorded
+in this phase by minimizing the loss function using optimization         simultaneously with the forward computation applied to concrete
+algorithms such as stochastic gradient descent.                          input arrays. This can be achieved by creating a node in the compu-
+   Under the Define-and-Run paradigm, static NN models such as           tational graph for each variable and operation. The computational
+CNNs can be implemented easily. The model definition may be writ-        graph only defines how to backtrack the operations applied to the
+ten in a specific markup language such as Protobuf or YAML [18].         input, and does not define the forward computation. We define the
+The deep learning framework serves as an interpreter that executes       computational graph by two types of nodes: variable nodes that
+the model definition, which can be regarded as an independent NN         represent the variables involved in the computation, and function
+program. The NN program receives the inputs (data examples), pro-        nodes that represent the operations applied to the variables. After
+cesses them (forward/backward computation), changes the model’s          applying a function f to the input variable x and obtaining an
+internal state (updating), and outputs the results (predictions).        output variable y, the function node n f contains a reference to the
+   The Define-and-Run paradigm operates well for static models           input node n x , and the output node ny contains a reference to the
+such as CNNs because having the full computational graph avail-          function node n f . These references are used to backtrack the graph.
+able enables potential graph optimizations to improve the memory            The program that defines the forward computation is similar
+efficiency and/or runtime performance. However, for implementing         to any standard numerical computations that do not compute any
+other types of NN models, two major problems arise.                      gradients. The only difference is that each differentiable function
+   The first is that it can be cumbersome to support general dynamic     stores its computational history into the graph in addition to com-
+graphs, i.e., neural networks with control flow. In frameworks such      puting its output. Because the graph construction only relies on
+as TensorFlow [6], the control flow decisions are defined in the data    the execution trace of the program, it can be combined with arbi-
+flow graph using special operators such as Switch and Merge rather       trary syntactic constructs of the host language, e.g., conditional
+than using the control flow syntaxes of the host language.               branches and loops. Such a program generates a graph with a dif-
+   The second problem is that under the Define-and-Run paradigm,         ferent topology and size at each invocation, while maintaining the
+the inner mechanism of the neural network is not accessible to           correct gradient computation. The power of the host language that
+the user. This presents several difficulties in the creation of an       we can use is not limited to such primitive language constructs; we
+effective model. For example, to debug and tune a model effectively,     can also leverage high-level tools such as debuggers and profilers.
+a user must be able to observe what is occurring inside the model.
+However, as a large object of a single class, the computational graph
+contains the entire model’s information, i.e., its structure, weights,   3.2    Object-Oriented Model Definition
+gradients, and internode operations, implying that it is essentially     Compositionality is an important characteristic of deep learning.
+a black box. Consequently, development tools such as profilers and       Fragments of networks are connected in various combinations to
+debuggers cannot determine the model’s faults or how it could be         form a rich set of architecture. APIs to write deep models should
+improved. If graph optimizations are performed by the framework,         exhibit compositionality to reuse and combine components flexibly.
+this problem is compounded further.                                         In the Define-by-Run paradigm, models consist of the code defin-
+                                                                         ing the forward computation and parameters deciding its behavior.
+                                                                         The code is written as a host language program, and must be bound
+                                                                         to parameters.
+3   DESIGN AND PROGRAMMING MODEL                                            This parameter-binding problem is resolved by object-oriented
+In this section, we present the basic design of automatic differenti-    programming. Each neural network fragment that involves its own
+ation APIs based on the Define-by-Run paradigm (Figure. 1b).             parameters is defined by a class. Such fragments are combined into
+class Linear(Link):                                                         When a graph is released by reference-counting GC, each node
+    def __init__(self, n_in, n_out):                                     is released in the topological order of the computational graph.
+        with self.init_scope():                                          Meanwhile, the backpropagation algorithm visits the nodes in the
+            self.W = Parameter(HeNormal(),                               topological order. By merging these two procedures, we can mini-
+                               (n_out, n_in))                            mize the peak memory consumption of backpropagation. This is
+            self.b = Parameter(0, (n_out,))                              accomplished by manually eliminating the reference to a function
+                                                                         node immediately after processing it during graph backtracking.
+      def forward(self, x):
+          return x @ self.W.T + self.b                                   4.1.2 Function-wise Local Memory Usage Reduction. In general,
+                                                                         the gradient (or more precisely, the Jacobian matrix) of a function
+class MultiLayerPerceptron(Chain):                                       depends on the input. Therefore, it is natural to design the interface
+    def __init__(self, n_in, n_hid, n_out):                              of the backward computation such that it takes both the input arrays
+        with self.init_scope():                                          and output error as arguments. This interface, however, prevents
+            self.l1 = Linear(n_in, n_hid)                                us from applying memory usage optimization for operations that
+            self.l2 = Linear(n_hid, n_out)                               do not require the input arrays to compute the gradient. Some
+                                                                         operations, e.g., tanh, can use the output arrays instead of the input
+      def forward(self, x):                                              arrays to compute the gradient. When the next operation applied
+          h = relu(self.l1(x))                                           to the output requires the inputs for gradient computation, we can
+          return self.l2(h)                                              eliminate the input arrays and retain the output arrays such that the
+                                                                         data kept on memory for backpropagation are minimized. Further,
+Figure 2: Examples of model definitions by object-oriented               some operations require neither the input nor the output arrays. In
+programming.                                                             this case, we can eliminate the references to both of them.
+                                                                            Each differentiable operation is implemented as a subclass of
+                                                                         FunctionNode with overridden forward and backward methods.
+another class to create larger model components. Hence, the modu-        In forward, the inputs and outputs required for backward are ex-
+larization of neural networks and parameter binding are resolved.        plicitly declared through the retain_inputs and retain_outputs
+Figure 2 shows an example of defining a fully connected layer and        method calls. If an input or output is not listed by these declarations,
+a multilayer perceptron. The parameters are initialized at object        that input/output is not saved for backpropagation. In particular,
+construction, and the forward computation is written as a method.        inputs are no longer passed to the backward method; instead, the
+   Object-oriented model definition also provides a unified interface    implementation of backward pulls them only when necessary.
+to models in terms of parameter handling. Because the model is              Chainer utilizes a particular variable object representation that
+composed of a tree of model fragments, the parameters of specific        is designed to release memory as soon as possible once it is no
+subtrees can be collected easily by traversing it.                       longer required. In a naive implementation of automatic differ-
+   This style of object-oriented model definition was first intro-       entiation with the Define-by-Run paradigm, each variable node
+duced by Chainer in 2015, and is now widely used in other Define-        would directly contain a multidimensional array (for example, as
+by-Run frameworks, e.g., PyTorch and TensorFlow Eager.                   an attribute). An issue with such a design is that the memory used
+                                                                         by the array cannot be reclaimed until the last reference to the
+4     TECHNICAL FEATURES                                                 variable has been deleted. In particular, even if the user code does
+In this section, we describe several techniques in Chainer that          not hold any direct references to the variable, the computational
+improve its simplicity and efficiency, applicable to frameworks          graph may still hold a reference to it, in which case its memory
+based on the Define-by-Run paradigm.                                     cannot be reclaimed. This issue arises owing to the inability of
+                                                                         distinguishing user code references from internode references. It
+4.1    Memory-Efficient Backpropagation                                  is noteworthy that provided user code references to a variable are
+Memory efficiency is of central interest in deep learning frameworks     alive, it is necessary to maintain the multidimensional array data
+as the sizes of models and data are limited by the amount of available   associated with the variable. Meanwhile, the references inside the
+physical memory. Optimization can be performed further at the            computational graph do not always require the data to be alive;
+framework level, especially in reducing peak memory usage.               if no operation retain the variable as an input or output, the data
+                                                                         should be released. Based on this observation, we can resolve this
+4.1.1 Global Memory Usage Reduction. In deep learning frame-             issue using separate objects to represent the variables in the user
+works based on the Define-by-Run paradigm, memory management             code and the variables in the computational graph. In Chainer, each
+is naturally delegated to that of the host language. Chainer relies      Variable object holds the array data, and is distinct from the cor-
+on reference-counting garbage collection (GC), which is the pri-         responding VariableNode object representing the variable node in
+mary mechanism for memory management in the standard Python              the graph. The variable node object holds a reference to the array
+implementation (a.k.a. CPython). Automatic differentiation APIs          data only when the variable is retained by an operation. With this
+based on the Define-by-Run paradigm operates well with reference-        formulation, we can immediately reclaim the memory for the vari-
+counting GC; a subgraph of the computational history is released         able once the last reference from the user code has been removed,
+immediately once it is rendered unreachable.                             unless an operation retains it as an input or output.
+4.2    Double Backpropagation                                               import numpy as np              import cupy as cp
+                                                                            x = np.array([1, 2])            x = cp.array([1, 2])
+Backpropagating through computation involving gradient compu-
+                                                                            l2 = np.linalg.norm(x)          l2 = cp.linalg.norm(x)
+tation is a major feature of modern deep learning frameworks. It
+corresponds to automatic differentiation for Hessian-vector product.                      (a) NumPy                   (b) CuPy
+Such a feature is sometimes called double backpropagation.
+   Double backpropagation is supported by implementing the back-                     Figure 3: Examples using NumPy and CuPy.
+ward computation of each operation using functions supporting
+differentiation. Although this idea may appear straightforward, a
+naive implementation may result in reference cycles that cause un-        for Python that provides the computational power of NVIDIA GPUs
+necessary memory consumption. Two factors must be considered              with the NumPy-compatible syntax. It accelerates any computation
+to avoid reference cycles: interface to access the resulting gradients,   described in a NumPy-like syntax by fully utilizing the GPU archi-
+and output retention at each differentiable function.                     tecture with the CUDA platform provided by NVIDIA, including
+                                                                          cuBLAS, cuDNN, cuRAND, cuSOLVER, cuSPARSE, and NCCL.
+4.2.1 Interface to Access the Resulting Gradients. Two styles of             The interface of CuPy is highly compatible with that of NumPy;
+interface exist to trigger backpropagation. The first one is the          in most cases, it can be used as a drop-in replacement. It supports
+Variable.backward() method, which computes the gradient with              standard numerical data types, array indexing, slice, transpose,
+respect to each input. The resulting gradients are stored directly in     reshape, and broadcasting.
+the variable objects. The other one is the grad() function that takes        Users can create custom CUDA kernels to execute codes faster,
+both a set of inputs and a set of outputs as arguments. In this case,     using code snippets of C++. CuPy automatically wraps and compiles
+the function returns the set of computed gradients corresponding          the code to create a CUDA binary. Compiled binaries are cached
+to the specified outputs. The latter interface does not introduce         and reused in subsequent runs.
+additional references between objects, while the former may add              CuPy was first developed as the backend of Chainer. The ini-
+references from the input nodes to the computed gradients. Because        tial version of Chainer was implemented using PyCUDA[28], a
+the computed gradients refer the input nodes indirectly through           widely used Python library for CUDA GPU calculation. However,
+the computational graph, a reference cycle appears.                       PyCUDA could not support enough functionalities of NumPy for
+   This reference cycle is removed by discriminating between user         deep learning and the CUDA support was insufficient. CuPy became
+code references and inter-node references, as discussed in Section        independent from Chainer in June 2017, when Chainer v2.0 and
+4.1. Because the reference from a variable to the corresponding gra-      CuPy v1.0 were released. Henceforth, numerous non-deep-learning
+dient is not part of the computational graph, we place this reference     projects have leveraged CuPy’s strong performance and simple
+into the Variable object instead of into the VariableNode object.         interface. For example, a Python-based probabilistic modeling soft-
+4.2.2 Output Retention for Double Backpropagation. As detailed            ware, Pomegranate[43], and a natural language processing library,
+in Section 4.1, the backward method of each FunctionNode imple-           spaCy[23], use CuPy as their GPU backend.
+mentation may use the output variables declared to be retained in
+the forward computation. To render backpropagation differentiable,        5.1     CuPy Example
+a special step is required because the function node cannot main-         Because CuPy is a Python package similar to NumPy, it can be
+tain a reference to the output node; otherwise, a reference cycle is      imported into a Python program similarly. As shown in Fig. 3 code,
+introduced. It entails that the output node may be released before        cp is used as an abbreviation of CuPy, similar to np for NumPy. The
+the backward computation of the function node is executed. We             cupy.ndarray class is in the core of CuPy as a GPU alternative of
+can still maintain the validity of the differentiable backpropagation     numpy.ndarray. In the code, x is an instance of cupy.ndarray. Its
+by replaying the graph construction for such an output node, i.e., a      creation is identical to the NumPy syntax, except that NumPy is
+fresh node object is created and connected during backpropagation         replaced with CuPy. The primary difference of cupy.ndarray from
+as if it were the output node. Further, we store the output array data    numpy.ndarray is that the content is allocated on the GPU memory.
+to the function node as a backup, and use them for the recreated          Most of the CuPy array manipulations are similar to those of NumPy.
+output node. This does not nullify the computational validity; the        For example, NumPy uses numpy.linalg.norm to calculate the
+output node being released indicates that no other nodes or user          Euclidean norm on a CPU, while CuPy uses cupy.linalg.norm to
+codes contain any references to it; therefore, recreating the output      calculate it on a GPU.
+node does not conflict with any existing nodes.
+                                                                          5.2     Supported Functionalities
+5     GPU SUPPORT BY CUPY                                                 As demonstrated in the previous subsection, CuPy implements
+The typical usage of a deep neural network requires significant           many functions on cupy.ndarray objects. See the reference 1 for
+power for floating point numeric calculation; therefore, it is neces-     the supported subset of NumPy API.
+sary for deep learning frameworks to fully leverage the computing         5.2.1 Linear Algebra. CuPy supports most linear algebra functions
+power of external accelerator such as GPUs. This is not trivial for       in NumPy such as eigen decomposition, Cholesky decomposition,
+people who write deep neural network codes to implement high per-         QR decomposition, singular value decomposition, linear equation
+formance GPU programs while maintaining its flexibility, simplicity,
+and ease in extending components. CuPy is an open-source library          1 https://docs-cupy.chainer.org
+kernel = cupy.ElementwiseKernel(                                          typically takes as long as one week with a single GPU. Chainer’s
+    'float32 x, float32 y, float32 z',              #   arguments         distributed capability allows integrating power of multiple GPUs
+    'float32 w',                                    #   outputs           fully utilizing hardware performance while preserving Chainer’s
+    'w = x * y + z',                                #   computation       flexibility enabled by its Define-by-Run approach. This allows for
+    'my_mad')                                       #   kernel name       easy distributed learning even in complex use cases such as dy-
+w = kernel(x, y, z)                                                       namic neural networks, generative adversarial networks, and deep
+                                                                          reinforcement learning.
+         Figure 4: Example of a user-defined kernel.
+                                                                          6.1    Basics of Distributed Deep Learning
+solver, inverse of matrix, and the Moore-Penrose pseudo inverse.          6.1.1 Data and Model Parallelism. Two primary approaches are
+These functions are defined in cupy.linalg and are compatible             available to parallelize training by distributed processing: data par-
+with numpy.linalg. All of them are backed by cuSOLVER, a LA-              allelism and model parallelism. In data parallelism, each worker has
+PACK implementation that operates on GPUs.                                a model replica and calculates the gradients of different minibatches.
+                                                                          Workers update their model with these gradients collaboratively.
+5.2.2 Sparse Matrices. CuPy supports sparse matrices using cuS-
+                                                                          If we define the batch size processed by each worker as b and the
+PARSE. These matrices contain the same interfaces of sparse matri-
+                                                                          number of workers as n, the gradient obtained through communi-
+ces in SciPy [26], scipy.sparse. Depending on their requirements,
+                                                                          cation is equivalent to that in the batch size bn. With more workers
+users can choose between coordinate-format sparse matrix, com-
+                                                                          gradients are calculated with more training data in one iteration,
+pressed sparse row matrix, compressed sparse column matrix, or
+                                                                          thus the gradient quality is improved and accelerating the learning
+sparse matrix with diagonal storage.
+                                                                          process.
+5.2.3 Sorting. CuPy provides sort, argsort, and lexsort functions            In model parallelism, each worker has a portion of the model and
+that are compatible with NumPy, backed by Thrust, a library of            cooperates with others to calculate one minibatch [13]. Model par-
+parallel algorithms written in C++ with CUDA. CuPy takes the              allelism had been actively adopted particularly when GPU memory
+advantage of Thrust, which implements sophisticated parallel sort         was small. Currently, data parallelism is shown to be more efficient,
+algorithms for GPUs.                                                      but in case where a model has a huge number of parameters such
+                                                                          as domain of natural language processing, model parallelism is
+5.3    Custom CUDA Kernels                                                adopted in combination with data parallelism [45].
+CuPy is easy to extend with user-defined kernels by combining
+operators, two types of kernels, and generic types. It is easy to         6.1.2 Synchronous vs. Asynchronous. Design choice on commu-
+compose and launch an arbitrary kernel in GPUs with the CUDA              nication model from two options, synchronous or asynchronous
+code fragments.                                                           model is the key factor to construct the overall parallel computation.
+    The element-wise kernel applies the same operation to all ele-        Both models are described below, focusing on data parallelism.
+ments. For example, the cupy.add function applies the + operator             Synchronous data parallelism in distributed training has one
+for each element pair. The reduction kernel folds all elements by a       additional step called all-reduce step compared to non-parallelized
+binary operator. For example, the sum function folds all elements         training sequence that consists of forward computation, backward
+by the + operator. Element-wise kernels and reduction kernels are         computation, and optimization. All-reduce is a parallel computing
+analogous to Map and Reduce from MapReduce [14], respectively.            operation where the sum of parameters is calculated and distributed
+Figure 4 is an example of a user-defined element-wise kernel. The         over all processes. This is a standard functionality of MPI. In the
+first and second arguments comprise a list of input variables and a       additional all-reduce communication step, workers communicate
+list of output variables, respectively. The definition of each variable   with each other to obtain and distribute the sum of gradients cal-
+consists of the type specifier and the name of an argument. The           culated by individual workers. Each worker calculates the average
+third argument is a CUDA code snippet that the user wants to              of gradients by dividing the sum by the number of replicas, and
+define. In the code snippet, an arbitrary CUDA code can be used.          updates its own replica of the model with the gradient obtained
+    CuPy also supports generic types. With type parameters such as T      through the all-reduce communication before optimization.
+specified instead of concrete types such as float32, custom kernels          The asynchronous model, meanwhile, has special workers called
+are generated as template functions. Arguments with generic types         parameter servers. The parameter server owns and controls the
+accept arbitrary types of arrays. For example, when the input type        model parameters during the training process. Normal workers send
+is specified as ’T x, T y’, this function takes a pair of arrays with     gradients to the parameter server once the gradients are obtained by
+the same arbitrary data type such as integer and float.                   forward and backward calculations. The parameter server receives
+                                                                          and uses the gradients to update the model. Workers receive new
+6     DISTRIBUTED PARALLEL TRAINING                                       model parameters and start the calculation of the new gradients.
+In this section, we introduce the distributed learning capability
+component of Chainer, formerly called ChainerMN.                          6.2    Parallelism Design
+   Although the GPU performance has improved continuously, the            Chainer adopts data parallelism and the synchronous communica-
+training process is still time consuming even with latest GPUs. For       tion model. In the following, we will explain the choice from the
+example, training ResNet-50 [21] for the ImageNet dataset [15]            options discussed in Section 6.1.
+    Data parallelism requires no changes but a few additions to exist-   # (1) Create a communicator
+ing implementation; splitting dataset and computing the gradient         comm = chainermn.create_communicator()
+average among workers. This is because data parallelization is tan-
+tamount to increasing a minibatch size in many cases such as image       # (2) Create and use multi_node_optimizer
+recognition. Thus, we first chose the data parallelism but later added   optimizer = chainermn.create_multi_node_optimizer(
+experimental support on model parallelism. Further, We adopted the           chainer.optimizers.Adam(), comm).setup(model)
+synchronous communication model for its deterministic behaviour
+and convergence [19, 39].                                                # (3) Distribute a dataset
+    Synchronous data-parallel gradient exchange can be realized by       train = chainermn.scatter_dataset(
+all-reduce communication between workers and thus Chainer is                 train, comm, shuffle=True)
+potentially capable of running on any communication library that
+supports the all-reduce operation with Chainer’s communicator            # Use Chainer's Trainer class to simplify
+abstraction. The first library supported by Chainer is OpenMPI,          # a forward-backward-optimization loop
+which is especially efficient with a CUDA-aware build. However,          iterator = chainer.iterators.SerialIterator(
+all-reduce communication especially requires efficiency because              train, args.batchsize)
+it is called in every training iteration and needs to process a large    updater = training.StandardUpdater(
+amount of data. We adopted NCCL [5] developed by NVIDIA as                   train_iter, optimizer, device=device)
+a primary library to run all-reduce. NCCL is a highly-optimized          trainer = training.Trainer(updater, (100, 'epoch'))
+communication library which enables efficient all-reduce operation
+between NVIDIA GPUs within and across nodes.                                Figure 5: Example of training code using ChainerMN.
+
+
+                                                                                           0.30
+                                                                                                          Training iteration
+                                                                                           0.25
+                                                                                                          Communication
+6.3    API Design                                                                          0.20
+                                                                                Time [s]
+
+We describe the design goal of a distributed learning capabilty of
+Chainer, followed by a description of the minimal steps to extend                          0.15
+an existing deep learning program written in Chainer to support                            0.10
+distributed training.
+    The flexibility of Define-by-Run design of Chainer should not                          0.05
+be sacrificed for distributed execution. The Define-by-Run allows
+                                                                                           0.00
+the model structure to differ between iterations, only assuming                                   1   2   4    8   16   32     64 128 256 512 1024
+that the model structures are identical between workers merely                                                  Number of GPUs
+in a single iteration for all-reduce. Communication for gradient
+exchange occurs immediately before the optimization step, which          Figure 6: Iteration and communication time of ResNet-50
+is transparent to other Chainer components. Within the bound             training for different numbers of GPUs.
+of this minimal assumption, any code can be put before or after
+the optimization step and model structure can be changed at any
+iteration dynamically.
+    Figure 5 shows a core part of a program to train the MNIST clas-     6.4    Evaluation
+sification model, including three primary additions in distributed       We used the 90-epoch ResNet-50 [21] training on the ImageNet
+mode: (1) a communicator component that controls all inter-process       dataset as our benchmark. This task has been extensively used in
+communication, (2) transforming optimizer to mutli_node_optimizer        evaluating the performance of distributed deep learning [10, 19, 51].
+to exchange gradients among workers, and (3) scatter the dataset            We used a cluster of 128 nodes, each of which is equipped with
+to all workers.                                                          eight NVIDIA Tesla P100 GPUs. The per-worker minibatch size was
+    mutli_node_optimizer is the most important component in              32 and the total minibatch size was 32k with 1024 workers. Further
+making Chainer distributed. It wraps the normal optimizer and            details of the experimental setups are provided in the appendix.
+exchanges the gradient across processes using the all-reduce op-            Figure 6 illustrates the communication time (i.e., all-reduce op-
+eration before optimizing the model. It behaves identically as the       erations) and time to complete a whole iteration (i.e., forward and
+original optimizer except for the communication. At the final step,      backward computation, communication, and optimization) for dif-
+scatter_dataset lets workers make consensus on which fragment            ferent numbers of GPUs, averaged over 100 iterations. Our scaling
+of training data to read for data parallelism. Training dataset are      efficiency when using 1024 GPUs was 70% and 80% in comparison
+split into equal fragments and distributed over worker processes.        to single-GPU and single-node (i.e., 8 GPUs) baselines, respectively.
+    Requiring as minimal changes in porting to distributed mode as       Using 1024 GPUs, the mean training time over five independent
+possible has allowed Chainer to preserve its flexibility afforded by     runs was 897.9 ± 3.3s for 90 epochs, including the validation after
+the Define-by-Run paradigm.                                              each epoch.
+# Instantiate object detection models                                    dataset = VOCBboxDataset(year='2007', split='test')
+model_1 = FasterRCNNVGG16(pretrained_model='voc0712')                    it = SerialIterator(dataset, batch_size=2,
+model_2 = SSD300(pretrained_model='voc0712')                                 repeat=False, shuffle=False)
+                                                                         model = SSD300(pretrained_model='voc0712')
+# Make predictions                                                       evaluator = DetectionVOCEvaluator(it, model,
+bboxes, labels, scores = model_1.predict([img])                              label_names=voc_bbox_label_names)
+bboxes, labels, scores = model_2.predict([img])                          # Run evaluation loop
+                                                                         result = evaluator()
+Figure 7: Example of executing inference with two object de-
+tection models. The two models contain the same interface                Figure 8: Example of performing an evaluation loop for ob-
+to conduct an inference.                                                 ject detection using DetectionVOCEvaluator.
+
+
+7     CHAINERCV
+In this section, we introduce ChainerCV, an add-on package for
+computer vision tasks.
+    Despite the powerful capability of Chainer, a gap still exists be-   7.2    Unified API
+tween what Chainer supports and what deep learning in computer           ChainerCV emphasizes modular design with a unified API such
+vision requires. Deep learning models have become increasingly           that users can compose the implementations in various methods.
+stronger and more complex. Therefore, it would be difficult for          The implementations include neural network models, data loaders,
+researchers and engineers to implement these algorithms from             evaluation metrics, and visualization utilities. The API is made
+scratch. Additionally, many typical computer vision utilities ex-        consistent using the same data representation across the library.
+ist, such as data loaders and pre/post-processing functions such         For instance, we define the data representation for images, bounding
+as non-maximum suppression [12] that are outside the scope of            boxes, semantic pixel-wise labels, instance mask, and key points.
+Chainer.                                                                 Additionally, the API is consistent across similar functions. For
+    ChainerCV aims at facilitating non-experts in the fast prototyp-     example, as mentioned previously, inference methods always take
+ing of ideas and the reduction in the barrier to enter the field. The    an iterable of images as inputs for all models.
+library provides state-of-the-art models, their pre-trained weights,        In addition to rendering the interface intuitive, a unified API
+and training scripts for various computer vision tasks such as im-       allows us to build utilities in it. For example, we provide implemen-
+age classification, object detection, semantic segmentation, and         tations that abstract the evaluation loop. Internally, this abstraction
+instance segmentation. Additionally, the library provides utilities      iterates over the dataset, performs predictions from images, and
+such as data loaders and evaluation metrics with a unified API.          calculates the evaluation metrics using the ground truth and the
+Our design is based on the following three principles: easy-to-use,      predictions. It is noteworthy that the interface must be assumed
+unified API, and reproducibility.                                        for the data loader and the inference method such that the abstract
+                                                                         utility can pass data among a data loader, an inference method, and
+7.1    Easy to use                                                       an evaluation metric. An example is shown in Figure 8.
+ChainerCV supports four tasks: image classification [37], object
+detection [31], semantic segmentation [33], and instance segmen-
+tation [50]. For each task, several neural networks may be imple-        7.3    Reproducibility
+mented. For instance, seven implementations are included for object      Reproducibility in machine learning and computer vision is an im-
+detection.                                                               portant factor affecting research quality. ChainerCV aims at easing
+   Performing an inference with a ChainerCV’s implementation is          the process of reproducing the published results by providing a
+easy owing to a simple interface shared among models prepared for        training code that is guaranteed to perform on par with them. These
+the same task. Even for models solving the same task, they differ        algorithms would serve as baselines to obtain a new idea through
+by the output type of the neural networks and how the outputs are        refinement and as a tool to compare a new approach against the
+post-processed. The inference interface hides the difference in the      existing approaches. With a careless implementation, the perfor-
+underlying implementations among different models. Additionally,         mance of trained models can easily change by deviating from the
+the inference process is simplified further by automatically down-       original logic and hyperparameters. This type of mistakes disqual-
+loading pre-trained weights when a model object is instantiated.         ify the implementation as a useful baseline because researchers
+Using pre-trained weights, an inference can be implemented in only       would not be able to attain competitive results and assess the im-
+two lines of the Python code, as shown in Figure 7.                      pact of their ideas properly. Table 1 shows the models supported
+   In addition to supporting an easy-to-use inference, ChainerCV         by ChainerCV and the experimental results. The reference scores
+supports training scripts that are easily customizable for a subset      are also presented, which are reported by the original papers or
+of models. The training scripts are written using Chainer’s training     the authors’ implementations. As shown, the performance of our
+abstraction; therefore, training components can be swapped easily.       re-implementations is close to that of the original. It is notewor-
+The scripts are designed to be extended by users, for instance, to       thy that randomness included during training can be a reason for
+train with a custom user dataset.                                        different scores.
+Table 1: Supported models in ChainerCV and their scores                        with declarative symbolic expressions by a lazy evaluation. Pad-
+for (1) image classification, (2) object detection, (3) semantic               dlePaddle [3] and CNTK [52] contains an imperative style as their
+segmentation, and (4) instance segmentation. For image clas-                   optional programming style, while supporting the declarative style
+sification, we report the top 1 error. For object detection, we                simultaneously. In contrast to most of these frameworks that sup-
+report the mean average precision (mAP) for scores reported                    port Define-by-Run optionally, Chainer is highly optimized for
+with Pascal VOC, and the average of mAP over different in-                     Define-by-Run in its overall implementation and APIs. This results
+tersection over union threshold for scores with MS COCO.                       in a simpler code base that reduces the cost for new developers to
+For semantic segmentation, we report the mean intersection                     contribute to it.
+over union (mIoU). For instance segmentation, we report the                       DistBelief [13] first integrated three important techniques in
+mAP of the mask.                                                               the distributed training of deep neural networks, data and model
+                                                                               parallelism, asynchronous SGD, and master-worker heterogeneous
+                                                                               model. Subsequently, these techniques became available in Ten-
+                                                                   score
+ task           dataset                model                                   sorflow [6], MXNet [9], and PaddlePaddle [3]. However, asynchro-
+                                                             reference ours
+                                                                               nous SGD cannot avoid stale gradients (6.1.2) that affect accuracy
+                                   VGG16 [46]                  28.5    29.0*   and parameter server being bottleneck. To mitigate those issues,
+                                  ResNet50 [21]                24.7    24.8*   recent versions of them have added options to run synchronous
+                                 ResNet101 [21]                23.6    23.6*   SGD [39, 44].
+                                 ResNet152 [21]                23.0    23.2*      Meanwhile, Caffe2 and PyTorch [7] use synchronous SGD. To
+    (1)     ImageNet [37]       SE-ResNet50 [24]               22.4    22.7*   compensate for the cost of synchronization, Caffe2 and PyTorch
+                                SE-ResNet101 [24]              21.8    21.8*   minimized the critical path of all-reduce communications through
+                                SE-ResNet152 [24]              21.3    21.4*   computation, by starting all-reduce as soon as the backward com-
+                               SE-ResNeXt50 [24]               21.0    20.9*   putation of a layer is completed.
+                               SE-ResNeXt101 [24]              19.8    19.7*      Although open-sourcing models in computer vision is a wide-
+                                                                               spread practice, we discovered a few studies that pursued a similar
+                                Faster R-CNN [42]              73.2    74.7    philosophy as that of ChainerCV. Primary competitors include re-
+                                   SSD300 [32]                 77.5    77.5    search program codes accompanied by papers. Their primary pur-
+           Pascal VOC [17]         SSD512 [32]                 79.5    79.7    pose is to share research results in a verifiable manner; therefore,
+    (2)                           YOLOv2 [40]                  75.8    75.8*   readability and modularity are often ignored.
+                                  YOLOv3 [41]                  80.2    80.2*      Libraries more closely related to ChainerCV are pytorch/vision [4]
+                               FPN ResNet50 [30]               36.7    37.1    and GluonCV [2]. pytorch/vision is a computer vision library that
+            MS COCO [31]                                                       uses PyTorch as its backend. At the time of writing, its support for
+                               FPN ResNet101 [30]              39.4    39.5
+                                                                               pretrained models is limited only to image classification. GluonCV
+              CamVid [8]            SegNet [8]                 46.3    49.4    is a recently released computer vision library that uses Gluon [1],
+    (3)
+            CityScapes [33]         PSPNet [22]                79.7    79.0*   which is another deep learning framework, as its backend. Sim-
+                                                                               ilar to ChainerCV, GluonCV supports object detection, semantic
+    (4)        SBD [20]              FCIS [50]                 65.7    64.1
+                                                                               segmentation, and instance segmentation. However, they do not
+    *   We converted the weights of the original model                         pursue reproducibility as their core goal.
+
+
+
+8       RELATED WORK
+To the best of our knowledge, Autograd [16] had adopted the Define-
+by-Run paradigm to construct the backward graph before it was                  9   CONCLUSION
+proposed by Chainer. Autograd is a library based on NumPy [38]                 This paper introduced Chainer, a deep learning framework that
+and designed to enable users to write a differentiable computational           enabled users to easily implement new algorithms and complex
+graph in Python code using NumPy. However, it is not intended as               neural networks. Chainer has already been used successfully in a
+a deep learning framework; therefore, it does not support GPU ac-              variety of leading-edge applications, including deep reinforcement
+celeration that is necessary for training deep models. Thus, Chainer           learning [36], word2vec distributed representations [35], recurrent
+is the first framework that focuses on deep learning workloads                 neural network language models [34], human pose estimation [48],
+with the Define-by-Run paradigm. Currently, several other deep                 and variational auto-encoders [27]. Because dedicated develop-
+learning frameworks exist that adopt Define-by-Run. PyTorch [7]                ers and users worldwide are actively collaborating on GitHub to
+is a popular Define-by-Run framework inspired by Chainer 2 , fol-              improve Chainer, we anticipate that Chainer will become more
+lowed by Tensorflow [6] that introduced a feature called the "eager            versatile and useful in the future. In particular, the performance
+mode," which supports Define-by-Run model definitions. MXNet [9]               improvement attained by improving CuPy allows users to apply
+supports imperative tensor computations which can be combined                  various types of deep learning models with CPU/GPU-agnostic
+                                                                               codes. We invite all members of the deep learning community to
+2 https://github.com/pytorch/pytorch/blob/v0.4.1/README.md                     test out Chainer and to contribute to its development.
+ACKNOWLEDGMENTS                                                                            [28] Andreas Klöckner, Nicolas Pinto, Yunsup Lee, B. Catanzaro, Paul Ivanov, and
+                                                                                                Ahmed Fasih. 2012. PyCUDA and PyOpenCL: A Scripting-Based Approach
+This work could not be achieved without the help of all the contrib-                            to GPU Run-Time Code Generation. Parallel Comput. 38, 3 (2012), 157–174.
+utors and the feedback from users of Chainer, CuPy, ChainerCV,                                  https://doi.org/10.1016/j.parco.2011.09.001
+                                                                                           [29] Yann LeCun, Yoshua Bengio, and Geoffrey Hinton. 2015. Deep learning. Nature
+and related projects. We express special thanks to them.                                        521 (2015), 436–444.
+                                                                                           [30] Tsung-Yi Lin, Piotr Dollár, Ross B Girshick, Kaiming He, Bharath Hariharan, and
+                                                                                                Serge J Belongie. 2017. Feature Pyramid Networks for Object Detection.. In CVPR,
+                                                                                                Vol. 1. 3.
+REFERENCES                                                                                 [31] Tsung-Yi Lin, Michael Maire, Serge Belongie, James Hays, Pietro Perona, Deva
+ [1]   [n. d.]. Gluon. https://gluon.mxnet.io.                                                  Ramanan, Piotr Dollár, and C Lawrence Zitnick. 2014. Microsoft coco: Common
+ [2]   [n. d.]. GluonCV. https://gluon-cv.mxnet.io/.                                            objects in context. In European conference on computer vision. Springer, 740–755.
+ [3]   [n. d.]. PaddlePaddle. http://www.paddlepaddle.org/.                                [32] Wei Liu, Dragomir Anguelov, Dumitru Erhan, Christian Szegedy, Scott Reed,
+ [4]   [n. d.]. pytorch/vision. https://github.com/pytorch/vision.                              Cheng-yang Fu, and Alexander C Berg. 2016. SSD: Single Shot MultiBox Detector.
+ [5]   2017. NVIDIA Collective Communications Library (NCCL). https://developer.                arXiv preprint arXiv:1512.02325v2 (2016).
+       nvidia.com/nccl.                                                                    [33] Sebastian Ramos Timo Rehfeld Markus Enzweiler Rodrigo Benenson Uwe Franke
+ [6]   Martín Abadi, Ashish Agarwal, Paul Barham, Eugene Brevdo, Zhifeng Chen,                  Stefan Roth Bernt Schiele Marius Cordts, Mohamed Omran. 2017. The Cityscapes
+       Craig Citro, Greg S. Corrado, Andy Davis, Jeffrey Dean, Matthieu Devin, San-             Dataset for Semantic Urban Scene Understanding. CVPR (2017).
+       jay Ghemawat, Ian Goodfellow, Andrew Harp, Geoffrey Irving, Michael Isard,          [34] Tomáš Mikolov, Martin Karafiát, Lukáš Burget, Jan Černocký, and Sanjeev Khu-
+       Yangqing Jia, Rafal Jozefowicz, Lukasz Kaiser, Manjunath Kudlur, Josh Leven-             danpur. 2010. Recurrent neural network based language model. In INTERSPEECH.
+       berg, Dan Mané, Rajat Monga, Sherry Moore, Derek Murray, Chris Olah, Mike                1045–1048.
+       Schuster, Jonathon Shlens, Benoit Steiner, Ilya Sutskever, Kunal Talwar, Paul       [35] Tomas Mikolov, Ilya Sutskever, Kai Chen, Greg S Corrado, and Jeff Dean. 2013.
+       Tucker, Vincent Vanhoucke, Vijay Vasudevan, Fernanda Viégas, Oriol Vinyals,              Distributed Representations of Words and Phrases and their Compositionality.
+       Pete Warden, Martin Wattenberg, Martin Wicke, Yuan Yu, and Xiaoqiang Zheng.              NIPS (2013), 3111–3119.
+       2015. TensorFlow: Large-Scale Machine Learning on Heterogeneous Systems.            [36] Volodymyr Mnih, Koray Kavukcuoglu, David Silver, Alex Graves, Ioannis
+       http://tensorflow.org/ Software available from tensorflow.org.                           Antonoglou, Daan Wierstra, and Martin Riedmiller. 2013. Playing Atari with
+ [7]   Soumith Chintala Adam Paszke, Sam Gross and Gregory Chanan. [n. d.]. PyTorch.            Deep Reinforcement Learning. NIPS Deep Learning Workshop.
+       https://github.com/pytorch/pytorch.                                                 [37] Hao Su Jonathan Krause Sanjeev Satheesh Sean Ma Zhiheng Huang Andrej
+ [8]   Vijay Badrinarayanan, Alex Kendall, and Roberto Cipolla. 2017. SegNet: A Deep            Karpathy Aditya Khosla Michael Bernstein Alexander C. Berg Li Fei-Fei Olga Rus-
+       Convolutional Encoder-Decoder Architecture for Image Segmentation. IEEE                  sakovsky, Jia Deng. 2015. ImageNet Large Scale Visual Recognition Challenge.
+       Transactions on Pattern Analysis and Machine Intelligence (2017).                        IJCV (2015).
+ [9]   Tianqi Chen, Mu Li, Yutian Li, Min Lin, Naiyan Wang, Minjie Wang, Tianjun           [38] Travis Oliphant. 2006. Guide to NumPy. Trelgol Publishing. http://www.tramy.
+       Xiao, Bing Xu, Chiyuan Zhang, and Zheng Zhang. 2015. MXNet: A Flexible                   us/numpybook.pdf
+       and Efficient Machine Learning Library for Heterogeneous Distributed Systems.       [39] Xinghao Pan, Jianmin Chen, Rajat Monga, Samy Bengio, and Rafal Jozefowicz.
+       CoRR abs/1512.01274 (2015). arXiv:1512.01274                                             2017. Revisiting Distributed Synchronous SGD. ICLR Workshop Track, 2016 (02
+[10]   Valeriu Codreanu, Damian Podareanu, and Vikram Saletore. 2017. Achieving                 2017).
+       Deep Learning Training in less than 40 Minutes on ImageNet-1K. https://blog.        [40] Joseph Redmon and Ali Farhadi. 2016. YOLO9000: Better, Faster, Stronger. arXiv
+       surf.nl/en/imagenet-1k-training-on-intel-xeon-\phi-in-less-than-40-minutes/.             preprint arXiv:1612.08242 (2016).
+[11]   R. Collobert. 2008. Torch. NIPS Workshop on Machine Learning Open Source            [41] Joseph Redmon and Ali Farhadi. 2018. YOLOv3: An Incremental Improvement.
+       Software.                                                                                arXiv (2018).
+[12]   Xavier Martorell David Oro, Carles Fernandez and Javier Hernando. 2016. Work-       [42] Shaoqing Ren, Kaiming He, Ross Girshick, and Jian Sun. 2015. Faster R-CNN: To-
+       Efficient Parallel non-maximum suppression for embedded GPU architecture.                wards Real-Time Object Detection with Region Proposal Networks. In Advances
+       ICASSP (2016).                                                                           in Neural Information Processing Systems 28, C. Cortes, N. D. Lawrence, D. D. Lee,
+[13]   Jeffrey Dean, Greg Corrado, Rajat Monga, Kai Chen, Matthieu Devin, Mark Mao,             M. Sugiyama, and R. Garnett (Eds.). Curran Associates, Inc., 91–99.
+       Marc'aurelio Ranzato, Andrew Senior, Paul Tucker, Ke Yang, Quoc V. Le, and          [43] Jacob Schreiber. 2017. Pomegranate: fast and flexible probabilistic modeling in
+       Andrew Y. Ng. 2012. Large Scale Distributed Deep Networks. In Advances in                python. CoRR abs/1711.00137 (2017).
+       Neural Information Processing Systems 25, F. Pereira, C. J. C. Burges, L. Bottou,   [44] Alexander Sergeev and Mike Del Balso. 2018. Horovod: fast and easy distributed
+       and K. Q. Weinberger (Eds.). Curran Associates, Inc., 1223–1231.                         deep learning in TensorFlow. CoRR abs/1802.05799 (2018). arXiv:1802.05799
+[14]   Jeffrey Dean and Sanjay Ghemawat. 2004. MapReduce: Simplified Data Processing            http://arxiv.org/abs/1802.05799
+       on Large Clusters, In OSDI 2004. OSDI ’04, 137–150.                                 [45] Noam Shazeer, Youlong Cheng, Niki Parmar, Dustin Tran, Ashish Vaswani, Pen-
+[15]   J. Deng, W. Dong, R. Socher, L.-J. Li, K. Li, and L. Fei-Fei. 2009. ImageNet: A          porn Koanantakool, Peter Hawkins, HyoukJoong Lee, Mingsheng Hong, Cliff
+       Large-Scale Hierarchical Image Database. In CVPR09.                                      Young, Ryan Sepassi, and Blake Hechtman. 2018. Mesh-TensorFlow: Deep Learn-
+[16]   et. al. Dougal Maclaurin. [n. d.]. Autograd. https://github.com/HIPS/autograd            ing for Supercomputers. In Neural Information Processing Systems.
+[17]   M. Everingham, L. Van Gool, C. K. I. Williams, J. Winn, and A. Zisserman. 2010.     [46] K. Simonyan and A. Zisserman. 2014. Very Deep Convolutional Networks for
+       The Pascal Visual Object Classes (VOC) Challenge. IJCV 88, 2 (June 2010), 303–           Large-Scale Image Recognition. CoRR abs/1409.1556 (2014).
+       338.                                                                                [47] Ilya Sutskever, Oriol Vinyals, and Quoc V. Le. 2014. Sequence to Sequence
+[18]   Ian J. Goodfellow, David Warde-Farley, Pascal Lamblin, Vincent Dumoulin, Mehdi           Learning with Neural Networks. NIPS (2014), 3104–3112.
+       Mirza, Razvan Pascanu, James Bergstra, Frè¿£dè¿£ric Bastien, and Yoshua Bengio.     [48] Alexander Toshev and Christian Szegedy. 2014. DeepPose: Human Pose Estima-
+       2013. Pylearn2: a machine learning research library. CoRR abs/1308.4214 (2013).          tion via Deep Neural Networks. In CVPR. 1653–1660.
+[19]   Priya Goyal, Piotr Dollár, Ross B. Girshick, Pieter Noordhuis, Lukasz Wesolowski,   [49] Oriol Vinyals and Quoc V. Le. 2015. A Neural Conversational Model. CoRR
+       Aapo Kyrola, Andrew Tulloch, Yangqing Jia, and Kaiming He. 2017. Accurate,               abs/1506.05869 (2015). http://dblp.uni-trier.de/db/journals/corr/corr1506.html#
+       Large Minibatch SGD: Training ImageNet in 1 Hour. CoRR abs/1706.02677 (2017).            VinyalsL15
+[20]   Bharath Hariharan, Pablo Arbelaez, Lubomir Bourdev, Subhransu Maji, and             [50] Jifeng Dai Xiangyang Ji Yichen Wei Yi Li, Haozhi Qi. 2017. Fully Convolutional
+       Jitendra Malik. 2011. Semantic Contours from Inverse Detectors. In ICCV.                 Instance-aware Semantic Segmentation. CVPR (2017).
+[21]   Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. 2016. Deep Residual          [51] Yang You, Zhao Zhang, Cho-Jui Hsieh, James Demmel, and Kurt Keutzer. 2017.
+       Learning for Image Recognition. In CVPR. 770–778.                                        ImageNet Training in Minutes. CoRR abs/1709.05011 (2017).
+[22]   Xiaojuan Qi Xiaogang Wang Jiaya Jia Hengshuang Zhao, Jianping Shi. 2017.            [52] Dong Yu, Adam Eversole, Mike Seltzer, Kaisheng Yao, Oleksii Kuchaiev, Yu
+       Pyramid Scene Parsing Network. CVPR (2017).                                              Zhang, Frank Seide, Zhiheng Huang, Brian Guenter, Huaming Wang, Jasha
+[23]   Matthew Honnibal and Ines Montani. [n. d.]. spaCy 2: Natural language under-             Droppo, Geoffrey Zweig, Chris Rossbach, Jie Gao, Andreas Stolcke, Jon Currey,
+       standing with Bloom embeddings, convolutional neural networks and incremen-              Malcolm Slaney, Guoguo Chen, Amit Agarwal, Chris Basoglu, Marko Padmilac,
+       tal parsing. ([n. d.]). https://spacy.io/                                                Alexey Kamenev, Vladimir Ivanov, Scott Cypher, Hari Parthasarathi, Bhaskar
+[24]   Jie Hu, Li Shen, and Gang Sun. 2018. Squeeze-and-Excitation Networks. CVPR.              Mitra, Baolin Peng, and Xuedong Huang. 2014. An Introduction to Computational
+[25]   Yangqing Jia. 2013. Caffe: An Open Source Convolutional Architecture for Fast            Networks and the Computational Network Toolkit. Technical Report.
+       Feature Embedding.
+[26]   Eric Jones, Travis Oliphant, Pearu Peterson, et al. 2001–. SciPy: Open source
+       scientific tools for Python. http://www.scipy.org/
+[27]   Diederik P. Kingma and Max Welling. 2014. Auto-Encoding Variational Bayes.
+       ICLR (2014).
+A     DETAILS OF EXPERIMENTAL SETUPS                                    We used an in-house cluster that consists of 128 nodes. Each
+We herein provides the detailed setups for experiments whose         node is equipped with two Intel Xeon E5-2667 processors (3.20 GHz,
+results are provided in the main text.                               eight cores), 256-GB memory, and eight NVIDIA Tesla P100 GPUs.
+                                                                     All nodes are interconnected by the Mellanox Infiniband FDR.
+A.1    Distributed Training                                             The per-worker minibatch size was 32 and the total minibatch
+                                                                     size was 32k with 1024 workers. Computations were generally
+In the experimental evaluation at Section 6.3, we used development
+                                                                     performed in single precision; to reduce the payload size, we used
+branches based on Chainer 3.0.0rc1 and ChainerMN 1.0.0 3 . As
+                                                                     half-precision floats for communication.
+the underlying communication libraries, we used NCCL 2.0.5 and
+                                                                     3 At
+OpenMPI 1.10.2.                                                          the time when we ran this evaluation ChainerMN was released as a plugin library
+                                                                     to Chainer, while recently it has been merged to the mainline of Chainer.
+

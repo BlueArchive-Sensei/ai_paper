@@ -1,0 +1,565 @@
+                                             Ada-MK: Adaptive MegaKernel Optimization via Automated
+                                                       DAG-based Search for LLM Inference
+                                              Wenxin Dong, Mingqing Hu, Guanghui Yu, Qiang Fu, Peng Xu, Hui Xu, Yue Xing, Xuewu Jiao† ,
+                                                                             Shuanglong Li, Lin Liu
+                                                                                                         Baidu Inc.
+                                                                                                       Beijing, China
+
+                                         Abstract                                                               inference time (1,655,550 launches consuming ∼3.3 s). In conven-
+                                         When large language models (LLMs) serve real-time inference in         tional pipelines, adjacent kernels must exchange intermediate re-
+                                         commercial online advertising systems, end-to-end latency must         sults through HBM; MegaKernel instead leverages shared memory
+arXiv:2605.11581v1 [cs.CL] 12 May 2026
+
+
+
+
+                                         be strictly bounded to the millisecond range. Yet every token gener-   and registers to achieve seamless operator chaining and deep paral-
+                                         ated during the decode phase triggers thousands of kernel launches,    lelism, fundamentally eliminating operator switching overhead and
+                                         and kernel launch overhead alone can account for 14.6% of end-to-      HBM round-trip latency. MegaKernel achieves single-launch persis-
+                                         end inference time. MegaKernel eliminates launch overhead and          tent computation through Persistent Kernels, constructs producer–
+                                         inter-operator HBM round-trips by fusing multiple operators into       consumer pipelines via Warp Specialization, and overlaps computa-
+                                         a single persistent kernel. However, existing MegaKernel imple-        tion with memory access through TMA and asynchronous I/O [9].
+                                         mentations face a fundamental tension between portability and              Our target deployment is a commercial online advertising system
+                                         efficiency on resource-constrained GPUs such as NVIDIA Ada:            running on NVIDIA Ada (L20) GPUs [18]. Deploying MegaKernel
+                                         hand-tuned solutions are tightly coupled to specific architectures     on Ada faces severe dual constraints. First, the business demands
+                                         and lack portability, while auto-compiled approaches introduce run-    deterministic end-to-end latency strictly within 1–5 ms. Second,
+                                         time dynamic scheduling whose branch penalties are unacceptable        the Ada architecture natively lacks TMA hardware support, requir-
+                                         in latency-critical settings.                                          ing PTX assembly and hand-crafted software pipelines to emulate
+                                            We observe that under a fixed deployment configuration, the         asynchronous data movement; its on-chip shared memory is only
+                                         optimal execution path of a MegaKernel is uniquely determined,         half that of the H100 (128 KB vs. 227 KB) [19], severely compress-
+                                         and runtime dynamic decision-making can be entirely hoisted to         ing the optimization space for pipeline stages and tile sizes. In
+                                         compile time. Building on this insight, we propose Ada-MK: (1) a       contrast, Hopper/Blackwell architectures provide TMA hardware
+                                         three-dimensional shared-memory constraint model combined with         support and larger shared memory (227 KB), making MegaKernel
+                                         K-dimension splitting that reduces peak shared memory usage by         deployment far more straightforward [9, 19]. In practice, the shared
+                                         50%; (2) MLIR-based fine-grained DAG offline search that solidi-       memory limitation on Ada reduces the achievable pipeline stages
+                                         fies the optimal execution path, completely eliminating runtime        from the theoretical optimum of 4 to only 2, incurring a pipeline
+                                         branching; and (3) a heterogeneous hybrid inference engine that        duty-cycle loss exceeding 30%.
+                                         embeds MegaKernel as a plugin into TensorRT-LLM, combining                 Existing solutions fail to meet these requirements. Stanford’s
+                                         high-throughput Prefill with low-latency Decode. On an NVIDIA          MegaKernel [9] delivers strong performance, but its codebase is
+                                         L20, Ada-MK improves single-batch throughput by up to 23.6% over       deeply tied to Hopper/Blackwell-specific assembly optimizations
+                                         vanilla TensorRT-LLM and 50.2% over vLLM, achieving positive           and supports only a few model architectures (e.g., Llama-1B), lack-
+                                         gains across all tested scenarios—the first industrial deployment of   ing support for Qwen and other widely-used models [23, 24]; it
+                                         MegaKernel in a commercial online advertising system.                  also lacks support for long-sequence and large-batch Prefill phases.
+                                                                                                                Mirage MPK [1, 27] improves usability through auto-tuning, but
+                                         Keywords                                                               its Managed Pointer mechanism introduces runtime if-else branch-
+                                                                                                                ing based on shared memory page states, degrading instruction
+                                         MegaKernel, DAG-based Optimization, Adaptive Optimization, LLM
+                                                                                                                issue efficiency in ultra-low-latency scenarios and falling short of
+                                         Inference, Shared Memory Reuse, Commercial Advertising
+                                                                                                                hand-tuned operator performance.
+                                                                                                                    To address these challenges, we propose Ada-MK with the fol-
+                                         1   Introduction
+                                                                                                                lowing core contributions:
+                                         Large language models (LLMs) are increasingly deployed in search,
+                                         recommendation, and conversational applications, with parameter
+                                         counts growing from billions to hundreds of billions. Inference                • Adaptive shared memory management. We model shared
+                                         latency has thus become a key bottleneck for industrial adoption,                memory allocation from three dimensions—hardware spec-
+                                         especially in latency-sensitive online services where efficient in-              ifications, model architecture, and dynamic workload—and
+                                         ference under limited hardware resources is critical. For extremely              reduce peak shared memory demand by 50% through K-
+                                         latency-sensitive scenarios, frequent global memory accesses and                 dimension fine-grained splitting, while enabling cross-operator
+                                         kernel launch overhead on GPUs have become the primary bot-                      page reuse to reconstruct efficient pipelines on Ada’s con-
+                                         tlenecks for end-to-end performance [13, 21]. Profiling Qwen2.5-                 strained resources.
+                                         1.5B with Nsight Systems under TensorRT-LLM reveals that kernel                • Fine-grained DAG-based automatic search. We lever-
+                                         launch overhead accounts for approximately 14.6% of end-to-end                   age MLIR Lowering [15] to construct PTX-level dependency
+                                                                                                                                    Dong et al.
+
+
+       DAGs and solidify the optimal execution trace through of-        2.2    Analysis of Mainstream Approaches
+       fline profiling, completely eliminating runtime dynamic          Stanford’s MegaKernel is built on Tiny-Llama and FlashAtten-
+       decision overhead. Unlike Ansor [31] and other traditional       tion [3] primitives. It decomposes SM resources into five heteroge-
+       auto-tuning frameworks, Ada-MK’s DAG-level search cap-           neous roles—Loader (asynchronous prefetching), Consumer (ten-
+       tures finer-grained parallelism opportunities.                   sor computation), Storer (asynchronous writeback), Controller (in-
+     • Heterogeneous hybrid inference engine. We embed                  struction dispatch coordination), and Launcher (resource release
+       MegaKernel as a plugin into TensorRT-LLM [21], reusing           management)—leveraging asynchronous cooperation and semaphore
+       TensorRT-LLM’s native operators for Prefill and switching        synchronization for deep pipeline decoupling of computation, mem-
+       to the MegaKernel engine for Decode, achieving both high         ory access, and instruction dispatch. Its implementation draws heav-
+       throughput and low latency—the first industrial deploy-          ily from NVIDIA CUTLASS [20] Warp-Specialized GEMM designs.
+       ment of MegaKernel.                                              The framework focuses on Hopper/Blackwell hardware and hard-
+                                                                        codes tile sizes for specific models (e.g., Llama-1B), lacking support
+   Experiments show that Ada-MK reduces end-to-end latency
+                                                                        for Qwen variants. The codebase contains substantial architecture-
+by 10%–50% over vLLM [13], SGLang [33], and vanilla TensorRT-
+                                                                        specific assembly optimizations, making porting to Ada extremely
+LLM [21] across Qwen model series, and has been deployed in
+                                                                        costly. The initial version supports only low-load Decoder phases,
+production within Baidu’s commercial online advertising system.
+                                                                        lacking support for long-sequence and large-batch Prefill, leaving
+The remainder of this paper is organized as follows: §2 presents
+                                                                        a significant gap for industrial deployment.
+background and related work; §3 describes the Ada-MK overall
+                                                                           Mirage MPK [1] is a representative recent work in operator com-
+architecture; §4 details the three core optimizations; §5 presents
+                                                                        pilation, proposing a tGraph-based multi-level pipeline abstraction
+experimental evaluation; §6 concludes with future directions.
+                                                                        that automates the search for tiling strategies and storage alloca-
+                                                                        tion. Mirage [27] further enables cross-level optimization through
+2 Background and Related Work                                           𝜇Graph unification, discovering novel optimizations combining
+2.1 LLM GPU Kernel Techniques: From Local to                            algebraic transformations, scheduling transformations, and custom
+                                                                        kernel generation. OLLIE [32] extends the search space of tensor
+    Global Fusion
+                                                                        algebraic expressions through derivation-based transformations,
+GPU operator optimization has evolved from local to global fusion,      Korch [11] achieves optimal kernel orchestration via operator fis-
+forming several distinct research directions:                           sion and constraint optimization, PET [26] discovers optimization
+    Traditional Kernel Fusion merges adjacent kernels to reduce         opportunities invisible to traditional methods through partially
+launch counts, but still relies on global memory for intermediate       equivalent transformations, and TASO [12] automates computation
+data exchange, making it difficult to circumvent memory band-           graph substitution generation and verification. These works ad-
+width and data dependency bottlenecks at extreme model scales.          vance tensor program optimization from different angles, but none
+CUDAGraph reduces launch overhead by capturing and replaying            addresses MegaKernel-level global operator fusion. MPK’s Man-
+kernel sequences, but cannot achieve deep inter-operator fusion.        aged Pointer mechanism dynamically determines execution paths
+    Compiler-level operator fusion. Triton [25] achieves compile-       at runtime, and the resulting if-else branching degrades instruc-
+time operator fusion through block-level programming abstractions,      tion issue efficiency, preventing it from reaching hardware peak
+while Hidet [6] provides finer-grained scheduling control via a task-   performance. Its automated search also struggles to converge to
+mapping paradigm. These approaches improve fusion depth but             global optima within reasonable time for irregular tiles or complex
+still operate on a “kernel-per-operator” execution model, unable to     operator chains.
+eliminate operator switching overhead. Additionally, MCFuser [29]
+achieves high-performance fusion for memory-bound compute-
+intensive operator chains, Neptune [30] enables advanced fusion         3     Ada-MK Overall Architecture
+of reduction operators by breaking loop dependencies, and Mag-          As illustrated in Figure 1, the Ada-MK system architecture com-
+neto [4] focuses on coordinated optimization of parallel operator       prises two tightly coupled phases: Offline MegaKernel Synthesis
+structures.                                                             (Phase I) and Online Warp-Specialized Execution (Phase II).
+    Single-operator extreme fusion. FlashAttention [3] fuses the           Phase I: Offline MegaKernel Synthesis. This phase is respon-
+multiple steps of attention into a single kernel through IO-aware       sible for computation graph generation and hardware-constrained
+tiling, achieving breakthrough memory efficiency; FlashAttention-       automatic search. The system first parses the logical structure of the
+2 [2] further optimizes parallelism and work partitioning. However,     Transformer Decoder and LM Head into a fine-grained DAG. A hard-
+these approaches are confined to individual operators.                  ware resource filter then evaluates constraints such as shared mem-
+    MegaKernel global fusion [9] integrates an entire computa-          ory capacity and register limits, directly pruning invalid branches
+tion block into a single persistent kernel, partitions warps within     that would exceed resource budgets. Within the resulting feasible
+an SM into producer–consumer roles via Warp Specialization, and         search space, the system performs profiling to identify the optimal
+achieves pipeline parallelism through multi-level storage and asyn-     DAG execution trace for the target GPU, and serializes this trace
+chronous copies, thoroughly eliminating operator switching over-        for runtime invocation.
+head and breaking through global memory access limitations. MegaK-         Phase II: Online Warp-Specialized Execution. This phase
+ernel represents the furthest advance in the large-kernel direction,    embeds the serialized MegaKernel as a plugin into the TensorRT-
+achieving full-chain fusion and persistent computation.                 LLM inference framework, enabling seamless switching between
+Ada-MK: Adaptive MegaKernel Optimization via Automated DAG-based Search for LLM Inference
+
+
+
+
+Figure 1: Ada-MK overall architecture. Phase I (Offline MegaKernel Synthesis): the Transformer Decoder and LM Head are
+parsed into a fine-grained DAG, pruned by hardware resource constraints, and profiled to select the optimal execution trace,
+which is then serialized. Phase II (Online Warp-Specialized Execution): the serialized MegaKernel is embedded as a TensorRT-
+LLM plugin, with warp-specialized roles (Loader, Consumer, Storer, Controller, Launcher) collaborating through shared memory
+to form an efficient software pipeline.
+
+
+Prefill (using TensorRT-LLM’s native operators) and Decode (using                  memory per SM. We then partition shared memory into instruc-
+the MegaKernel engine). Within each streaming multiprocessor                       tion pipeline buffers, synchronization metadata, and computation
+(SM), MegaKernel constructs an efficient warp-specialized software                 intermediate buffers, and derive the maximum number of available
+pipeline: the computational resources are spatially partitioned into               pages:
+multiple warp groups—Loader, Consumer, Storer, Controller, and
+Launcher—that share SM resources and collaborate through shared
+memory to maximally overlap memory-access latency with com-                                  SMemmax − 𝑁 stage × (Instrbuf + Semaphores + Scratch)
+                                                                                    𝑁 page =
+putation.                                                                                                            Sizepage
+                                                                                                                                                     (1)
+                                                                                      Model-architecture and dynamic-workload awareness. For
+4 Core Optimizations                                                               different model architectures, we compute the shared memory
+4.1 Adaptive Shared Memory Management                                              occupied by weights, quantization scales, and other shared data,
+                                                                                   and compute activation occupancy as a function of batch size.
+    under Resource Constraints
+                                                                                   The pipeline depth (𝑁 stage ) is adaptively adjusted: on resource-
+4.1.1 Multi-Dimensional Parameter-Aware Resource Modeling. We                      constrained devices we enforce capacity constraints, while on resource-
+model shared memory allocation from three dimensions—hardware                      rich devices we increase pipeline depth to maximize throughput:
+specifications, model architecture, and dynamic workload—enabling
+fine-grained shared memory management:
+   Hardware-specification awareness. From the GPU hardware                                              𝑁 page, total − 𝑁 page, weight − 𝑁 page, scale − 𝑁 page, act
+                                                                                            𝑁 stage =                                                                  (2)
+specifications [18], we first obtain the maximum available shared                                                             𝑁 page, per stage
+                                                                                                                                                   Dong et al.
+
+
+   K-dimension fine-grained splitting. Inspired by a segmented-          Table 1: MLIR high-level to low-level primitive mapping.
+computation approach, we halve the 𝐾-dimension tile. Each loop
+iteration loads only the weight sub-tile required by the current            MLIR High        MLIR Low                   Physical Semantics HW Res.
+sub-block, reducing peak shared memory demand by 50%.                       memref.copy      nvgpu.device_async_copy Global→Shared:           HBM, SMem
+                                                                                                                     async prefetch
+                                                                            memref.load      nvgpu.ldmatrix          Shared→Reg: warp-        SMem, Regs
+4.1.2 Shared Memory Page Reuse. The original Stanford MegaK-                                                         level load
+                                                                            quant.dcast      custom.dequant          Dequant:                 ALU, Regs
+ernel implements page reuse across operators (e.g., releasing a                                                      INT4→FP16
+page from operator A for use by operator B). We further opti-               linalg.matmul    nvgpu.mma.sync          Tensor          Core:    TC
+                                                                                                                     16×8×16 MMA
+mize this reuse strategy. At execution time, activation pages and           linalg.generic   arith.addf              Epilogue: bias/act fu-   ALU, Regs
+weight/output pages are reused based on automated analysis, as                                                       sion
+                                                                            memref.copy      vector.transfer_write   Reg→HBM: async           HBM, Regs
+detailed in §4.2.                                                                                                    writeback
+   Activation–weight page reuse. Once activations have been
+loaded from shared memory into registers, the occupied shared
+memory can be reclaimed and dynamically reallocated to the Loader
+role for weight storage. This increases the number of pipeline stages
+(pipeline depth) between the Loader and Consumer, effectively
+hiding memory-access latency while improving instruction-level
+parallelism.
+   Activation–output page reuse. Computed output data typ-
+ically requires additional shared memory buffering before being
+written back to global memory. Since MMA computation depends
+on registers, the shared memory occupied by activations can be
+released after copying to registers and reallocated for MMA result
+storage.
+
+4.2    Fine-Grained DAG-Based Automatic Search
+4.2.1 Foundational Definitions and Modeling. To precisely charac-
+terize MegaKernel’s internal execution logic, we define a formal
+framework based on directed acyclic graphs (DAGs). Nodes are clas-
+sified into two categories: data migration (Global→Shared→Register
+transfers at each level) and computation execution (MMA, dequanti-      Figure 2: Fine-grained dependency DAG construction from
+zation, epilogue), aligned to PTX instruction granularity. Edges cap-   MLIR alias analysis. Write operations identify producers;
+ture two types of constraints: data dependencies encoding producer–     alias analysis at Read operations determines memory overlap
+consumer relationships (a successor can execute only after its prede-   to build RAW edges.
+cessor completes), and resource dependencies encoding competition
+for limited shared memory pages (a subsequent load must stall
+when insufficient pages are available).                                 (RAW) dependencies in the instruction sequence, constructing fine-
+                                                                        grained dependency DAGs from producers to consumers (Figure 2).
+4.2.2 Automated Pipeline Modeling and Search-Path Optimization.         Using MLIR’s AliasAnalysis API combined with a lastWriters
+We propose an automated search framework that bridges from              mapping table, we traverse the instruction sequence, identify mem-
+low-level IR to pipeline configuration, addressing the limitation       ory producers through Write operations, and determine memory
+that the original MegaKernel lacks fine-grained DAG definitions         overlap at Read operations through alias analysis, thereby automat-
+for efficient pipeline construction.                                    ically constructing RAW dependency DAGs.
+
+   Step 1: MLIR fine-grained decomposition. To overcome the limita-        Step 3: Schedule and resource candidate-set generation. Pipeline
+tion that operator-level dependency representations obscure paral-      role splitting (DAG-to-Role Mapping). The system assigns DAG
+lelism opportunities, we leverage Torch-MLIR’s multi-level trans-       nodes to four roles (Figure 3)—Launcher (metadata and page sched-
+formation architecture [15]. Through deep analysis of MLIR dialects     uling), Loader (asynchronous weight prefetching), Consumer (input
+and layer-by-layer Lowering [7], and inspired by Relax’s compos-        loading, dequantization, and MMA computation), and Storer (re-
+able compilation approach for dynamic machine learning [14], we         sult writeback synchronization)—and explores mapping schemes
+decompose coarse-grained operator black boxes into PTX-level            of atomic nodes across different roles. Core strategies include:
+fine-grained dependency traces, providing precise topological sup-           • Load balancing: Avoid stacking ALU-intensive tasks in a sin-
+port for MegaKernel’s static instruction scheduling and resource               gle role; migrate lightweight I/O or preprocessing logic to
+management, achieving extreme overlap of computation and I/O.                  the Loader role to maximize hardware issue slot utilization.
+                                                                             • Tiling parameter space: Simultaneously traverse multiple
+  Step 2: Constructing logical dependencies. Based on MLIR’s alias             Block/Warp tile partitioning ratios to seek the theoretical
+analysis capabilities, we automatically identify read-after-write              peak compute throughput.
+Ada-MK: Adaptive MegaKernel Optimization via Automated DAG-based Search for LLM Inference
+
+
+                                                                                   shift from “online adaptation” to “offline planning” eliminates the
+                                                                                   need for runtime resource-state probing, removing the instruction-
+                                                                                   width overhead of dynamic decision-making.
+                                                                                      In summary, this section achieves exhaustive search and locking
+                                                                                   of physically optimal execution traces in the offline phase through
+                                                                                   MLIR fine-grained decomposition and DAG dependency model-
+                                                                                   ing, comprehensively considering compute-unit load and storage-
+                                                                                   page constraints. This “offline search, online reuse” strategy trades
+                                                                                   compile-time search cost for runtime determinism.
+
+                                                                                   4.2.3 Overall Effectiveness. We systematically analyze the com-
+                                                                                   bined performance gains from the fine-grained DAG automatic
+                                                                                   search mechanism. Experimental results show that our approach
+                                                                                   achieves approximately 30% performance improvement in the De-
+                                                                                   code phase compared to the original Stanford MegaKernel, with
+Figure 3: DAG node assignment to four pipeline roles with
+                                                                                   gains arising from two dimensions.
+load balancing and tiling parameter exploration.
+                                                                                      Systematic elimination of spurious dependencies. The original
+   Shared-memory-constrained scheduling strategy. Shared                           MegaKernel implementation contains implicit serialization barriers
+memory allocation directly determines whether the pipeline suffers                 introduced by static compilation strategies that hinder full exploita-
+from structural stalls. We define three page states—Empty, Locked,                 tion of instruction-level parallelism. Through fine-grained DAG
+and Ready—identify state conflicts between Loader and Consumer,                    dependency tracing under data-flow correlation (RAW/WAR) con-
+quantify structural stalls, and compute pipeline duty cycles. The                  straints, we achieve two classes of decoupling optimizations:
+candidate set is pruned through:                                                      Asynchronous prefetching and logical decoupling. DAG
+                                                                                   analysis confirms no data-flow dependency between RMS Norm
+     • Early asynchronous prefetching: Increase the prefetch stride
+                                                                                   weights and QKV computation instructions, enabling their load tim-
+        (𝑁 +1 → 𝑁 +2), trading shared memory space for complete
+                                                                                   ing to be advanced to the physical page release point, hiding HBM
+        overlap of weight transfer and computation. TileLink [34]
+                                                                                   access latency through asynchronous transfer. Similarly, V-Cache
+        demonstrates that tile-centric primitives can effectively
+                                                                                   and K-Cache (historical portion) loads in the attention operator
+        overlap compute and communication in distributed settings;
+                                                                                   are advanced into the pipeline window overlapping with preced-
+        Ada-MK applies a similar overlapping principle within a
+                                                                                   ing computation, removing historical KV-Cache transfer from the
+        single SM’s software pipeline.
+                                                                                   critical path (Figure 4).
+     • Gap filling: Insert non-critical-path instructions into issue
+                                                                                      Pseudo-dependency elimination and streaming reduction.
+        slots left idle by synchronization primitives.
+                                                                                   In SwiGLU and similar dual-path gated activation structures, con-
+     • Address permutation: Remap logical pages to physical ad-
+                                                                                   ventional implementations trigger Reduce only after both Up/Gate
+        dress offsets, reducing bank conflicts through interleaved
+                                                                                   GEMM paths complete, forming a coarse-grained synchronization
+        reuse. Hexcute [28] provides constraint-solving references
+                                                                                   barrier. Through fine-grained DAG modeling, we bind the Reduce
+        for address permutation, and Axe [10] provides a unified
+                                                                                   start condition to the readiness of the corresponding input compo-
+        layout abstraction for cross-level memory mapping.
+                                                                                   nent, enabling Up-Reduce to proceed in parallel during Gate-GEMM
+     • Role rebalancing: Forward lightweight tasks (e.g., dequanti-
+                                                                                   execution, achieving cross-path streaming reduction.
+        zation) to idle Loader roles, accelerating page turnover.
+   Step 4: Static trace search and execution-path solidification. Heuris-             Auto-tuned optimal pipeline configuration. Static configuration
+tic offline search. Within the space defined by logical depen-                     of warp role allocation and shared memory page scheduling cannot
+dencies and physical constraints, we simulate multiple page ar-                    accommodate throughput differences across operators. Through
+rangements and role mappings through offline profiling, locking                    offline profiling-driven auto-tuning, we achieve configuration con-
+in the execution trace with the highest theoretical duty cycle. Un-                vergence in two dimensions:
+like Ansor [31], which employs hierarchical search spaces with                        Warp allocation refinement. Reducing Consumer warp count
+evolutionary search, and Pruner [22], which adopts a Draft-then-                   from 16 to 8 (Figure 5) decreases single-GEMM output scale while
+Verify search acceleration mechanism, Ada-MK’s DAG-level search                    aligning Storer’s cross-block Reduce latency with Consumer’s com-
+operates directly on PTX-level dependency graphs, capturing finer-                 putation latency, effectively mitigating throughput mismatch among
+grained parallelism opportunities and effectively handling complex                 pipeline roles. Additionally, extending the pipeline stage count from
+irregular dependencies that traditional MegaKernels cannot ad-                     2 to 4 further buffers bubbles caused by execution-latency differ-
+dress.                                                                             ences across roles, suppressing pipeline stalls.
+   Execution-path solidification. Frameworks such as MPK [1]                          Page in-place reuse optimization. Auto-tuning combined
+introduce runtime if-else branches that cause instruction issue de-                with circular page allocation dynamically identifies shared memory
+lays and pipeline bubbles. We employ path solidification to serialize              page slots eligible for early release, enabling time-multiplexed reuse
+the optimal execution path directly into kernel code. This paradigm                of weight and activation pages under WAR constraints, effectively
+                                                                                                                                  Dong et al.
+
+
+                                                                       deeply into TensorRT-LLM’s execution topology via a Plugin mech-
+                                                                       anism, constructing a heterogeneous hybrid inference engine that
+                                                                       combines the strengths of both:
+
+                                                                            • Hierarchical operator replacement: We preserve TensorRT-
+                                                                              LLM’s mature implementations for peripheral logic (Em-
+                                                                              bedding, KV Cache management) and replace only the core
+                                                                              Transformer Block with a custom MegaKernel plugin, min-
+                                                                              imizing the modification scope.
+                                                                            • Phase-adaptive execution: The Prefill phase retains TensorRT-
+                                                                              LLM’s native fused operators, leveraging their high paral-
+                                                                              lelism for large-scale token scenarios; the Decoder phase
+Figure 4: Asynchronous prefetching decouples RMS Norm
+                                                                              automatically switches to the MegaKernel engine, elimi-
+loads and KV-Cache loads from QKV computation.
+                                                                              nating launch overhead and memory-access bottlenecks
+                                                                              through full-chain kernel fusion.
+                                                                            • Zero-cost business capability reuse: Business logic such as
+                                                                              prefix-tree constrained decoding and integrated generation-
+                                                                              discrimination requires no secondary development for MegaK-
+                                                                              ernel, directly reusing TensorRT-LLM’s existing implemen-
+                                                                              tations. This approach simultaneously accommodates Pre-
+                                                                              fill’s high throughput and Decode’s low latency without
+                                                                              additional business refactoring costs, providing a viable
+Figure 5: Warp allocation refinement: Consumer warps re-                      path for MegaKernel’s large-scale industrial deployment.
+duced from 16 to 8 with pipeline stages extended from 2 to 4,
+aligning role latencies and reducing pipeline stalls.                  4.3.2 MegaKernel Quantization Implementation. Building on adap-
+                                                                       tive shared memory management, we further incorporate quantiza-
+                                                                       tion optimizations [17] into MegaKernel. This serves two purposes:
+improving the utilization efficiency of the limited shared memory
+                                                                       quantization compresses weight volume, alleviating Ada’s shared
+space.
+                                                                       memory capacity bottleneck and enabling more pipeline stages;
+   Combining both optimization dimensions, our approach achieves
+                                                                       and Ada’s inference workloads remain memory-bandwidth-bound,
+systematic improvement in MegaKernel pipeline efficiency on Ada’s
+                                                                       so quantization directly reduces memory pressure and improves
+resource-constrained architecture through the synergy of depen-
+                                                                       throughput. The implementation comprises three components:
+dency decoupling and auto-tuning.
+                                                                          TensorCore-aware weight reorder. Inspired by QServe [17],
+                                                                       we perform offline weight reordering so that each thread can effi-
+4.3   Industrial Deployment and End-to-End                             ciently access weights during inference. At runtime, the Consumer
+      Optimization                                                     role directly loads quantized weights already aligned to TensorCore
+4.3.1 Heterogeneous Hybrid Inference Engine with Integrated MegaK-     access patterns via the LDMATRIX instruction, eliminating the need
+ernel. MegaKernel demonstrates significant advantages in the De-       to write dequantized weights back to shared memory and avoiding
+code phase, but lags behind mature TensorRT-LLM in large-scale         runtime layout transformation overhead. Tilus [5] provides refer-
+parallel computation efficiency during the Prefill phase [21]. Three   ence for layout optimization of arbitrary bit-width low-precision
+deep-rooted reasons explain this: (1) Decode is IO-bound: single-      data.
+token generation involves minimal computation, with the bottle-           K-dimension multi-level pipeline computation. Combin-
+neck in memory access (weight + KV Cache loading); MegaKernel’s        ing K-dimension splitting with quantization, the shared memory
+inter-operator parallelism deeply overlaps computation and I/O for     required per iteration is compressed from 64 KB to 32 KB, reducing
+significant gains. (2) Prefill is compute-bound: long-sequence         page occupancy from 4 to 2. The freed shared memory capacity is
+large-batch computation saturates GPU compute units, yielding di-      used to extend the pipeline stage count, further deepening compute–
+minishing returns from MegaKernel’s IO-compute overlap. (3) Ker-       memory overlap.
+nel launch overhead differential: Decode launches thousands               Small-batch Padding I/O optimization. Under small batch
+of kernels per token (overhead ∼14.6%), while Prefill executes only    sizes, Tensor Core instructions require fixed tile dimensions, caus-
+one forward pass where launch overhead is negligible, preventing       ing significant padding redundancy when effective data is insuf-
+MegaKernel’s core advantage from being fully exploited.                ficient. We employ vector-level fine-grained loading with explicit
+   Moreover, production environments have accumulated exten-           register reorganization to bypass traditional tile-level ldmatrix
+sive business capabilities built on TensorRT-LLM (e.g., prefix-tree    mechanisms, eliminating redundant I/O of invalid padding data
+constrained decoding, integrated generation-discrimination). Com-      between HBM and registers. This optimization draws on Tilus [5]’s
+pletely replacing the TensorRT-LLM engine would incur prohibi-         automatic vectorization and instruction selection strategies, as well
+tive engineering migration costs. We therefore embed MegaKernel        as AWQ [16]’s activation-aware weight quantization acceleration.
+Ada-MK: Adaptive MegaKernel Optimization via Automated DAG-based Search for LLM Inference
+
+
+5 Experimental Evaluation                                                                      Table 2: Compared inference frameworks.
+
+5.1 Experimental Objectives and Research
+                                                                                            Framework        Version      Description
+    Questions
+                                                                                            vLLM [13]        v0.19.0      High-throughput LLM infer-
+We systematically evaluate the performance gains of MegaKer-
+                                                                                                                          ence with efficient KV Cache
+nel optimizations within TensorRT-LLM [21] and compare against                                                            management
+mainstream open-source inference frameworks vLLM [13], SGLang [33],                         SGLang [33]      v0.5.10      Structured generation and
+and vanilla TensorRT-LLM [21]. Experiments focus on throughput                                                            high-performance serving
+across different input/output lengths, batch sizes, and task work-                          TRT-LLM [21]     v1.1.0rc5    NVIDIA native inference (base-
+loads, addressing the following research questions:                                                                       line)
+    (1) Can MegaKernel significantly improve TensorRT-LLM through-                          Ada-MK           —            TRT-LLM + MegaKernel (ours)
+        put in low-latency, small-batch inference scenarios?
+    (2) Does MegaKernel’s benefit persist when sequence lengths                                         Table 3: Model configurations.
+        extend from fixed short sequences to real task datasets?
+    (3) Does Ada-MK retain advantages over high-throughput frame-
+                                                                                              Model                Parameters       Quantization
+        works such as vLLM and SGLang at larger batch sizes?
+    (4) Is MegaKernel’s performance benefit consistent across model                           Qwen3-1.7B [24]      1.7B             GPTQ-W4A16 [8]
+        versions?                                                                             Qwen2.5-1.5B [23]    1.5B             GPTQ-W4A16 [8]
+
+5.2    Experimental Setup
+5.2.1 Compared Frameworks. All frameworks are evaluated in of-                     5.3      Fixed Short-Sequence Experiments
+fline batch mode: a fixed batch of requests is submitted simultane-                Under fixed input length 64 and output length 12 (simulating short-
+ously, and throughput is computed after collecting all generation                  input short-output business scenarios), the throughput results across
+results. This mode precisely controls concurrency, eliminating in-                 frameworks for Qwen3-1.7B and Qwen2.5-1.5B are shown in Fig-
+terference from online scheduler differences on throughput mea-                    ure 6.
+surements, and is suitable for horizontal comparison centered on                      The results demonstrate that MegaKernel delivers significant
+operator execution efficiency.                                                     benefits in short-sequence output scenarios. Compared to vanilla
+                                                                                   TensorRT-LLM, Ada-MK maintains >10% improvement across all
+5.2.2 Model and Quantization Configuration. We cover two Qwen-
+                                                                                   batch sizes, with a 23.6% improvement at BS=1. This indicates that
+series models of similar scale but different versions to validate the
+                                                                                   MegaKernel not only improves large-batch throughput but also
+generality of optimization benefits. Note that the two models have
+                                                                                   significantly reduces execution overhead in small-batch scenarios.
+different parameter counts (1.7B vs. 1.5B); cross-model comparisons
+                                                                                   On Qwen2.5-1.5B, Ada-MK similarly achieves the highest through-
+aim to verify MegaKernel’s generality under identical quantization,
+                                                                                   put across all batch sizes. Although the improvement over vanilla
+and do not exclude the influence of parameter-count differences on
+                                                                                   TensorRT-LLM is slightly lower than on Qwen3-1.7B, it maintains a
+absolute performance.
+                                                                                   stable gain of 6.7%–15.6%, confirming that MegaKernel’s optimiza-
+5.2.3 Workload Configuration. Experiments include two workload                     tion is not limited to a single model version.
+types:
+     (1) Fixed short-sequence workload: Input length 64 tokens,                    5.4      Real-Dataset Experiments
+         output length 12 tokens (denoted in64/out12). This scenario               5.4.1 CSL Dataset. The CSL dataset corresponds to medium-length
+         evaluates framework throughput under low-latency, short-                  context inputs, reflecting inference workloads closer to real tasks.
+         output generation tasks.                                                  The throughput results for Qwen3-1.7B GPTQ-W4A16 on the CSL
+     (2) Real-dataset workload: CSL and Human-eval datasets,                       dataset are shown in Figure 7.
+         with context lengths primarily distributed in the ∼200–                      In the CSL scenario, Ada-MK achieves the best throughput from
+         1000 token range, evaluating performance stability under                  BS=1 to BS=8, confirming that MegaKernel effectively improves
+         medium-to-long input scenarios.                                           TensorRT-LLM’s execution efficiency under medium-to-long input
+   All experiments are conducted across batch sizes of 1, 2, 4, 8,                 scenarios. However, at BS=16, vLLM achieves the highest through-
+and 16. The evaluation metric is generation throughput in tokens/s;                put, with Ada-MK lagging vLLM by 3.5% and essentially matching
+higher values indicate better inference performance.                               SGLang. This phenomenon indicates that as batch size and sequence
+                                                                                   length increase, vLLM/SGLang’s advantages in request scheduling,
+5.2.4 Experimental Environment. All experiments are conducted
+                                                                                   KV Cache management, or parallel scaling begin to emerge.
+on a single server with an Intel Xeon Platinum 8558 processor (96
+cores / 192 threads), 1 TB DDR5 memory, and a single NVIDIA L20                    5.4.2 Human-eval Dataset. The Human-eval dataset further evalu-
+GPU [18] (48 GB GDDR6, memory bandwidth 864 GB/s, Compute                          ates performance in code-generation tasks. The results for Qwen3-
+Capability 8.9). The OS kernel is Linux 5.10.0, GPU driver 535.161.07,             1.7B GPTQ-W4A16 on this dataset are shown in Figure 8.
+CUDA 12.2. Each framework runs in an isolated Docker container.                       Unlike the CSL scenario, Ada-MK maintains the highest through-
+Each experiment exclusively occupied a single GPU, eliminating                     put on the Human-eval dataset even at BS=16. Compared to vLLM
+multi-task resource contention.                                                    and SGLang, its advantage narrows to 1.6% and 3.5% respectively
+                                                                                                                                    Dong et al.
+
+
+
+
+Figure 6: End-to-end throughput comparison on fixed short sequences (input=64, output=12) for (a) Qwen3-1.7B and (b) Qwen2.5-
+1.5B, both quantized with GPTQ-W4A16. Four inference frameworks are compared: vLLM, SGLang, vanilla TensorRT-LLM, and
+Ada-MK (ours). Numbers above the Ada-MK bars indicate speedup over vanilla TensorRT-LLM. Ada-MK achieves the highest
+throughput across all batch sizes, with the most significant gains at small batch sizes (up to 23.6% for Qwen3-1.7B at BS=1).
+
+
+
+
+Figure 7: End-to-end throughput comparison on the CSL                      Figure 8: End-to-end throughput comparison on the Human-
+dataset (Qwen3-1.7B GPTQ-W4A16). Ada-MK achieves the                       eval dataset (Qwen3-1.7B GPTQ-W4A16). Ada-MK maintains
+highest throughput at BS=1 through BS=8, while vLLM sur-                   the highest throughput even at BS=16, with a 19.5% improve-
+passes Ada-MK at BS=16 by 3.5%, indicating that system-level               ment over vanilla TensorRT-LLM, demonstrating strong scal-
+scheduling advantages emerge under high-concurrency long-                  ability on code-generation workloads.
+context scenarios.
+
+                                                                           configuration, but provides universal acceleration for TensorRT-
+                                                                           LLM’s execution path.
+at large batch sizes, but it still achieves a significant 19.5% improve-
+ment over vanilla TensorRT-LLM. This indicates that MegaKernel             5.5.2 Most Significant Gains in Small-Batch, Short-Sequence Sce-
+provides stable improvement to TensorRT-LLM’s kernel execution             narios. In BS=1/2 low-batch scenarios, Ada-MK’s advantage is most
+efficiency and maintains good scalability on code-generation work-         pronounced. For Qwen3-1.7B’s in64/out12 scenario, improvements
+loads.                                                                     reach 50.2% and 64.5% over vLLM and 71.9% and 49.3% over SGLang.
+                                                                           This confirms that MegaKernel effectively reduces kernel sched-
+5.5    Comprehensive Analysis and Conclusions                              uling and execution overhead in small-batch inference, making it
+                                                                           particularly suitable for low-latency online inference, interactive
+5.5.1 Stable Gains over TensorRT-LLM. Across all experimental re-
+                                                                           requests, and short-text generation tasks.
+sults, Ada-MK achieves positive improvement over vanilla TensorRT-
+LLM in all tested scenarios and batch sizes. The improvement               5.5.3 Narrowing Advantage in Large-Batch, Long-Sequence Scenar-
+reaches up to 23.6% in fixed short-sequence scenarios and maintains        ios. As batch size increases and input sequences lengthen, Ada-
+4.0%–19.5% in real-dataset scenarios, demonstrating that MegaKer-          MK’s advantage over vLLM/SGLang gradually narrows. In the CSL
+nel’s optimization is not specific to a single input pattern or model      dataset at BS=16, vLLM achieves the highest throughput, with
+Ada-MK: Adaptive MegaKernel Optimization via Automated DAG-based Search for LLM Inference
+
+
+Ada-MK lagging by 3.5%. This indicates that in high-concurrency,                              [6] Y. Ding, C. H. Yu, B. Zheng, Y. Liu, Y. Wang, and G. Pekhimenko. 2023. Hidet:
+long-context scenarios, operator/kernel-level fusion optimization                                 Task-Mapping Programming Paradigm for Deep Learning Tensor Programs. In
+                                                                                                  Proc. ASPLOS.
+alone may be insufficient to fully compensate for differences arising                         [7] S. Feng, B. Hou, H. Jin, W. Lin, J. Shao, R. Lai, Z. Ye, L. Zheng, C. H. Yu, Y. Yu,
+from system-level scheduling and memory management.                                               and T. Chen. 2023. TensorIR: An Abstraction for Automatic Tensorized Program
+                                                                                                  Optimization. In Proc. ASPLOS.
+                                                                                              [8] E. Frantar, S. Ashkboos, T. Hoefler, and D. Alistarh. 2023. GPTQ: Accurate
+5.5.4 Cross-Model Consistency. In fixed short-sequence scenarios,                                 Post-Training Quantization for Generative Pre-trained Transformers. In Proc.
+both Qwen3-1.7B and Qwen2.5-1.5B show Ada-MK achieving the                                        ICLR.
+highest throughput across all batch sizes. This result demonstrates                           [9] HazyResearch. 2025. Look Ma, No Bubbles! Designing a Low-Latency Megakernel
+                                                                                                  for Llama-1B. https://github.com/HazyResearch/Megakernels. (2025).
+that MegaKernel’s optimization benefits exhibit cross-model con-                             [10] B. Hou, H. Jin, G. Wang, J. Chen, Y. Cai, L. Yang, Z. Ye, Y. Ding, R. Lai, and T.
+sistency and can generalize to different model versions of similar                                Chen. 2026. Axe: A Simple Unified Layout Abstraction for Machine Learning
+                                                                                                  Compilers. arXiv:2601.19092 (2026).
+scale and identical quantization.                                                            [11] M. Hu, A. Venkatram, S. Biswas, B. Marimuthu, B. Hou, G. Oliaro, H. Wang, L.
+   Overall, MegaKernel significantly improves TensorRT-LLM’s                                      Zheng, X. Miao, J. Zhai, and Z. Jia. 2024. Korch: Optimal Kernel Orchestration
+inference throughput on GPTQ-W4A16 quantized models, with                                         for Tensor Programs. In Proc. ASPLOS.
+                                                                                             [12] Z. Jia, O. Padon, J. J. Thomas, T. Warszawski, M. Zaharia, and A. Aiken. 2019.
+the most prominent gains in short-sequence, small-batch scenar-                                   TASO: Optimizing Deep Learning Computation with Automatic Generation of
+ios. Compared to vLLM and SGLang, Ada-MK achieves compre-                                         Graph Substitutions. In Proc. SOSP.
+hensive leadership in fixed short-sequence scenarios and main-                               [13] W. Kwon, Z. Li, S. Zhuang, Y. Sheng, L. Zheng, C. H. Yu, J. Gonzalez, H. Zhang,
+                                                                                                  and I. Stoica. 2023. Efficient Memory Management for Large Language Model
+tains stable advantages at low-to-medium batch sizes in CSL and                                   Serving with PagedAttention. In Proc. SOSP.
+Human-eval real-dataset scenarios. In high-batch-size, medium-                               [14] R. Lai, J. Shao, S. Feng, S. Lyubomirsky, B. Hou, W. Lin, Z. Ye, H. Jin, Y. Jin, J. Liu,
+                                                                                                  L. Jin, Y. Cai, Z. Jiang, Y. Wu, S. Park, P. Srivastava, J. Roesch, T. Mowry, and T.
+to-long sequence scenarios, Ada-MK’s advantage narrows, with                                      Chen. 2025. Relax: Composable Abstractions for End-to-End Dynamic Machine
+vLLM/SGLang demonstrating better system-level scalability in                                      Learning. In Proc. ASPLOS.
+some cases. MegaKernel is an effective optimization for improv-                              [15] C. Lattner, M. Amini, U. Bondhugula, A. Cohen, A. Davis, J. Pienaar, R. Riddle,
+                                                                                                  T. Shpeisman, N. Vasilache, and O. Zinenko. 2021. MLIR: Scaling Compiler
+ing TensorRT-LLM inference performance, particularly suited for                                   Infrastructure for Domain Specific Computation. In Proc. CGO.
+low-latency, small-batch, short-output online inference tasks.                               [16] J. Lin, J. Tang, H. Tang, S. Yang, W.-M. Chen, W.-C. Wang, G. Xiao, X. Dang, C.
+                                                                                                  Gan, and S. Han. 2024. AWQ: Activation-aware Weight Quantization for LLM
+                                                                                                  Compression and Acceleration. In Proc. MLSys.
+6    Conclusion                                                                              [17] Y. Lin, H. Tang, S. Yang, et al. 2025. QServe: W4A8KV4 Quantization and System
+                                                                                                  Co-Design for Efficient LLM Serving. In Proc. MLSys, Vol. 7.
+This paper addresses the deployment challenges of MegaKernel                                 [18] NVIDIA. 2022. NVIDIA Ada Lovelace GPU Architecture Whitepaper.
+on resource-constrained NVIDIA Ada architectures and proposes                                [19] NVIDIA. 2022. NVIDIA H100 Tensor Core GPU Architecture Whitepaper.
+                                                                                             [20] NVIDIA. 2023. CUTLASS: CUDA Templates for Linear Algebra Subroutines and
+the Ada-MK optimization framework. Through multi-dimensional                                      Solvers. https://github.com/NVIDIA/cutlass.
+adaptive shared memory management, we reduce peak shared                                     [21] NVIDIA. 2024. TensorRT-LLM: High-Performance LLM Inference. https://github.
+memory demand by 50% and reconstruct efficient pipelines on                                       com/NVIDIA/TensorRT-LLM.
+                                                                                             [22] L. Qiao, J. Shi, X. Hao, X. Fang, S. Zhang, M. Zhao, Z. Zhu, J. Chen, H. An, X.
+constrained hardware. Based on MLIR fine-grained DAG decom-                                       Tang, B. Li, H. Yuan, and X. Wang. 2025. Pruner: A Draft-then-Verify Exploration
+position and offline trace search, we solidify execution paths at                                 Mechanism to Accelerate Tensor Program Tuning. In Proc. ASPLOS.
+                                                                                             [23] Qwen Team. 2024. Qwen2.5 Technical Report. arXiv:2412.15115 (2024).
+compile time, eliminating runtime dynamic decision overhead.                                 [24] Qwen Team. 2025. Qwen3 Technical Report. arXiv:2505.09388 (2025).
+Through a heterogeneous hybrid engine that embeds MegaKer-                                   [25] P. Tillet, H. T. Kung, and D. Cox. 2019. Triton: An Intermediate Language and
+nel as a TensorRT-LLM plugin, we simultaneously accommodate                                       Compiler for Tiled Neural Network Computations. In Proc. MAPL.
+                                                                                             [26] H. Wang, J. Zhai, M. Gao, F. Zhang, T. Wang, Z. Ma, S. Tang, L. Zheng, W. Wang,
+Prefill’s high throughput and Decode’s low latency without addi-                                  K. Rong, Y. Chen, and Z. Jia. 2023. PET: Optimizing Tensor Programs with
+tional business refactoring costs. Experimental results demonstrate                               Partially Equivalent Transformations and Automated Corrections. IEEE Trans.
+that Ada-MK achieves significant end-to-end latency improvements                                  Comput. 72 (2023), 3546–3560.
+                                                                                             [27] M. Wu, X. Cheng, S. Liu, C. Shi, J. Ji, M. Ao, P. Velliengiri, X. Miao, O. Padon, and
+over vLLM [13], SGLang [33], and TensorRT-LLM [21] baselines                                      Z. Jia. 2024. Mirage: A Multi-Level Superoptimizer for Tensor Programs. In Proc.
+across multiple batch sizes and task types, representing the first                                PLDI.
+                                                                                             [28] X. Zhang, Y. Ding, B. Sun, Y. Hu, T. Shpeisman, and G. Pekhimenko. 2026. Hexcute:
+large-scale industrial deployment of MegaKernel in a commercial                                   A Compiler Framework for Automating Layout Synthesis in GPU Programs. In
+online advertising system. Future work will explore Ada-MK’s adap-                                Proc. CGO.
+tation and migration to larger model scales and next-generation                              [29] Z. Zhang, D. Yang, X. Zhou, and D. Cheng. 2024. MCFuser: High-Performance
+                                                                                                  and Rapid Fusion of Memory-Bound Compute-Intensive Operators. In Proc. SC.
+Blackwell architectures.                                                                     [30] Y. Zhao, E. Johnson, P. Chatarasi, V. S. Adve, and S. Misailovic. 2025. Nep-
+                                                                                                  tune: Advanced ML Operator Fusion for Locality and Parallelism on GPUs.
+                                                                                                  arXiv:2510.08726 (2025).
+References                                                                                   [31] L. Zheng, C. Jia, M. Sun, Z. Wu, C. H. Yu, A. Haj-Ali, Y. Wang, J. Yang, D. Zhuo,
+ [1] X. Cheng, Z. Zhang, Y. Zhou, J. Ji, J. Jiang, Z. Zhao, Z. Xiao, Z. Ye, Y. Huang,             K. Sen, J. E. Gonzalez, and I. Stoica. 2020. Ansor: Generating High-Performance
+     R. Lai, H. Jin, B. Hou, M. Wu, Y. Dong, A. Yip, S. Wang, W. Yang, X. Miao, T.                Tensor Programs for Deep Learning. In Proc. OSDI.
+     Chen, and Z. Jia. 2025. Mirage Persistent Kernel: A Compiler and Runtime for            [32] L. Zheng, H. Wang, J. Zhai, M. Hu, Z. Ma, T. Wang, S. Tang, L. Xie, K. Huang, and Z.
+     Mega-Kernelizing Tensor Programs. arXiv:2512.22219 (2025).                                   Jia. 2022. OLLIE: Derivation-based Tensor Program Optimizer. arXiv:2208.02025
+ [2] T. Dao. 2024. FlashAttention-2: Faster Attention with Better Parallelism and                 (2022).
+     Work Sharing. In Proc. ICLR.                                                            [33] L. Zheng, L. Yin, Z. Xie, J. Sun, C. Cui, E. Xie, and H. Zhang. 2025. SGLang:
+ [3] T. Dao, D. Y. Fu, S. Ermon, A. Rudra, and C. Ré. 2022. FlashAttention: Fast and              Efficient Execution of Structured Language Model Programs. In Proc. ICLR.
+     Memory-Efficient Exact Attention with IO-Awareness. In Proc. NeurIPS.                   [34] S. Zheng, J. Fang, X. Zheng, Q. Hou, W. Bao, N. Zheng, Z. Jiang, D. Wang,
+ [4] Z. Di, L. Wang, Z. Ma, E. Shao, J. Zhao, Z. Ren, S. Feng, D. Tao, G. Tan, and N. Sun.        J. Ye, H. Lin, L.-W. Chang, and X. Liu. 2025. TileLink: Generating Efficient
+     2025. Accelerating Parallel Structures in DNNs via Parallel Fusion and Operator              Compute-Communication Overlapping Kernels using Tile-Centric Primitives.
+     Co-Optimization. ACM Trans. Archit. Code Optim. 22 (2025), 1–26.                             arXiv:2503.20313 (2025).
+ [5] Y. Ding, B. Hou, X. Zhang, A. Lin, T. Chen, C. H. Yu, Y. Wang, and G. Pekhimenko.
+     2026. Tilus: A Tile-Level GPGPU Programming Language for Low-Precision
+     Computation. In Proc. ASPLOS.
+

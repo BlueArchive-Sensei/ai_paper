@@ -1,0 +1,890 @@
+ TORCH . FX :         P RACTICAL P ROGRAM C APTURE AND T RANSFORMATION FOR
+                               D EEP L EARNING IN P YTHON
+
+
+                   James K Reed 1 Zachary DeVito 1 Horace He 1 Ansley Ussery 1 Jason Ansel 1
+
+
+                                                      A BSTRACT
+     Modern deep learning frameworks provide imperative, eager execution programming interfaces embedded in
+     Python to provide a productive development experience. However, deep learning practitioners sometimes need
+     to capture and transform program structure for performance optimization, visualization, analysis, and hardware
+     integration. We study the different designs for program capture and transformation used in deep learning.
+     By designing for typical deep learning use cases rather than long tail ones, it is possible to create a simpler
+     framework for program capture and transformation. We apply this principle in torch.fx, a program capture and
+     transformation library for PyTorch written entirely in Python and optimized for high developer productivity by
+     ML practitioners. We present case studies showing how torch.fx enables workflows previously inaccessible in
+     the PyTorch ecosystem.
+
+1    I NTRODUCTION                                                tion used in deep learning frameworks, program differen-
+                                                                  tiation, is reformulated from an ahead-of-time transforma-
+Early graph mode or define-and-run (Tokui et al., 2019)           tion to a just-in-time transformation, in the form of auto-
+deep learning frameworks like Caffe (Jia et al., 2014),           differentiation.
+Theano (Al-Rfou et al., 2016), and TensorFlow (Abadi et al.,
+2016) defined APIs in which the user constructed a graph-         Most training and inference can be done using eager mode
+based intermediate representation (IR) of the desired com-        with auto-differentiation. However, there are still trans-
+putation. Program transformations like program differentia-       formations—such as program quantization or operator fu-
+tion, device/host partitioning and placement, quantization,       sion—that are easier to write given the additional program
+device lowering, and performance optimization could be            structure provided by an IR. To bridge this gap, an eager-
+applied directly to this IR. One way to think of these frame-     mode framework needs a way of capturing program struc-
+works is as simple embedded programming languages that            ture from user programs to enable these transformations.
+are meta-programmed from a host language, predominantly           Some program capture systems are built to capture a free-
+Python (Innes et al., 2017).                                      standing representation of the whole program for the pur-
+However, these frameworks require the user to exit the host       poses of serialization or export. For instance, Torch-
+language and enter a domain-specific language and runtime,        Script (DeVito et al., 2018) includes mutable state, control-
+which often has inferior user experience compared to the          flow, and complex data types for the purposes of faithfully
+host language. For instance, debugging requires different         modeling the semantics of the original Python program.
+tools from the typical debugging toolkits such as Python’s        Modeling Python in full generality comes at the cost of
+pdb library.                                                      complexity in program capture techniques and difficulty of
+                                                                  writing transforms on the highly-complex IR.
+More recent eager mode or define-by-run (Tokui et al.,
+2019) frameworks such as Autograd (Maclaurin et al., 2015),       In contrast, it is possible to decouple the requirements of
+Chainer (Tokui et al., 2019), PyTorch (Paszke et al., 2019)       faithfully modeling Python from the requirements needed
+and TensorFlow Eager (Agrawal et al., 2019) eschew ex-            for transforms such as quantization or fusion. Transforms
+plicit graph-building APIs in favor of programming in the         are often formulated as modifications to a high-level directed
+host language directly. The primary program transforma-           acyclic graph (DAG) organization of the code, with imple-
+   1
+                                                                  mentation details hidden within high-level blocks (such as
+     Facebook, Menlo Park, CA, USA. Correspondence to: James      Convolution or Batch Normalization). Thus, simplifications
+K Reed <jamesreed@fb.com>.
+                                                                  can be made to both the program capture mechanism and
+Proceedings of the 5 th MLSys Conference, Santa Clara, CA, USA,   the IR it produces, focusing on the high-level DAG structure
+2022. Copyright 2022 by the author(s).                            of the majority of neural network computation.
+                     torch.fx: Practical Program Capture and Transformation for Deep Learning in Python
+
+For this use case, we present torch.fx, a high-productivity      approach. In addition to the user not having to provide ex-
+library for capturing and transforming PyTorch programs.         ample inputs, this approach surfaces locations where Python
+torch.fx explicitly trades generality of supported pro-          control flow depends on the input values, rather than collect-
+grams for simplicity of program capture and representation.      ing a trace specialized to the control decisions imparted by
+torch.fx focuses on the DAG representation of deep learn-        the example inputs.
+ing programs and provides customization interfaces to adapt
+                                                                 During tracing, operations are only recorded for tensors
+programs into this representation. In doing so, torch.fx is
+                                                                 and a small number of other data structures such as lists
+able to provide a program transform interface that supports
+                                                                 of tensors. This means that tracing can only record a rep-
+the majority of deep learning programs while providing
+                                                                 resentation for a subset of the Python program. Although
+simple and easy-to-use APIs for implementing transforms.
+                                                                 tracing’s visibility into the program is limited, this is often
+We present the following contributions:                          sufficient for deep learning computations, which are most of-
+                                                                 ten flat sequences of tensor operations—termed basic block
+    1. A practical analysis of the features of program capture   programs in Section 2.3.
+       and transformation that are important for deep learning
+                                                                 By overriding the execution behavior of standard Python
+       programs.
+                                                                 code, some tracing systems can capture more program struc-
+    2. A Python-only program capture library that imple-         ture, such as control flow, at the cost of additional complex-
+       ments these features and can be customized to capture     ity. For instance, tf.function augments symbolic tracing
+       different levels of program detail.                       with a Lightweight Modular Staging (Rompf & Odersky,
+                                                                 2010) system that uses Python AST transforms to convert
+    3. A simple 6 instruction IR for representing captured
+                                                                 imperative control flow constructs into higher-order Python
+       programs that focuses on ease of understanding and
+                                                                 functions, which can then be traced.
+       ease of doing static analysis.
+                                                                 An alternative way to capture program structure is to have
+    4. A code generation system for returning transformed        users write models directly in an embedded programming
+       code back to the host language’s ecosystem.               language within Python. The simplest of these techniques
+    5. Case studies in how torch.fx has been used in prac-       is to provide a graph-building API similar to TensorFlow,
+       tice to develop features for performance optimization,    which lets users build programs (graphs) by calling Python
+       program analysis, device lowering, and more.              functions. It is awkward to represent control flow in these
+                                                                 APIs, so PyTorch’s TorchScript (DeVito et al., 2018) instead
+                                                                 extracts programs directly from the Python source using a
+2     BACKGROUND                                                 traditional lexer-parser-compiler toolchain. TorchScript can
+When capturing and transforming programs, both eager             inspect the source syntax in full fidelity and can understand
+and graph-mode frameworks must make choices about cap-           language constructs such as structured control flow, collec-
+turing program structure, program specialization and the         tion types (e.g. tuple, list, dict) and user-defined types.
+design of the intermediate representation in which programs      As opposed to tracing, which can fail silently, embedded
+are kept. The combination of these choices determines the        language approaches can report unsupported constructs as
+space of programs that are representable in the framework,       part of compilation. On the other hand, embedded language
+the ease of writing transformations, and the performance         compilation is significantly more complicated to implement,
+of resulting transformed programs. In general, supporting        since it requires a full language stack. Even then, in practice
+more programs at high performance requires a more com-           these systems will not support the full Python language,
+plicated capture framework and IR and subsequently makes         so users still need to make their program conform to the
+transformations harder to write.                                 supported subset (albeit a larger subset than supported by
+                                                                 tracing systems).
+2.1    Capturing Program Structure                               Systems such as Zygote.jl (Innes, 2018) and TPU integra-
+There are several ways to capture program structure from         tion (Fischer & Saba, 2018) in the Julia ecosystem (Bezan-
+Python programs. The simplest way is to trace the exe-           son et al., 2017) as well as Swift for TensorFlow (Saeta
+cution of a model given some example inputs and record           et al., 2021) provide program transformation interfaces by
+the operations that occur, which is the approach used by         way of integration into non-Python host languages. The
+PyTorch’s jit.trace (DeVito et al., 2018). A slightly more       main drawback of such native host language integrations
+complicated variant of this approach is to perform tracing       in Swift and Julia is that they require the user to exit the
+with abstract values rather than example inputs (symbolic        Python ecosystem. Python has considerable momentum and
+tracing). MXNet’s Gluon (Chen et al., 2015), and Tensor-         extensive libraries in the numeric/scientific computing (and
+Flow’s tf.function (Moldovan et al., 2018) implement this        particularly deep learning) space, and many users prefer
+                    torch.fx: Practical Program Capture and Transformation for Deep Learning in Python
+
+to stay in the Python ecosystem. While other languages           stance, print or pdb statements in traced code will only be
+may provide objectively better experiences in some respects,     executed on runs where re-tracing occurs. Re-tracing and re-
+adoption has been slow.                                          transformation can also cause hard-to-predict performance
+                                                                 bubbles as execution of the system stalls to re-specialize.
+2.2   Specializing Programs
+                                                                 2.3   Intermediate Representation Design
+A Python expression such as a + b is very abstract. There
+are no constraints on the types of a or b. Even if both are      ML frameworks vary in the format of their IRs, with richer
+Tensors, the number of dimensions and the size of the dimen-     IRs capturing more programs and being more expressive at
+sions might vary. When ML frameworks capture programs,           the cost of additional complexity to write transformations
+they often simultaneously specialize these expressions such      or run the code efficiently.
+that they are only valid for specific types or tensor shapes.
+The more a program is specialized, the fewer inputs it will      Language Many frameworks define their IR in a cross-
+work on, so approaches vary in the degree of specialization,     language way. For example, Caffe and TensorFlow use
+the timing of when specialization is done (ahead of time,        the Protocol Buffers format (Xiao et al., 2008) to represent
+just-in-time), and the safety of the specialized result.         computational graphs. PyTorch’s JIT and MXNet use C++
+For example, PyTorch’s TorchScript torch.jit.trace (De-          data structures for their IR with additional bindings into
+Vito et al., 2018) specializes to the shape of the example       Python. Such native representations can have better runtime
+inputs. jit.trace capture is unintrusive—that is—it records      performance and may be easier to serialize. On the other
+the operations that occur during an actual execution run of      hand, these representations can impose a learning curve
+the program. One implication of this is the presence of          above that required for programming Python.
+tensor metadata such as the ndim or shape attributes, which
+can escape the traced region and be used in control deci-        Control flow Most neural networks are expressible as
+sions within the Python program. This may cause the traced       flat sequences of tensor operations without control flow
+representation to be shape specialized—that is—it is only        such as if-statements or loops—a definition we refer to as
+valid for the value shapes used at trace time and may fail for   a basic block program. Basic block programs are often
+other shapes.                                                    represented as a directed acyclic graph (DAG) data struc-
+To avoid the problem of specialization failing for some          ture. Multilayer Perceptrons (MLPs), Convolutional Neural
+inputs, systems such as DyNet (Neubig et al., 2017) and          Networks (CNNs) such as ResNet (He et al., 2015) and per-
+LazyTensor (Suhan et al., 2021) perform tracing just-in-time,    sonalization/recommendation models (Naumov et al., 2019)
+and thus can capture specialized program representations for     are easily expressed this way. Similarly, Transformer net-
+every invocation. At runtime, these systems defer execution      works (Vaswani et al., 2017) can also be expressed in this
+of tensor operations, instead accumulating a program trace.      way, barring the loop needed for sequence generation on the
+When a value must be materialized, the system will apply         decoder portion of the network.
+transformations to the collected program representation (e.g.    Recurrent Neural Networks (RNNs) such as the Elman
+automatic batching or native code lowering) and execute the      RNN (Elman, 1990), LSTM (Hochreiter & Schmidhuber,
+code, returning the values requested. However, this process      1997), and Gated Recurrent Unit (GRU) (Cho et al., 2014)
+adds additional cost, since the program is captured on every     are not immediately expressible in this way, as the recurrent
+invocation. LazyTensor uses a caching system to reduce this      network computation is applied repeatedly across elements
+cost: optimized artifacts are stored in a cache keyed by a       of a sequence with (typically) dynamic length. RNN struc-
+hash of the collected IR. On further invocations of the same     tures can be represented in an imperative language as a loop
+IR, the optimized artifact can be called directly.               with tensor computation applied in the loop body and tensor
+The performance of JIT specialization can also be improved       values carried across loop iterations. However, in practice,
+by proving that re-capturing the program is unneeded for         these RNN structures are typically provided as wholesale
+some inputs. For instance, JAX’s jit combinator (Frostig         tensor operations. Thus, an entire RNN application over a
+et al., 2018) uses pure, functional Python programs as in-       sequence appears in code as a call to an RNN function or
+put. This enforces referential transparency on non-Tensor        module. Therefore, these network architectures often also
+computation like shape expressions. When some transform          appear as basic block programs.
+requires specialization, such as conversion to XLA (The          Nevertheless, many frameworks support capturing and rep-
+XLA Team, 2017) with static shapes, the system can look          resenting control flow in their IR. TorchScript built control
+at the shapes of the inputs to determine if a new capture is     flow support into all of its components first-class due to
+required. A disadvantage of JIT specialization is that it is     anticipation for workloads to become more complex, par-
+more complicated to reason about code execution. For in-         ticularly in sequence processing domains. JAX uses higher-
+                    torch.fx: Practical Program Capture and Transformation for Deep Learning in Python
+
+order functions such as jax.lax.scan to allow functional-        grams are the only way to run a program, the ability to
+style control flow (Frostig et al., 2018). MLIR represents       capture a program in full fidelity is crucial. But PyTorch is
+control flow with basic blocks that end in tail calls (Lattner   primarily used as an eager execution framework and pro-
+et al., 2020). In addition to adding complexity to the IR,       gram capture is only used for some specific transforms; It
+more general control flow also makes transforms such as          does not need to work for an entire program. Furthermore,
+common sub-expressions more complicated to implement.            most PyTorch programmers who want to transform models
+                                                                 are machine learning practitioners who prefer to work in
+                                                                 Python and may have less knowledge of compiler design.
+State Deep learning models contain state in the form of
+the trainable model weights used in different layers. Apart      By designing for typical deep learning models rather than
+from these parameters, most networks operate as pure func-       the long tail, it is possible to create a framework that is much
+tions of their inputs. ML frameworks take different ap-          easier to use and simpler to implement. This philosophy is
+proaches to handling how this state is mutated.                  captured by torch.fx’s design principles:
+
+PyTorch allows values to be mutated and tensors can be
+                                                                     • Prefer making program capture and transformation
+views of each other. For example, the slicing syntax x[i]
+                                                                       easy for typical models at the cost of working for all
+(where x is a Tensor value) does not produce a new Tensor
+                                                                       possible programs. Avoid complexity to support long-
+value, but rather returns a view aliasing the subset of tensor
+                                                                       tail, esoteric use cases.
+x indexed by i. Views can also be mutated. For example,
+the expression x[i] = y will write the value of y into the           • Work with tools and concepts that ML practitioners are
+portion of x indexed by i.                                             already familiar with such as Python data structures
+Since PyTorch supports these aliasing and mutation seman-              and the publicly documented operators in PyTorch.
+tics, modifications to programs must be done in the context
+                                                                     • Make the process of program capture highly config-
+of an analysis that proves that the modification is safe (An-
+                                                                       urable so users can implement their own solutions for
+dersen, 1994). TorchScript implemented such alias analysis
+                                                                       long-tail uses. Allowing users to make one-off config-
+for the purpose of reasoning about the safety of transforms
+                                                                       urations is simpler than handling the general case.
+over the TorchScript IR. However, this comes at a high cost:
+all operations in the program must be annotated with infor-
+mation specifying their aliasing and mutation behavior. In       4    TORCH . FX      OVERVIEW
+practice, many functions (opaque calls or ones that have not
+                                                                 In the spirit of simplicity, torch.fx captures programs
+been annotated with relaxed semantics) are treated with a
+                                                                 via symbolic tracing, represents them using a simple 6-
+conservative assumption that the callee mutates global mem-
+                                                                 instruction python-based IR, and re-generates Python code
+ory, causing the operation to act as a barrier and hindering
+                                                                 from the IR to execute it. To avoid the complexities of re-
+optimization. Needing to reason about aliasing and mutabil-
+                                                                 capture for JIT specialization, torch.fx makes no attempt to
+ity complicates pass authoring, adds additional maintenance
+                                                                 specialize programs itself, instead relying on the transforms
+burden to the framework, and can limit optimization oppor-
+                                                                 to decide what specializations they want to perform during
+tunities, but enables the user to apply the full generality of
+                                                                 capture. The process of symbolic tracing can be configured
+the PyTorch tensor language.
+                                                                 by users to work for more esoteric uses.
+JAX’s functional approach moves the burden of tracking this
+                                                                 Figure 1 shows an example of capturing code with torch.fx.
+state outside of the framework. Instead the model must be
+                                                                 symbolic_trace takes a function or torch.nn.Module and
+turned into a pure function where the parameters are passed
+                                                                 captures its structure in a Graph object. That Graph object is
+as inputs. Typically, this is done with wrapper libraries
+                                                                 combined with module parameters in a GraphModule, which
+such as Haiku (Hennigan et al., 2020) or Flax (Heek et al.,
+                                                                 is a subclass of torch.nn.Module whose forward method
+2020). Any transforms that have to modify both state and
+                                                                 runs the captured Graph. We can print the Nodes of this
+code, such as folding batch norm scaling to a weight tensor,
+                                                                 Graph to see the IR that was captured. placeholder nodes
+are made more complicated because these components no
+                                                                 represent inputs and a single output node represents the
+longer live together in the same framework.
+                                                                 result of the Graph. call_function nodes have a reference
+                                                                 directly to the Python function they would call. call_method
+3    D ESIGN P RINCIPLES                                         nodes directly invoke a method on their first argument. The
+                                                                 Graph is reconstituted into Python code (traced.code) for
+Many of the different designs for program capture and trans-
+                                                                 invocation.
+formation used in existing frameworks favor the ability to
+represent more deep learning programs at the cost of the         Figure 2 shows an example transform using torch.fx. The
+complexity of their implementation. When captured pro-           transform finds all instances of one activation and replaces
+                      torch.fx: Practical Program Capture and Transformation for Deep Learning in Python
+
+import torch                                                         4.2       Intermediate Representation
+from torch.fx import symbolic_trace, GraphModule
+                                                                     torch.fx represents programs in a DAG-based IR, which
+def my_func(x):
+  return torch.relu(x).neg()                                         is amenable to the basic block programs common in deep
+                                                                     learning. Programs are represented as a Graph object, which
+# Program capture via symbolic tracing
+traced : GraphModule = symbolic_trace(my_func)                       contains a linear series of Node objects representing opera-
+for n in traced.graph.nodes:                                         tions. Nodes have a string opcode, describing what type of
+  print(f’{n.name} = {n.op} target={n.target} args={n.args}’)
+"""                                                                  operation the Node represents (the semantics of the opcodes
+x = placeholder target=x args=()                                     can be found in Appendix A.1). Nodes have an associated
+relu = call_function target=<built-in method relu ...> args=(x,)
+neg = call_method target=neg args=(relu,)                            target, which is the call target for call nodes (call_module,
+output = output target=output args=(neg,)                            call_function, and call_method). Finally, Nodes have args
+"""
+                                                                     and kwargs, which together represent the arguments to the
+print(traced.code)                                                   target in the Python calling convention as witnessed during
+"""
+def forward(self, x):                                                tracing1 (the semantics for args and kwargs for each opcode
+    relu = torch.relu(x); x = None                                   can be found in Appendix A.2). Data dependencies between
+    neg = relu.neg(); relu = None
+    return neg                                                       Nodes are represented as references to other Nodes within
+"""                                                                  args and kwargs.
+
+                                                                     To simplify the IR, torch.fx’s IR does not have primitive
+Figure 1. torch.fx captures programs using symbolic tracing into     operations that model the construction or mutation of data
+a simple IR and generates Python code from that IR.
+                                                                     structures. Nevertheless, args and kwargs support immedi-
+                                                                     ate values: Python built-in types such as int and float and
+from torch.fx import Graph                                           recursive collection types like tuple and list can appear as
+def replace_activation(g: Graph, old, new):                          Node arguments without separate object construction Nodes.
+  for n in g.nodes:
+    if n.op == ’call_function’ and n.target == old:                  Because Nodes support immediate values, the IR is clean
+       # create IR to call new activate                              and Nodes are approximately 1-to-1 with Tensor operations.
+       with g.inserting_after(n):
+         new_n = g.call_function(new, n.args)
+         n.replace_all_uses_with(new_n)                              torch.fx stores the state of the program in the GraphModule
+         g.erase_node(n)                                             class. GraphModule is the container for transformed pro-
+       # or for this simplified case: ‘n.target = new‘
+                                                                     grams, exposing the transformed, generated code as well
+replace_activation(traced.graph, torch.relu,                         as providing the familiar parameter management APIs of
+                   torch.nn.functional.gelu)
+traced.recompile()                                                   nn.Module. GraphModule can be used anywhere a normal
+                                                                     nn.Module can be used, providing interoperability between
+                                                                     transformed code and the rest of the PyTorch ecosystem.
+Figure 2. Transforms, like this one that replaces activation func-   torch.fx’s IR provides two opcodes for accessing state in
+tions, are written directly in Python.
+                                                                     the Module hierarchy: call_module, which invokes a sub-
+                                                                     Module’s forward method, and get_attr, which fetches a
+                                                                     parameter from the Module. Transformed code can interact
+them with another. We use it replace relu with gelu in our           with the Module hierarchy in much the same way normal
+example.                                                             PyTorch code can via these opcodes. In addition, trans-
+                                                                     formations can manipulate the mutable state in the Module
+4.1   Program Capture                                                hierarchy simultaneously with transformations over code.
+torch.fx’s symbolic tracing mechanism uses a Proxy data              This provides a natural separation between the mutable pa-
+structure to record operations on values flowing through the         rameters and the functional Graph that interacts with them
+program. Proxy is a duck-typed Python class that records at-         via call_module Nodes, while still keeping them together in
+tribute accesses and method calls on it, acting as an abstract       a single object for doing transformations that work on both.
+value that stands in for the concrete program values. Proxy
+uses the __torch_function__ protocol (Abbasi et al., 2020)           4.3       Source-to-Source Transformation
+to intercept and record the dispatch of PyTorch operators,           The final stage in the torch.fx transformation pipeline is
+which are free functions. Finally, torch.fx overrides Py-            code generation. Rather than exiting the Python ecosys-
+Torch’s Module abstraction to record calls to Modules using          tem and entering a bespoke runtime, torch.fx generates
+proxied values. The process of symbolic tracing is config-
+                                                                           1
+urable via a Tracer class whose methods can be overridden                No normalization is applied to args or kwargs; They are pre-
+to control what values are kept as Proxys and which are              served as the user wrote them. This facilitates further backward-
+                                                                     compatibility of the generated code
+partially evaluated during the trace.
+                      torch.fx: Practical Program Capture and Transformation for Deep Learning in Python
+
+class SampleModule(torch.nn.Module):                                5.2   Configurable Program Capture
+    def forward(self, x):
+      return self.act(x + math.pi)                                  torch.fx’s symbolic tracing is customizable. A Tracer class
+sm = SampleModule()                                                 controls the behavior of fx.symbolic_trace. Its methods
+sm.act = traced # from previous figure                              can be overridden to change the tracing process’s behavior.
+traced : GraphModule = symbolic_trace(sm)
+print(traced.code)                                                  The is_leaf_module method can be overridden to spec-
+"""
+def forward(self, x):                                               ify which PyTorch Module instances should be treated as
+    add = x + 3.141592653589793; x = None                           opaque calls during tracing. By default, torch.fx keeps
+    gelu = torch.nn.functional.gelu(add); add = None
+    neg = gelu.neg(); gelu = None                                   PyTorch built-in Modules such as nn.Conv2d intact while
+    return neg                                                      tracing through user-defined Modules, since this creates a
+"""
+                                                                    trace of standard, understandable primitives. Customizing
+                                                                    this behavior can block out portions of a model that con-
+Figure 3. torch.fx generates Python code as its output, so it can   tain unsupported language features or modify the level of
+be reused in further capture and transform steps.                   representation used for transformations.
+                                                                    create_proxy is a method that can be overridden to cus-
+                                                                    tomize the behavior of creating a Node in the Graph and the
+                                                                    associated runtime Proxy value. This can be used to, for
+valid Python source code from the transformed IR. This              example, install custom metadata onto Nodes for the purpose
+transformed code is then loaded into Python, producing a            of transformation or to support custom data structures as
+callable Python object, and installed as a forward method           traceable values. A custom Tracer could, for instance, spe-
+on the GraphModule instance. Using code generation allows           cialize the sizes and shapes of Tensors and use these values
+the results of torch.fx transforms to be installed in models        to capture a program that would otherwise not be traceable
+and still used in further transforms. For instance, in Figure 3     without specialization.
+we take the result of tracing our original program and install
+it as the activation in a new module. Then, we symbolically         5.3   AoT Capture without Specialization
+trace the result for further transformation.
+                                                                    While ahead-of-time tracing limits the space of programs
+                                                                    that can be captured (e.g. arbitrary control flow is not sup-
+5     D ESIGN D ECISIONS                                            ported), it provides a more predictable and more observable
+                                                                    capture, transformation, and code generation process that
+torch.fx mixes and extends approaches from previous work
+                                                                    fits into the PyTorch developer experience and works well
+to deliver an easy to use, simple to implement, and config-
+                                                                    in practice.
+urable library. We highlight a few of these decisions here.
+                                                                    Unlike example-based tracing, symbolic tracing cannot inci-
+5.1   Symbolic Tracing                                              dentally specialize program flow because the information
+                                                                    needed to make data-dependent control flow decisions is not
+torch.fx uses symbolic tracing with Proxy objects rather            present at trace time. Common Tensor attributes used in con-
+than embedded language techniques because they are easier           trol decisions such as shape and ndim are returned as Proxy
+to implement directly in Python using its flexible object           values during symbolic tracing. Operations on these values
+model. The implementation is simple enough that users               can then be recorded. On the other hand, when these Proxy
+can read and step through the source when tracing behaves           objects are used in a context where untraceable operations
+unexpectedly.                                                       (such as a cast to Python built-in types like int or bool)
+Tracing also helps eliminate control flow in a model not            occur on them, the user receives an error message describing
+dependent on inputs such as the loop over sequential mod-           the problem and a stack trace indicating the location of the
+ules in a torch.nn.Sequential. PyTorch models are written           issue.
+pervasively with these abstractions, with many users also
+using third party libraries that contain their own model im-        5.4   Python-based IR and Transforms
+plementations, so it is important to be able to trace through
+                                                                    Rather than use a cross-language format such as proto-
+these abstractions to get to the actual operators running.
+                                                                    col buffers, torch.fx IR is entirely represented and imple-
+Symbolic tracing works well for common models at the cost           mented Python. Users can call, read, or override it easily.
+of not being able to capture long-tail models that actually         There is no need to understand Protocol Buffers or C++ (or
+contain input-dependent control flow. We make up for this           set up either of their build environments), which present
+limitation by making the tracing process customizable to            barriers to ML engineers familiar with working primarily in
+work around one-off issues.
+                    torch.fx: Practical Program Capture and Transformation for Deep Learning in Python
+
+Python. Transforms are written in Python as well.                 def loop_shapes(x, itr):
+                                                                    # x is an input tensor of size [1, N]
+Furthermore, the result of transformations is also Python
+                                                                      for _ in range(itr):
+code. This makes it easy to inspect for correctness, debug              x = torch.cat((x, x), dim=0)
+with pdb, feed to libraries, and pass on to further transforms.
+                                                                      # Depending on the number of loop iterations, x may have an
+Transformed code is encapsulated in a GraphModule that                # arbitrary leading dimension i.e. x \in [*dynamic*, N]
+can be used in PyTorch just like any other nn.Module. For             return x
+instance, a user can TorchScript compile the model for de-
+ployment or use it in PyTorch’s DistributedDataParallel
+library. Users can also save the generated code as a source       Figure 4. A demonstration of dynamic shapes due to loop-carried
+file via the experimental GraphModule.to_folder API.              dependencies
+
+Code generation further integrates torch.fx into the Python
+ecosystem rather than sequestering transformed code into a        The fact that the IR does not contain control flow itself does
+bespoke and harder-to-use runtime.                                not prevent transforms from working on sub-graphs of basic
+                                                                  blocks within a larger model; We leave the details of how
+5.5   No Control Flow Inside IR                                   this composition works to the writer of the transform or the
+                                                                  user applying the transform.
+With Transformers (Vaswani et al., 2017) increasingly re-
+placing sequential recursive neural networks with larger
+                                                                  5.6     Functional Graphs but Stateful Modules
+scalable attention modules, the use of host language control
+flow in deep learning is becoming more rare. Many models          As described in Section 2.3, aliasing and mutability seman-
+can be expressed without it, and even for programs with           tics in a language can necessitate complex analyses to prove
+some control flow (e.g. a beam search decoder), there are         that a program transformation is legal. torch.fx omits such
+large blocks of the model without control flow (the encoder       analysis, instead defining mutating operations as undefined
+and the step of the decoder).                                     behavior with the option to raise errors when it is captured
+                                                                  during tracing.
+However, the presence of control flow in an IR adds signif-
+icant complexity regardless of whether a particular model         Avoiding mutability in the IR simplifies analysis and trans-
+uses it. Most analyses on the IR must be expressed as fix-        formation of deep learning programs greatly. Most models
+point data-flow (Kildall, 1972) over the program rather than      do not suffer from this restriction since most mutation is
+simple forward propagation. The author must define a lat-         localized to the parameters of the model.
+tice, transfer function, and join function for the analyzed
+                                                                  torch.fx still preserves the hierarchical nn.Module structure
+property in the program and prove monotonicity and finite-
+                                                                  from PyTorch and can represent module calls and attribute
+ness thereof. While familiar to compiler writers, we have
+                                                                  fetches from this structure. Modules like torch.nn.Conv2d
+found that writers of ML transforms often introduce bugs in
+                                                                  are well understood by users, have well-documented argu-
+transforms such as having join functions that are not mono-
+                                                                  ments, and hide the stateful use of parameters within the
+tonic or failing to iterate until converged. In contrast, for a
+                                                                  module, so preserving these objects makes writing transfor-
+basic block IR, only a transfer function is needed.
+                                                                  mations easier. For instance, a torch.nn.BatchNorm module
+An example of the complexity of fix-point analysis can be         will actually contain mutable state, but that state is well
+found in shape propagation: shapes can be trivially propa-        understood by ML practitioners.
+gated forward through a basic block program (barring a few
+operations with value-dependent output shapes). However,
+                                                                  6      C ASE S TUDIES AND E VALUATION
+when control flow is added, shape propagation does not
+satisfy the finiteness property—a value carried across a loop     torch.fx has been used by PyTorch users both in the open-
+iteration can take on an infinite number of shapes, as shown      source ecosystem as well as as a critical component of
+in Figure 4. The analysis will typically reach a “dynamic”        the deep learning stack at a major software company. We
+value in such situations. Shape analysis would then provide       study the complexity of torch.fx’s IR and various use cases
+under-specified data, which would hinder further transfor-        of torch.fx, including performance optimization, program
+mations that require concrete shape information, such as          analysis, and device and runtime export.
+ASIC lowering.
+Furthermore, some transformations proposed in the ML              6.1     IR Complexity
+community are not well defined in the presence of control         One of the goals of torch.fx is to simplify the IR produced
+flow, such as the quantization transform described in Section     for ML models and make it easier for ML practitioners to un-
+6.2.1.                                                            derstand. We can compare torch.fx IR to the IR produced
+                    torch.fx: Practical Program Capture and Transformation for Deep Learning in Python
+
+by the two TorchScript (DeVito et al., 2018) front-ends          lowing stages:
+(jit.trace and jit.script), since all start from the same
+input programs. Figure 5 shows some example IR from the            1. A preparation phase, which instruments the program
+start of a ResNet model. The IR produced by TorchScript               with “observer” objects that record statistical informa-
+is very rich, including tensor operations, scalar operations,         tion about the floating-point values contained in Tensor
+control flow, data structures, hierarchical module structure,         values at various points in the program.
+and aliasing and mutability semantics. Support for these           2. A calibration phase, where the user feeds batches of
+features makes it much more verbose for simple models,                data through the network to populate the observers.
+resulting in 2614 operations from jit.script and 860 from
+jit.trace. The same ResNet model consists of 445 oper-             3. A conversion phase, where the collected statistics are
+ations in torch.fx IR. Most of the reduction comes from               used to down-cast weight values and convert operations
+eliminating control flow irrelevant to the captured trace. But        in the model to quantized operations with embedded
+torch.fx IR also benefits from inlining simple constants              scale and zero-point information.
+and data structures, so is almost half the size of the IR the
+captured with torch.jit.trace, which similarly eliminates        Quantization makes use of torch.fx’s graph and
+control flow.                                                    GraphModule representation to simultaneously modify the
+                                                                 program code and weight values. The process for
+The complex IR from the TorchScript front-ends induces           Quantization-Aware Training is analogous to phases (1)
+complexity in the program transform authoring process, re-       and (2) in the above but with “fake quantize” observers that
+quiring more care to write transforms correctly and leading      snap floating point values to the corresponding values under
+to longer and less maintainable transform code. torch.fx         quantized numerics.
+addresses this by greatly simplifying its captured represen-
+tation, facilitating transforms that are easier to write and     We evaluate the performance of a DeepRecom-
+maintain.                                                        mender (Kuchaiev & Ginsburg, 2017) model with
+                                                                 Post-Training Quantization applied on a server-class Intel
+6.2     Performance Optimization                                 Xeon Gold 6138 CPU @ 2.00GHz using FBGEMM (Khu-
+                                                                 dia et al., 2021) quantized operations. Figure 6 shows
+PyTorch’s tensor language provides good performance in           that torch.fx-enabled quantization confers up to a 3.3x
+many cases, but architectural details of the underlying hard-    runtime performance improvement compared to the
+ware create opportunities for further optimization. We in-       floating point model, with low variance highlighting the
+vestigate techniques by which torch.fx enables runtime           predictable performance characteristics of ahead-of-time
+performance improvements.                                        transformation. Correctness testing of quantization is not
+                                                                 straightforward since it is a semantics-changing transform,
+6.2.1    Quantization                                            but the applicability of numerics on this workflow has been
+Quantization (Jacob et al., 2017) is a technique used to         validated on several model architectures via evaluation set
+increase the efficiency of neural network computation by         testing. Numeric data for the experiment can be found
+reducing the size of Tensor data elements. Smaller data          in Appendix B. The preparation phase takes 44 ms, the
+elements require less memory bandwidth, less storage, and        calibration phase takes 590 ms, and the conversion phase
+can often be processed faster by modern processors. Neural       takes 3.8 seconds. The majority of the time in the latter two
+network computation has relaxed sensitivity to numerical         phases can be attributed to tensor operations during model
+perturbations, so quantization is a canonical performance        execution or value quantization, respectively.
+optimization.                                                    Not only does torch.fx-based quantization provide the
+Performing Post-Training Quantization or Quantization-           expected performance increases, but the tool’s develop-
+Aware Training requires access not only to parameter values      ment saw an order-of-magnitude productivity increase com-
+but also to the activation values that flow through the pro-     pared to an implementation on the TorchScript platform.
+gram (Krishnamoorthi, 2018). For instance, quantization-         By reducing the amount of complexity in the representa-
+aware training needs to measure the distribution of floating     tion, exposing transformation APIs in Python, and embed-
+point values in the output of a tensor addition operation to     ding into the native PyTorch ecosystem, torch.fx provides
+calculate a scale and bias value under quantized numerics.       a high-productivity environment for semantics-changing
+Such introspection is generally not available in PyTorch         transforms like quantization.
+eager mode. However, torch.fx provides a lightweight way
+to capture such a program representation.                        6.2.2   Fusion Optimizations
+
+The Post-Training Quantization procedure entails the fol-        Operator Fusion is a class of optimization that merges pat-
+                                                                 terns of tensor operations together into a single compute
+                                        torch.fx: Practical Program Capture and Transformation for Deep Learning in Python
+
+graph(%self : torchvision.models.resnet.ResNet,
+      %x.1 : Tensor):
+  %13 : str = prim::Constant[value="AssertionError: "]()
+  %14 : bool = prim::Constant[value=0]()
+  %15 : float = prim::Constant[value=1.0000000000000001e-05]()
+  %16 : float = prim::Constant[value=0.10000000000000001]()
+  %17 : str = prim::Constant[value="..."]()
+  %19 : bool = prim::Constant[value=1]()
+  %20 : int = prim::Constant[value=2]()
+  %21 : int = prim::Constant[value=3]()
+  %23 : int = prim::Constant[value=-1]()
+  %24 : ...Conv2d = prim::GetAttr[name="conv1"](%self)
+  %25 : Tensor = prim::GetAttr[name="weight"](%24)
+  %26 : Tensor? = prim::GetAttr[name="bias"](%24)
+  %27 : int[] = prim::ListConstruct(%20, %20)                                          def forward(self, x : torch.Tensor) -> torch.Tensor:
+  %28 : int[] = prim::ListConstruct(%21, %21)                                              conv1_weight = self.conv1.weight
+  %29 : int[] = prim::ListConstruct(%19, %19)                                              conv2d = torch.conv2d(x, conv1_weight, None,
+  %x.5 : Tensor = aten::conv2d(%x.1, %25, %26, %27, %28, %29, %22)                                               (2, 2), (3, 3), (1, 1), 1)
+  ...                                                                                      ...
+
+
+                                             (a) TorchScript IR                                                                    (b) torch.fx IR
+
+Figure 5. torch.fx traces through non-varying control flow and can embed constants as arguments in its Nodes. This substantially
+simplifies the IR for typical models. For a canonical ResNet50 model, torch.fx IR contains 445 operations compared to 2614 for
+torch.jit.script and 860 for torch.jit.trace.
+
+
+                       1.2                                                               lence comparison (rtol=1e-05, atol=1e-08) of the outputs
+                                                                                         of the fused and unfused implementations. Numeric results
+                        1                                                                for this experiment can be found in Appendix C. The run-
+  Normalized Runtime
+
+
+
+
+                       0.8
+                                                                                         time of the transformation itself was 81 ms, the majority
+                                                                                         of which consists of the arithmetic operations to fuse the
+                       0.6                                                               parameter tensors together.
+                       0.4                                                               torch.fx provides the necessary non-local program con-
+                                                                                         text and state modification facilities needed for this trans-
+                       0.2
+                                                                                         formation with its ahead-of-time, graph-based nature (He,
+                        0                                                                2021). The whole transformation and test harness amount
+                                  1            16                 64        128
+                                                                                         to fewer than 150 lines of Python, demonstrating the power
+                                                    Batch Size
+                                                                                         of torch.fx’s APIs in enabling concise, fast-to-develop pro-
+                       Normalized Unquantized Runtime   Normalized Quantized Runtime
+                                                                                         gram transformations over PyTorch code.
+
+
+Figure 6. Normalized inference runtime (lower is better) for
+torch.fx-based quantization.
+                                                                                                                 1.2
+
+                                                                                                                  1
+                                                                                            Normalized Runtime
+
+
+
+
+kernel. Fusion can save operator dispatch cost, memory                                                           0.8
+bandwidth cost, and memory space cost.
+                                                                                                                 0.6
+One example of operator fusion is Convolution-BatchNorm
+fusion. During inference, a Convolution-BatchNorm opera-                                                         0.4
+tor sequence can be merged by applying the batch normal-                                                         0.2
+ization weights to the convolution weights (Markuš, 2018).
+                                                                                                                  0
+We evaluate this transformation on a PyTorch ResNet50                                                                      GPU          CPU, Threaded   CPU, Unthreaded
+model on an NVIDIA Tesla V100-SXM2 16GB with CUDA                                                                 Normalized Runtime Unfused   Normalized Runtime Fused
+version 11.0 and an Intel Xeon Gold 6138 CPU @ 2.00GHz.
+Figure 7 shows approximately a 6% latency reduction for
+the GPU case, a 40% latency reduction on CPU with default                               Figure 7. Normalized inference runtime (lower is better) with
+intra-op parallelism, and a smaller 18% latency reduction                               torch.fx-based Convolution/Batch-Norm fusion.
+with intra-op parallelism disabled (i.e. OMP_NUM_THREADS=1).
+Numerical correctness is confirmed via an epsilon equiva-
+                    torch.fx: Practical Program Capture and Transformation for Deep Learning in Python
+
+6.2.3    Program Scheduling                                       and reduced cost via specialized functional units, special-
+                                                                  ized number formats, and new memory architectures. These
+Large PyTorch models sometimes contain blocking remote
+                                                                  processors often require static analyses and optimizations
+procedure calls to fetch values from parameter servers. For
+                                                                  including operator scheduling, code generation, memory
+clarity these calls are written right before the parameters are
+                                                                  planning/scheduling, and architecture-aware quantization.
+used. However if a model contains several such calls, better
+                                                                  Similarly to the optimizations in 6.2, such analyses typically
+utilization is achieved by overlapping these networks calls
+                                                                  require greater program context than the per-operator kernel
+with other local work. With torch.fx, we provide a pass that
+                                                                  launches provided by PyTorch during eager mode execution.
+replaces the blocking network calls with non-blocking ones
+                                                                  torch.fx provides a pathway for such compiler stacks to
+and a separate wait call. We then hoist the non-blocking
+                                                                  integrate with PyTorch by providing a program representa-
+call as early as possible in the program. On large distributed
+                                                                  tion extracted ahead-of-time. torch.fx is used at a major
+training jobs, we have found this optimization can increase
+                                                                  software company for ASIC lowering.
+QPS by up to 9%.
+                                                                  We evaluate lowering a PyTorch ResNet50 model and a
+6.3     Program Analysis                                          LearningToPaint model (Huang et al., 2019) to NVIDIA
+                                                                  TensorRT on an NVIDIA Tesla V100-SXM2 16GB GPU
+torch.fx has been applied in various ways for program             with CUDA version 11.0 using an experimental torch.fx-
+analysis.                                                         to-TensorRT lowering system. Figure 8 shows that Ten-
+torch.fx has been used to implement a framework for sim-          sorRT provides a predictable 3.7x runtime speed-up across
+ulation of deep learning inference at scale on various hard-      30 trials compared to baseline PyTorch for ResNet50 and
+ware devices at a major software company. torch.fx enables        a 1.54x speed-up for LearningToPaint. Numerical correct-
+the estimation of FLOPs, memory bandwidth usage, and              ness is confirmed via an epsilon equivalence comparison
+data value sizes of the workload, allowing for estimation of      (rtol=1e-05, atol=1e-08) of the outputs of the TensorRT
+the program runtime and memory consumption. This sys-             and non-TensorRT implementations. Numerical data for
+tem allows for rapid development of deep learning systems,        this experiment is available in Appendix D.
+enabling quick iteration in simulation rather than on real        In addition to providing the platform for runtime speed-up
+devices.                                                          through TensorRT, torch.fx also provided high developer
+torch.fx has also been used for various forms of shape            productivity for this component. The project was quickly
+analysis. The canonical fx.passes.shape_prop package pro-         developed using torch.fx’s Python APIs as well as Ten-
+vides a naı̈ve implementation of shape analysis by interpret-     sorRT’s Python APIs, creating a translation layer between
+ing the graph and recording the observed shapes. Additional       the two. The project was also able to quickly build compo-
+systems, including shape propagation via symbolic expres-         nents such as automatic splitting of the model based on Ten-
+sions and shape propagation via gradual typing semantics,         sorRT’s supported operators and automatically scheduling
+are in development. torch.fx provides a representation on         unsupported operations in non-optimized blocks. Finally,
+which such analyses can be done, opening opportunities            the ultimate user API is very easy to use, inspect, and debug,
+for type system and inference innovations to be applied to        as it conforms to Python coding practices.
+PyTorch models.
+Finally, torch.fx provides an fx.graph_drawer package,                                    1.2
+which gives the user the ability to visualize torch.fx graphs
+                                                                                            1
+with Graphviz (Ellson et al., 2002). This provides a
+                                                                     Normalized Runtime
+
+
+
+
+commonly-requested way of understanding a deep learn-                                     0.8
+ing program via a visual representation of its DAG.
+                                                                                          0.6
+
+6.4     Device and Runtime Export/Compilation                                             0.4
+
+                                                                                          0.2
+PyTorch is primarily designed for modern GPUs, which pro-
+vide a great deal of flexibility and dynamism and thus are                                  0
+very amenable to PyTorch’s eager mode execution model.                                                 ResNet50               LearningToPaint
+
+However, GPUs can still benefit from ahead-of-time com-                                   Normalized PyTorch Runtime   Normalized TensorRT Runtime
+pilation of model code through tookits like NVIDIA’s Ten-
+sorRT (NVIDIA).
+                                                                  Figure 8. Normalized inference runtime (lower is better) with
+More specialized processors (such as the TPU (Jouppi et al.,      torch.fx-based TensorRT lowering
+2017)) promise higher performance, better power efficiency,
+                   torch.fx: Practical Program Capture and Transformation for Deep Learning in Python
+
+7   C ONCLUSION                                                  ard, M., Kudlur, M., Levenberg, J., Monga, R., Moore,
+                                                                 S., Murray, D. G., Steiner, B., Tucker, P., Vasude-
+We presented torch.fx, a Python-only system for captur-          van, V., Warden, P., Wicke, M., Yu, Y., and Zheng, X.
+ing and transforming PyTorch programs. We analyzed               TensorFlow: A system for large-scale machine learn-
+the factors that complicated related systems—including           ing. In 12th USENIX Symposium on Operating Systems
+control flow, mutability, and data model—and show how            Design and Implementation (OSDI 16), pp. 265–283,
+torch.fx avoids complexity by focusing on common use
+                                                                 2016. URL https://www.usenix.org/system/files/
+cases and customizability. We investigated various use cases     conference/osdi16/osdi16-abadi.pdf.
+of torch.fx across optimization, analysis, and device lower-
+ing, and show how these results are enabled by torch.fx’s      Abbasi, H., Yang, E. Z., and Gommers, R.
+API design.                                                      Improving subclassing Tensor by propagat-
+                                                                 ing subclass instances, Aug 2020.        URL
+8   ACKNOWLEDGEMENTS                                             https://github.com/pytorch/rfcs/blob/master/
+                                                                 RFC-0001-torch-function-for-methods.md.
+We would like to acknowledge all of the contributors to
+the core torch.fx framework, including Alban Desmaison,        Agrawal, A., Modi, A. N., Passos, A., Lavoie, A., Agarwal,
+Alex Beloi, Alexander Soare, Allen (Congcong) Chen, An-         A., Shankar, A., Ganichev, I., Levenberg, J., Hong, M.,
+drew Millspaugh, Ansley Ussery, Aravind Kalaiah, Bradley         Monga, R., and Cai, S. TensorFlow Eager: A Multi-Stage,
+Davis, Brandon Lin, David Esiobu, Dmytro Dzhulgakov, Eli         Python-Embedded DSL for Machine Learning. CoRR,
+Uriegas, Erjia Guan, Garret Catron, Harut Movsisyan, Ho-         abs/1903.01855, 2019. URL http://arxiv.org/abs/
+race He, Hui Guo, James Reed, Jason Ansel, Jay Leverett,         1903.01855.
+Jerry Cai, Jerry Zhang, Jordan Fix, Kefei Lu, Lu Fang,
+Malay Bag, Meghan Lele, Mehdi Mirzazadeh, Michael              Al-Rfou, R., Alain, G., Almahairi, A., Angermüller, C.,
+Benayoun, Michael Suo, Mike Ruberry, Mikhail Zolo-               Bahdanau, D., Ballas, N., Bastien, F., Bayer, J., Belikov,
+tukhin, Natalia Gimelshein, Nikita Shulga, Oleg Khabi-           A., Belopolsky, A., Bengio, Y., Bergeron, A., Bergstra,
+nov, Onyiee, Patrick Hu, Patrick Spencer, Peter Bell, Philip     J., Bisson, V., Snyder, J. B., Bouchard, N., Boulanger-
+Meier, Richard Zou, Sam Estep, Shirong Wu, Shiyan Deng,          Lewandowski, N., Bouthillier, X., de Brébisson, A.,
+Thomas Wang, Vasiliy Kuznetsov, Yinghai Lu, Zachary              Breuleux, O., Carrier, P. L., Cho, K., Chorowski, J.,
+DeVito, and Zeina Migeed.                                        Christiano, P. F., Cooijmans, T., Côté, M., Côté, M.,
+                                                                 Courville, A. C., Dauphin, Y. N., Delalleau, O., Demouth,
+We would like to acknowledge the contributors to the FX          J., Desjardins, G., Dieleman, S., Dinh, L., Ducoffe, M.,
+Graph Mode Quantization project used in evaluations, in-         Dumoulin, V., Kahou, S. E., Erhan, D., Fan, Z., Firat,
+cluding Adnios, Alban Desmaison, Angela Yi, Bradley              O., Germain, M., Glorot, X., Goodfellow, I. J., Graham,
+Davis, Charles David Hernandez, Emily Shen, Erjia Guan,          M., Gülçehre, Ç., Hamel, P., Harlouchet, I., Heng, J.,
+Horace He, James Reed, Jerry Zhang, Raghuraman Krish-            Hidasi, B., Honari, S., Jain, A., Jean, S., Jia, K., Ko-
+namoorthi, Mike Ruberry, Mikhail Zolotukhin, Philip Meier,       robov, M., Kulkarni, V., Lamb, A., Lamblin, P., Larsen,
+Rong Rong (AI Infra), Sam Estep, Supriya Rao, Vasiliy            E., Laurent, C., Lee, S., Lefrançois, S., Lemieux, S.,
+Kuznetsov, Xiang Gao, Zachary DeVito, and Zafar Takhi-           Léonard, N., Lin, Z., Livezey, J. A., Lorenz, C., Lowin,
+rov.                                                             J., Ma, Q., Manzagol, P., Mastropietro, O., McGibbon,
+We would like to acknowledge the contributors to the fx2trt      R., Memisevic, R., van Merriënboer, B., Michalski, V.,
+project used in evaluations, including Alex Beloi, Aravind       Mirza, M., Orlandi, A., Pal, C. J., Pascanu, R., Pezeshki,
+Kalaiah, Bangsheng Tang, Eli Uriegas, Emad El-Haraty,            M., Raffel, C., Renshaw, D., Rocklin, M., Romero, A.,
+Ivan Kobzarev, Jack Montgomery, James Reed, Jerry Zhang,         Roth, M., Sadowski, P., Salvatier, J., Savard, F., Schlüter,
+Jordan Fix, Kefei Lu, Linbin Yu, Marat Subkhankulov, Mike        J., Schulman, J., Schwartz, G., Serban, I. V., Serdyuk,
+Ruberry, Mor Tzur, Nikita Shulga, Philip Meier, Protonu          D., Shabanian, S., Simon, É., Spieckermann, S., Subra-
+Basu, Rui Zhu, Samuel Salas, Shirong Wu, Shiyan Deng,            manyam, S. R., Sygnowski, J., Tanguay, J., van Tulder,
+Yinghai Lu, and Zhengxu Chen.                                    G., Turian, J. P., Urban, S., Vincent, P., Visin, F., de Vries,
+                                                                 H., Warde-Farley, D., Webb, D. J., Willson, M., Xu, K.,
+Finally, we’d like to acknowledge all the discussions and        Xue, L., Yao, L., Zhang, S., and Zhang, Y. Theano: A
+feedback from many users inside and outside Facebook.            Python framework for fast computation of mathemati-
+                                                                 cal expressions. CoRR, abs/1605.02688, 2016. URL
+R EFERENCES                                                      http://arxiv.org/abs/1605.02688.
+Abadi, M., Barham, P., Chen, J., Chen, Z., Davis, A.,          Andersen, L. O. Program analysis and specialization for
+  Dean, J., Devin, M., Ghemawat, S., Irving, G., Is-             the C programming language. PhD thesis, Citeseer, 1994.
+                   torch.fx: Practical Program Capture and Transformation for Deep Learning in Python
+
+Bezanson, J., Edelman, A., Karpinski, S., and Shah, V. B.      Huang, Z., Heng, W., and Zhou, S. Learning to paint
+  Julia: A fresh approach to numerical computing. SIAM          with model-based deep reinforcement learning. CoRR,
+  review, 59(1):65–98, 2017.                                     abs/1903.04411, 2019. URL http://arxiv.org/abs/
+                                                                1903.04411.
+Chen, T., Li, M., Li, Y., Lin, M., Wang, N., Wang, M., Xiao,
+  T., Xu, B., Zhang, C., and Zhang, Z. Mxnet: A flexible       Innes, M. Don’t Unroll Adjoint: Differentiating SSA-Form
+  and efficient machine learning library for heterogeneous       Programs. CoRR, abs/1810.07951, 2018. URL http:
+  distributed systems. arXiv preprint arXiv:1512.01274,          //arxiv.org/abs/1810.07951.
+  2015.
+                                                               Innes, M. et al. On machine learning and programming
+Cho, K., van Merrienboer, B., Gülçehre, Ç., Bougares, F.,     languages, Dec 2017. URL https://julialang.org/
+  Schwenk, H., and Bengio, Y. Learning Phrase Repre-             blog/2017/12/ml-pl/.
+  sentations using RNN Encoder-Decoder for Statistical         Jacob, B., Kligys, S., Chen, B., Zhu, M., Tang, M., Howard,
+  Machine Translation. CoRR, abs/1406.1078, 2014. URL            A. G., Adam, H., and Kalenichenko, D. Quantization
+  http://arxiv.org/abs/1406.1078.                                and Training of Neural Networks for Efficient Integer-
+                                                                 Arithmetic-Only Inference. CoRR, abs/1712.05877, 2017.
+DeVito, Z. et al. TorchScript, Sep 2018. URL https:
+                                                                 URL http://arxiv.org/abs/1712.05877.
+ //pytorch.org/docs/1.9.0/jit.html.
+                                                               Jia, Y., Shelhamer, E., Donahue, J., Karayev, S., Long, J.,
+Ellson, J., Gansner, E., Koutsofios, L., North, S. C., and        Girshick, R. B., Guadarrama, S., and Darrell, T. Caffe:
+  Woodhull, G. Graphviz— Open Source Graph Drawing                Convolutional Architecture for Fast Feature Embedding.
+  Tools. In Mutzel, P., Jünger, M., and Leipert, S. (eds.),      CoRR, abs/1408.5093, 2014. URL http://arxiv.org/
+  Graph Drawing, pp. 483–484, Berlin, Heidelberg, 2002.           abs/1408.5093.
+  Springer Berlin Heidelberg. ISBN 978-3-540-45848-7.
+                                                               Jouppi, N. P., Young, C., Patil, N., Patterson, D., Agrawal,
+Elman, J. L. Finding structure in time. Cognitive science,       G., Bajwa, R., Bates, S., Bhatia, S., Boden, N., Borchers,
+  14(2):179–211, 1990.                                           A., et al. In-datacenter performance analysis of a tensor
+                                                                 processing unit. In Proceedings of the 44th annual inter-
+Fischer, K. and Saba, E. Automatic Full Compilation of           national symposium on computer architecture, pp. 1–12,
+  Julia Programs and ML Models to Cloud TPUs. CoRR,              2017.
+  abs/1810.09868, 2018. URL http://arxiv.org/abs/
+  1810.09868.                                                  Khudia, D. S., Huang, J., Basu, P., Deng, S., Liu, H., Park,
+                                                                J., and Smelyanskiy, M. FBGEMM: Enabling High-
+Frostig, R., Johnson, M. J., and Leary, C. Compiling ma-         Performance Low-Precision Deep Learning Inference.
+  chine learning programs via high-level tracing. Systems       CoRR, abs/2101.05615, 2021. URL https://arxiv.
+  for Machine Learning, 2018.                                    org/abs/2101.05615.
+
+He, H. (Beta) building a convolution/batch norm fuser in fx,   Kildall, G. A. Global expression optimization during com-
+  Mar 2021. URL https://pytorch.org/tutorials/                   pilation. University of Washington, 1972.
+  intermediate/fx conv bn fuser.html.
+                                                               Krishnamoorthi, R. Quantizing deep convolutional net-
+                                                                 works for efficient inference: A whitepaper. CoRR,
+He, K., Zhang, X., Ren, S., and Sun, J. Deep Residual
+                                                                 abs/1806.08342, 2018. URL http://arxiv.org/abs/
+  Learning for Image Recognition. CoRR, abs/1512.03385,
+                                                                 1806.08342.
+  2015. URL http://arxiv.org/abs/1512.03385.
+                                                               Kuchaiev, O. and Ginsburg, B. Training deep autoencoders
+Heek, J., Levskaya, A., Oliver, A., Ritter, M., Rondepierre,     for collaborative filtering, 2017.
+  B., Steiner, A., and van Zee, M. Flax: A neural network
+  library and ecosystem for JAX, 2020. URL http://             Lattner, C., Pienaar, J. A., Amini, M., Bondhugula, U., Rid-
+  github.com/google/flax.                                        dle, R., Cohen, A., Shpeisman, T., Davis, A., Vasilache,
+                                                                 N., and Zinenko, O. MLIR: A Compiler Infrastructure for
+Hennigan, T., Cai, T., Norman, T., and Babuschkin, I.            the End of Moore’s Law. CoRR, abs/2002.11054, 2020.
+  Haiku: Sonnet for JAX, 2020. URL http://github.                URL https://arxiv.org/abs/2002.11054.
+  com/deepmind/dm-haiku.
+                                                               Maclaurin, D., Duvenaud, D., and Adams, R. P. Auto-
+Hochreiter, S. and Schmidhuber, J. Long short-term memory.      grad: Effortless Gradients in Numpy. In ICML 2015
+  Neural computation, 9(8):1735–1780, 1997.                     AutoML Workshop, 2015. URL /bib/maclaurin/
+                   torch.fx: Practical Program Capture and Transformation for Deep Learning in Python
+
+  maclaurinautograd/automl-short.pdf,https:                   Suhan, A., Libenzi, D., Zhang, A., Schuh, P., Saeta, B.,
+  //indico.lal.in2p3.fr/event/2914/session/1/                   Sohn, J. Y., and Shabalin, D. LazyTensor: combining
+  contribution/6/3/material/paper/0.pdf,https:                  eager execution with domain-specific compilers. arXiv
+  //github.com/HIPS/autograd.                                   preprint arXiv:2102.13267, 2021.
+
+Markuš, N. Fusing batch normalization and convolution in
+ runtime, May 2018. URL https://nenadmarkus.com/
+                                                              The XLA Team. XLA - tensorflow, compiled, Mar
+ p/fusing-batchnorm-and-conv/.
+                                                                2017. URL https://developers.googleblog.com/
+Moldovan, D., Decker, J. M., Wang, F., Johnson, A. A., Lee,     2017/03/xla-tensorflow-compiled.html.
+ B. K., Nado, Z., Sculley, D., Rompf, T., and Wiltschko,
+ A. B. AutoGraph: Imperative-style Coding with Graph-
+ based Performance. CoRR, abs/1810.08061, 2018. URL           Tokui, S., Okuta, R., Akiba, T., Niitani, Y., Ogawa, T., Saito,
+ http://arxiv.org/abs/1810.08061.                               S., Suzuki, S., Uenishi, K., Vogel, B., and Vincent, H. Y.
+                                                                Chainer: A Deep Learning Framework for Accelerating
+Naumov, M., Mudigere, D., Shi, H. M., Huang, J., Sun-           the Research Cycle. CoRR, abs/1908.00213, 2019. URL
+  daraman, N., Park, J., Wang, X., Gupta, U., Wu, C.,           http://arxiv.org/abs/1908.00213.
+  Azzolini, A. G., Dzhulgakov, D., Mallevich, A., Cher-
+  niavskii, I., Lu, Y., Krishnamoorthi, R., Yu, A., Kon-
+  dratenko, V., Pereira, S., Chen, X., Chen, W., Rao, V.,
+                                                              Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones,
+  Jia, B., Xiong, L., and Smelyanskiy, M. Deep Learning
+                                                                L., Gomez, A. N., Kaiser, L., and Polosukhin, I. Attention
+  Recommendation Model for Personalization and Recom-
+                                                                Is All You Need. CoRR, abs/1706.03762, 2017. URL
+  mendation Systems. CoRR, abs/1906.00091, 2019. URL
+                                                                http://arxiv.org/abs/1706.03762.
+  http://arxiv.org/abs/1906.00091.
+
+Neubig, G., Dyer, C., Goldberg, Y., Matthews, A., Am-
+  mar, W., Anastasopoulos, A., Ballesteros, M., Chiang,       Xiao, F. et al. Protocolbuffers/Protobuf: Protocol buffers
+  D., Clothiaux, D., Cohn, T., et al. Dynet: The dynamic       - google’s data interchange format, 2008. URL https:
+  neural network toolkit. arXiv preprint arXiv:1701.03980,      //github.com/protocolbuffers/protobuf.
+  2017.
+
+NVIDIA. Abstract. URL https://docs.nvidia.com/
+ deeplearning/tensorrt/developer-guide/index.                 A     TORCH . FX     N ODE S EMANTICS
+ html.
+                                                              A.1   Opcode Meanings
+Paszke, A., Gross, S., Massa, F., Lerer, A., Bradbury, J.,
+  Chanan, G., Killeen, T., Lin, Z., Gimelshein, N., Antiga,    Opcode             Meaning
+  L., Desmaison, A., Köpf, A., Yang, E., DeVito, Z., Rai-     placeholder        Function Input
+  son, M., Tejani, A., Chilamkurthy, S., Steiner, B., Fang,    call_method        Call method on args[0]
+  L., Bai, J., and Chintala, S. PyTorch: An Imperative         call_module        Call module specified by target
+  Style, High-Performance Deep Learning Library. CoRR,         call_function      Call function specified by target
+  abs/1912.01703, 2019. URL http://arxiv.org/abs/              get_attr           Retrieve attribute specified by target
+  1912.01703.                                                  output             Return statement; return args[0]
+
+Rompf, T. and Odersky, M. Lightweight modular staging:        A.2   args/kwargs Behavior
+  a pragmatic approach to runtime code generation and
+  compiled DSLs. In Proceedings of the ninth international     Opcode             args/kwargs Behavior
+  conference on Generative programming and component           placeholder        Empty or args[0] = default value
+  engineering, pp. 127–136, 2010.                              call_method        Python calling convention; args[0] is
+                                                                                  self
+Saeta, B., Shabalin, D., Rasi, M., Larson, B., Wu, X.,         call_module        Python calling convention; target is
+  Schuh, P., Casbon, M., Zheng, D., Abdulrasool, S.,                              self
+  Efremov, A., Abrahams, D., Lattner, C., and Wei, R.          call_function      Python calling convention; target is
+  Swift for TensorFlow: A portable, flexible platform for                         self
+  deep learning. CoRR, abs/2102.13243, 2021. URL               get_attr           Empty
+  https://arxiv.org/abs/2102.13243.                            output             args[0] is the return value
+                torch.fx: Practical Program Capture and Transformation for Deep Learning in Python
+
+B   Q UANTIZATION E VALUATION N UMERIC
+    DATA
+Batch      Runtime    stdev       Runtime     stdev
+Size       Unquan-    Unquan-     Quan-       Quan-
+           tized      tized       tized       tized
+1          0.0777     0.00079     0.0222      0.0008
+16         0.1980     0.0104      0.0639      0.0057
+64         0.3995     0.0204      0.2585      0.0129
+128        0.6717     0.0228      0.5369      0.0413
+256        1.2307     0.0874      1.1157      0.0686
+
+
+C     F USION E VALUATION N UMERIC DATA
+Device    Fusion     Threads       Average    stdev
+                                   run-       run-
+                                   time       time
+                                   (sec)
+GPU       Unfused    N/A           0.1887     0.00048
+GPU       Fused      N/A           0.1777     0.00049
+CPU       Unfused    Threaded      0.2996     0.02835
+CPU       Fused      Threaded      0.2129     0.03491
+CPU       Unfused    Unthreaded    2.0231     0.23050
+CPU       Fused      Unthreaded    1.7166     0.25091
+
+D     T ENSOR RT E VALUATION N UMERIC
+      DATA
+Configuration                        Avg        Stdev
+                                     Run-       Run-
+                                     time       time
+                                     (sec)
+PyTorch RN50                         0.2443     0.00119
+torch.fx TensorRT RN50               0.0662     0.00022
+PyTorch LearningToPaint              0.0068     0.0003
+torch.fx TensorRT LearningToPaint    0.0044     0.0001
+

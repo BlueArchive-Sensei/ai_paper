@@ -1,12 +1,14 @@
 # Paper Reading Notes
 
-本仓库收录人工整理的论文原文、可检索文本、论文概要、中文详细解读与关键页面截图，主题覆盖 AI 安全、强化学习与知识蒸馏，以及 Triton/GPU 编译。
+本仓库收录人工整理的论文原文、可检索文本、论文概要、中文详细解读与关键页面截图，主题覆盖 AI 安全、强化学习与知识蒸馏、PyTorch 动态图与 Graph 编译，以及 GPU 编译、Kernel、MoE 与大模型推理系统。
 
 ## 阅读索引
 
 - [AI 安全论文阅读索引](AI安全论文阅读索引.md)
 - [强化学习与蒸馏论文阅读索引](强化学习与蒸馏论文阅读索引.md)
+- [PyTorch 动态图与 Graph 编译论文阅读索引](PyTorch动态图与Graph编译论文阅读索引.md)
 - [Triton 论文阅读索引](Triton论文阅读索引.md)
+- [GPU 内核融合、MoE 与大模型推理论文阅读索引](GPU内核融合与大模型推理论文阅读索引.md)
 
 ## AI 安全论文
 
@@ -38,15 +40,41 @@
 | 2018 | [`soft_actor_critic`](soft_actor_critic/) | Soft Actor-Critic |
 | 2020 | [`muzero`](muzero/) | Mastering Atari, Go, Chess and Shogi by Planning with a Learned Model |
 
-## Triton 与 GPU 编译论文
+## PyTorch 动态图与 Graph 编译
 
-| 时间 | 目录 | 论文 |
-|---|---|---|
-| 2019 | [`triton_compiler`](triton_compiler/) | Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations |
-| 2024 | [`pytorch_2`](pytorch_2/) | PyTorch 2: Faster Machine Learning Through Dynamic Python Bytecode Transformation and Graph Compilation |
-| 2025 | [`tritonbench`](tritonbench/) | TritonBench |
-| 2025/2026 | [`linear_layouts`](linear_layouts/) | Linear Layouts: Robust Code Generation of Efficient Tensor Computation Using F2 |
-| 2026 | [`taming_bitwise_gpu_kernels`](taming_bitwise_gpu_kernels/) | Taming Bitwise Behavior in GPU Kernels with Tensor Core |
+| 时间 | 类型 | 目录 | 资料 |
+|---|---|---|---|
+| 2017 | 论文 | [`dynamic_computation_graphs`](dynamic_computation_graphs/) | Deep Learning with Dynamic Computation Graphs |
+| 2019 | 论文 | [`chainer_define_by_run`](chainer_define_by_run/) | Chainer: A Deep Learning Framework for Accelerating the Research Cycle |
+| 2019 | 论文 | [`pytorch_imperative`](pytorch_imperative/) | PyTorch: An Imperative Style, High-Performance Deep Learning Library |
+| 2019 | 论文 | [`janus_symbolic_graph`](janus_symbolic_graph/) | JANUS |
+| 2021 | 论文 | [`nimble_dynamic_nn`](nimble_dynamic_nn/) | Nimble |
+| 2021 | 论文 | [`disc_dynamic_shape`](disc_dynamic_shape/) | DISC |
+| 2022 | 论文 | [`torch_fx`](torch_fx/) | torch.fx |
+| 2024 | 论文 | [`pytorch_2`](pytorch_2/) | PyTorch 2 |
+| 2026 | 官方文档 | [`pytorch_graph_programming_model`](pytorch_graph_programming_model/) | Dynamo、torch.export 与 Dynamic Shapes Programming Model |
+
+## GPU 编译、Kernel 与大模型推理
+
+| 时间 | 类型 | 目录 | 资料 |
+|---|---|---|---|
+| 2017 | 论文 | [`sparsely_gated_moe`](sparsely_gated_moe/) | Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer |
+| 2019 | 论文 | [`triton_compiler`](triton_compiler/) | Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations |
+| 2020 | 论文 | [`fusion_stitching`](fusion_stitching/) | FusionStitching |
+| 2022 | 论文 | [`switch_transformers`](switch_transformers/) | Switch Transformers |
+| 2023 | 论文 | [`welder`](welder/) | Welder: Scheduling Deep Learning Memory Access via Tile-graph |
+| 2023 | 论文 | [`megablocks`](megablocks/) | MegaBlocks: Efficient Sparse Training with Mixture-of-Experts |
+| 2024 | 论文 | [`pytorch_2`](pytorch_2/) | PyTorch 2 |
+| 2024 | 论文 | [`korch`](korch/) | Optimal Kernel Orchestration for Tensor Programs with Korch |
+| 2025 | 论文 | [`tritonbench`](tritonbench/) | TritonBench |
+| 2025/2026 | 论文 | [`linear_layouts`](linear_layouts/) | Linear Layouts |
+| 2025 | 预印本 | [`mirage_persistent_kernel`](mirage_persistent_kernel/) | MPK: A Compiler and Runtime for Mega-Kernelizing Tensor Programs |
+| 2026 | 论文 | [`taming_bitwise_gpu_kernels`](taming_bitwise_gpu_kernels/) | Taming Bitwise Behavior in GPU Kernels with Tensor Core |
+| 2026 | 预印本 | [`event_tensor`](event_tensor/) | Event Tensor |
+| 2026 | 预印本 | [`ada_mk`](ada_mk/) | Ada-MK |
+| 2026 | 预印本 | [`cute_layout_algebra`](cute_layout_algebra/) | CuTe Layout Representation and Algebra |
+| 2026 | 官方文档 | [`tensorrt_llm_architecture`](tensorrt_llm_architecture/) | TensorRT LLM Architecture Overview |
+| 2026 | 官方报告 | [`cutedsl_torchinductor`](cutedsl_torchinductor/) | TorchInductor CuTeDSL Backend |
 
 ## 目录命名约定
 
@@ -66,6 +94,7 @@ paper_short_title/
 - `paper.txt` 由 PDF 提取，便于全文搜索，不替代排版后的原文。
 - `rendered_figures/` 保存解读实际引用的原论文页面。
 - 个别论文可能包含额外的源码归档或实验材料。
+- 官方工程资料会明确标注来源性质、快照日期，并保留原始 Markdown/HTML。
 
 ## 新增论文检查表
 
@@ -75,6 +104,7 @@ paper_short_title/
 4. 分别编写概要与中文详细解读，不把两者混为同一文档。
 5. 只渲染解读实际引用的关键页面。
 6. 把论文加入相应主题索引，并检查所有相对链接。
+7. 非论文资料必须标明类型、来源与快照时间。
 
 ## 文件规模
 

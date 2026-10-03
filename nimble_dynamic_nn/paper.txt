@@ -1,0 +1,934 @@
+    N IMBLE : E FFICIENTLY C OMPILING DYNAMIC N EURAL N ETWORKS FOR
+                             M ODEL I NFERENCE
+
+
+                          Haichen Shen * 1 Jared Roesch * 2 Zhi Chen 1 Wei Chen 1 Yong Wu 1
+                                Mu Li 1 Vin Sharma 1 Zachary Tatlock 3 Yida Wang 1
+
+                                                        A BSTRACT
+        Modern deep neural networks increasingly make use of features such as control flow, dynamic data structures, and
+        dynamic tensor shapes. Existing deep learning systems focus on optimizing and executing static neural networks
+        which assume a pre-determined model architecture and input data shapes—assumptions that are violated by
+        dynamic neural networks. Therefore, executing dynamic models with deep learning systems is currently both
+        inflexible and sub-optimal, if not impossible. Optimizing dynamic neural networks is more challenging than
+        static neural networks; optimizations must consider all possible execution paths and tensor shapes. This paper
+        proposes Nimble, a high-performance and flexible system to optimize, compile, and execute dynamic neural
+        networks on multiple platforms. Nimble handles model dynamism by introducing a dynamic type system, a set
+        of dynamism-oriented optimizations, and a light-weight virtual machine runtime. Our evaluation demonstrates
+        that Nimble outperforms existing solutions for dynamic neural networks by up to 20× on hardware platforms
+        including Intel CPUs, ARM CPUs, and Nvidia GPUs.
+
+1       I NTRODUCTION                                             input-dependent graph topology, breaking existing system
+                                                                  assumptions and invalidating optimizations designed for
+As deep learning-based applications have become ubiqui-           purely static data flow graphs. However, no existing solu-
+tous, so have systems for optimizing, executing, and de-          tions fulfill these requirements.
+ploying such applications. A number of systems research
+projects focus on enhancing the performance of a subset           Many existing approaches to dynamic model optimization
+of pre-trained models produced by deep learning (DL) re-          apply or extend existing deep learning frameworks (Xu et al.,
+searchers on various platforms (Dahl et al., 2012; Han et al.,    2018; Gao et al., 2018; Yu et al., 2018; Jeong et al., 2018;
+2016; Johnson et al., 2016; Liu et al., 2019; Wang et al.,        2019; Neubig et al., 2017; Looks et al., 2017). However,
+2019). Specifically, these models represented as static data      deep learning frameworks optimized for training can be
+flow graphs where the sizes of each input and output (i.e.,       limiting in model inference settings due to their rich fea-
+tensors or n-dimensional arrays) are known a priori, ensur-       ture set. In order to realize these features frameworks are
+ing the execution path remains unchanged on every invo-           often monolithic, large, and non-portable. Moreover, ap-
+cation. We refer to models with this static nature as static      proaches which inherit from frameworks rely on third-party
+models. Continued advances in neural networks, especially         kernel libraries such as OpenBLAS (Zhang et al., 2014),
+those in natural language processing, have introduced new         cuDNN (Chetlur et al., 2014), and oneDNN (Intel, 2020) to
+dynamism in models, such as control flow (Hochreiter &            achieve competitive performance. These libraries expose a
+Schmidhuber, 1997; Sutskever et al., 2014), dynamic data          fixed set of operators for the corresponding hardware, com-
+structures (Tai et al., 2015; Liang et al., 2016), and dynamic    promising the portability of dynamic models which require
+shapes (Devlin et al., 2018). We refer to models exhibiting       a large number of operators with varying data types and
+these behaviors as dynamic models.                                shapes. Designing a new interface independent of existing
+                                                                  frameworks provides a clean programming model but often
+As dynamic models mature and continue to move from                at the cost of performance, due to dynamic interpretation of
+research to production, it calls for an efficient and cross-      the model (Neubig et al., 2017).
+platform inference system. This poses new challenges for
+deep learning practitioners, as dynamic models introduce          An alternative approach that has generated significant in-
+    *
+                                                                  terest in both academia and industry is the end-to-end op-
+   Equal contribution 1 Amazon Web Services 2 OctoML              timization of neural networks using deep learning compil-
+3
+University of Washington. Correspondence to: Haichen Shen
+<shaichen@amazon.com>.
+                                                                  ers, such as XLA (XLA Team, 2017), Glow (Rotem et al.,
+                                                                  2018), TVM (Chen et al., 2018a), and MLIR (Lattner et al.,
+Proceedings of the 4 th MLSys Conference, San Jose, CA, USA,      2021). Deep learning compilers differ from traditional deep
+2021. Copyright 2021 by the author(s).                            learning frameworks by separating execution into a compi-
+                        Nimble: Efficiently Compiling Dynamic Neural Networks for Model Inference
+
+lation, and a runtime phase. The compilation phase enables       and gives the overview of Nimble. Section 3 presents the
+whole-model optimization at the graph level, and workload        design and implementation of the compilation flow of Nim-
+specific kernel code-generation for multiple hardware plat-      ble, followed by VM-based runtime in Section 4. Section 5
+forms, while the runtime executes the compiled module.           provides the evaluation results using various models on dif-
+                                                                 ferent hardware platforms. Section 6 covers related work,
+However, deep learning compilers have been primarily re-
+                                                                 and Section 7 concludes the paper.
+stricted to static models due to lack of support for dynamism.
+Specifically, in order to compile and execute the dynamic
+models, a system requires an intermediate representation         2     C HALLENGES AND O UR A PPROACH
+(IR) which can statically represent dynamic constructs, a
+                                                                 2.1   Limitation of Deep Learning Compilers
+code generator which can generate kernels for dynamically
+varying data shapes, and a runtime to handle the dynamic ex-     As aforementioned, existing solutions to dynamic models
+ecution and kernel dispatch accordingly. Further, dynamic-       either rely on or extend deep learning frameworks. These so-
+specific optimizations, such as dynamic memory planning,         lutions bring significant challenges in portability and cross-
+the process of statically optimizing dynamic allocations, are    platform support due to the gigantic codebase and the vendor
+necessary to achieve desirable performance. None of these        library dependency. Deep learning compilers provide an
+features exist in the current deep learning compilers.           alternative approach as being portable across platforms with
+To this end, we present Nimble, a high-performance and           minimal memory footprint by virtue of being light-weight
+portable system for compiling, optimizing, and executing         and dependency-free.
+dynamic neural networks on multiple platforms. To the best       However, current deep learning compilers are not able
+of our knowledge, this is the first attempt to systematically    to process dynamic models due to missing the following
+handle dynamic models from a compiler perspective. First,        dynamism-specific features.
+we introduce type system extensions to handle data with
+unknown dimension, which is common in dynamic mod-               • An IR for representing dynamism. Performing data
+els, by performing type checking and inference for shapes          type and shape inference on static models is straightfor-
+with Any. Second, we devise several optimizations specific         ward as they are known during declaration and remain
+to dynamic models, including dynamic shape-aware code              unchanged during runtime. However, the shape of an
+generation, memory planning, and device placement. Third,          input tensor may vary wildly across different input sam-
+we propose a virtual machine (VM)-based runtime, which             ples in a dynamic model. The emergence of control flow
+decouples the platform-independent controlling logic and           constructs further complicates this problem as different
+platform-dependent kernel implementation, to be portable,          execution paths can emit substantially different data. A
+light-weight, and most importantly, able to execute dynamic        fully static IR, hence, is inadequate to cope with the dy-
+models. Evaluation on LSTM (Hochreiter & Schmidhuber,              namic characteristics of these models.
+1997), Tree-LSTM (Tai et al., 2015) and BERT (Devlin             • A set of dynamic-oriented optimizations. Existing
+et al., 2018) shows that Nimble lowers the latency by 1.05×        deep learning compilers, e.g. TVM (Chen et al., 2018a)
+to 19.9× compared to the best solution whichever on main-          and Glow (Rotem et al., 2018), expect static input for
+stream hardware platforms both in the cloud (Intel CPUs            each optimization. The memory spaces of each tensor
+and Nvidia GPUs) and at the edge (ARM CPUs).                       are pre-allocated and their live cycles are determined us-
+                                                                   ing a dedicated optimization pass. They also ensure the
+In summary, this paper makes the following three core con-         homogeneous execution of the entire model because all
+tributions:                                                        kernels are executed on the same device. However, these
+• Proposes and builds an end-to-end system for efficient
+                                                                   optimizations may completely break when dynamism
+   dynamic model inference across multiple hardware plat-
+                                                                   appears, in which different execution paths possibly re-
+   forms, including an empirical study to benchmark the
+                                                                   quire different amounts of memory with undetermined
+   results;
+                                                                   sizes before runtime. Therefore, certain IR nodes may be
+• Devises several compilation and optimization techniques,
+                                                                   introduced to help runtime type inference and memory
+   including a dynamic type system, a memory planning
+                                                                   allocation. The operations in these nodes are intrinsi-
+   pass, a heterogeneous device placement mechanism to
+                                                                   cally more CPU friendly, which would lead to the serious
+   place computation and data, and a symbolic kernel code
+                                                                   performance problem if not placed correctly.
+   generation and shape-based dispatch algorithm;
+                                                                 • A symbolic kernel code generator. Code generation
+• Designs and implements tensor based abstract machine
+                                                                   (codegen) is responsible for generating high-performance
+   with a platform-independent instruction set to efficiently
+                                                                   executable kernels for operators. Recent research (Chen
+   and flexibly execute dynamic models across platforms.
+                                                                   et al., 2018a;b; Zheng et al., 2020b; Adams et al., 2019;
+The rest of the paper is organized as follows. Section 2           Zheng et al., 2020a) has achieved impressive results in
+reviews the limitation of existing deep learning compilers         kernel performance with static shapes on multiple back-
+                                Nimble: Efficiently Compiling Dynamic Neural Networks for Model Inference
+
+
+        Type system (§3.1)                    VM ISA (Appx. C)
+                                                                         both platform-agnostic bytecode and platform-dependent
+                                                                         kernel code, and finally loads the executable to execute in
+       Shape function (§3.2)                Virtual Machine (§4)         the VM-based runtime. The bytecode is executed by Nim-
+      Memory planning (§3.3)                      Runtime                ble’s runtime interpreter, which is shareable across various
+      Device placement (§3.4)                                            platforms. This design effectively enables us to only main-
+                                       Nimble executable                 tain one version of the execution logic, but focus more on
+      Symbolic codegen (§3.5)                                            the performance critical operator kernels. The kernels are
+                                       o Platform-independent bytecode
+             Compiler                  o Platform-dependent kernels      optimized for a specific hardware platform to achieve high
+                                                                         performance.
+Figure 1: Nimble overview. Nimble consists of a compiler                 To effectively support dynamic models without performance
+that handles model with dynamism and a runtime that exe-                 degradation for static models, we introduce various analysis
+cutes dynamic models in multiple platforms.                              and optimization techniques in Nimble’s compiler. First, a
+  ends. Nonetheless, challenges in codegen with symbolic                 set of IR extensions are devised to represent dynamic shapes
+  shapes remain unexplored. After applying the same set                  (Any shape) and dynamic allocations for static optimization
+  of loop optimization, kernels generated with symbolic                  of dynamic program behaviors (Section 3.1). Second, shape
+  shapes could still perform bad if the loop boundary is                 functions are attached to operators to compute the output
+  not handled properly. Meanwhile, kernel tuning under                   shapes dynamically and perform type checking at runtime
+  symbolic shape settings becomes more challenging as the                (Section 3.2). Third, a memory planning optimization is
+  search space grows exponentially.                                      employed to reduce the amount of memory consumed (Sec-
+• A light-weight and cross-platform runtime. For effi-                   tion 3.3). Fourth, a heterogeneous device placement mech-
+  ciency purpose, the runtime of static models could be                  anism is designed to place IR nodes on “the-best” device
+  simply designed as a sequential executor that traverses                to reduce expensive cross-device data transferring and syn-
+  the input data flow graph in the topological order to in-              chronization (Section 3.4). Finally, the compiler features a
+  voke operators one by one. However, the execution path                 code generator that is capable of specializing the codegen
+  of dynamic models may only be known at runtime and                     of certain likely shapes (Section 3.5). Once the executable
+  the kernels for certain operators must be dispatched ac-               with dynamic behavior is compiled, the VM-based runtime
+  cording to the data shape determined at runtime, making                can load and interpret it with intelligent dynamic kernel
+  a simple graph-traversing runtime insufficient.                        dispatching (Section 4). We detail the design and implemen-
+                                                                         tation of each of these features in the subsequent sections.
+2.2     Our Approach
+To address these challenges, this paper presents Nimble, a               3    C OMPILER S UPPORT FOR DYNAMISM
+high-performance and flexible system for compiling and op-               A key challenge preventing existing deep learning compilers
+timizing dynamic models for multiple platforms. In general,              from handling dynamism is the lack of a uniform and dy-
+the design goals of Nimble are:                                          namic representation. For example, optimizations and run-
+1. Supporting dynamic models. Nimble targets models                      time of existing IR, e.g., TVM, always assume the presence
+   with all types of dynamism, including control flow, dy-               of static shape information. These assumptions introduce
+   namic data structures and varied data shapes.                         quite a few challenges for optimization to dynamism.
+2. Being portable and light-weight. The module that Nim-                 In order to handle dynamism, we design a set of IR ex-
+   ble produces should be executable across a number of                  tensions which expose the essential semantics required to
+   platforms on the cloud (high-end CPUs and GPUs) and                   optimize dynamic programs. The approach is implemented
+   at the edge (low-power CPUs and GPUs). The runtime                    in Nimble on top of the Apache TVM (version 0.6) deep
+   should be light enough to run on devices with minimal                 learning compiler infrastructure (Chen et al., 2018a) to lever-
+   compute power and memory capacity.                                    age its frontend converters from various DL frameworks to
+3. Enabling high performance. Nimble should be perfor-                   its IR. TVM’s frontends alleviate the need to frontend spe-
+   mant in the context of dynamism across platforms.                     cific details enabling our work to focus on contributions
+                                                                         such as IR extensions and optimizations. To use Nimble,
+Figure 1 shows the system architecture of Nimble that we                 one only needs to feed it with a pre-trained model, perform
+propose to achieve the aforementioned design goals. It is                compilation and then inference. Furthermore, the lessons
+a system consisting of two major components, namely a                    here are applicable to other compiler efforts.
+compiler and a runtime. Nimble takes a model in the for-
+mat of mainstream deep learning frameworks, converts it                  This section describes how we transform standard TVM
+into a unified intermediate representation (IR), then opti-              programs into our dynamic dialect to easily apply static
+mizes and compiles the IR into an executable that contains               optimizations to dynamic programs, much as we do in the
+                                           Nimble: Efficiently Compiling Dynamic Neural Networks for Model Inference
+
+traditional compiler optimization. Particularly, we detail                                             First, operators with dynamic output shapes depending on
+three key components required to compile dynamic models.                                               the input data, such as arange2 and unique3 , will use
+• An extended type system which enables static tracking of                                             Any to describe those shapes. Second, when input shapes
+   dynamic shapes.                                                                                     contain Any dimension, the type relation needs to prop-
+• A series of optimization passes that make dynamic output                                             agate Any correctly to the output types and relax typing
+   shapes, allocation, and device placement explicit.                                                  constraints that hold in the static cases when necessary. For
+• A set of codegen techniques for producing code of kernels                                            example, the rules for broadcast4 type relation between two
+   with dynamic input and output shapes.                                                               dimensions with Any are defined as follows:
+
+3.1         Typing                                                                                                      broadcast rel(Any, 1) → Any
+                                                                                                                        broadcast rel(Any, d) → d (d > 1)
+Deep learning compilers use type systems to represent,
+                                                                                                                     broadcast rel(Any, Any) → Any
+check and infer the data types and shapes of tensors. In
+some frameworks and compilers this is separated into two
+                                                                                                       Note that due to the presence of dynamic shapes, these
+steps, shape inference and data type inference. TVM per-
+                                                                                                       type relation rules can no longer rule out all type errors
+forms both simultaneously and refers to them as type in-
+                                                                                                       at compile-time. For example, for the second rule shown
+ference (Roesch et al., 2019), a terminology we will use
+                                                                                                       above, when Any is neither 1 nor d at runtime, it then
+throughout the section.
+                                                                                                       violates the broadcast type constraints. To address this,
+A Tensor Type is designated by an n-dimensional shape                                                  we take the gradual typing (Siek & Taha, 2006) approach
+(defined as a tuple of integers describing the tensor’s dimen-                                         and leave certain type checking at runtime after Any is
+sions) and a data type (e.g. float32 or int64). Current                                                instantiated by a concrete value (see Section 3.2 for more
+deep learning IRs only support codegen when all dimen-                                                 details). One could eliminate these errors using a more
+sions of a tensor’s shape are known at compile-time, i.e.,                                             advanced type system, but at increased complexity.
+static shapes are mandatory for type inference and checking.
+                                                                                                       Type Inference One caveat of the Any dimension is that
+In the context of dynamic models, many data shapes can                                                 unknown dimensions will propagate during type inference,
+only be determined at runtime. Therefore, the previous as-                                             reducing chances for shape specialization. To limit the loss
+sumption of static data shapes does not hold. In order to                                              of precision introduced by using Any dimensions, we intro-
+support dynamic data shapes, Nimble introduces a special                                               duce sub-shaping to the type system. Much like sub-typing
+dimension called Any to represent statically unknown di-                                               used in popular programming languages (Liskov & Wing,
+mensions. For example, we can represent a tensor type as                                               1994; Amadio & Cardelli, 1993), our type system exten-
+Tensor[(1, 10, Any), float32], where the size                                                          sion enables values with concrete dimensions to be valid
+of the third dimension in this tensor is unknown while the                                             sub-types of tensor types with dynamic dimensions. For
+other two dimensions have concrete values. This concept                                                example a Tensor[(128, 128), f32] is a valid sub-
+has been introduced in other frameworks. Janus (Jeong et al.,                                          type of Tensor[(any, 128), f32]. Furthermore we
+2019) uses similar denotation to represent a dynamic dimen-                                            use program analysis to detect and remove unnecessary dy-
+sion but only for type unification, while Nimble extends type                                          namism, by communicating extra shape information which
+inference to handle Any as described next.                                                             can be used in downstream compilation. We do this in two
+                                                                                                       critical spots: first we refine any false dynamic dimensions
+Operator Type Relation A type relation describes the rela-                                             with static dimensions using a secondary shape analysis;
+tionship between types of operator inputs and outputs. The                                             and second, in code generation we use a single variable
+type system of TVM relies on these type relations 1 to infer                                           dimension for equivalent dynamic dimensions.
+and bidirectionally propagate type and shape relationships
+between inputs and outputs of operators across the whole
+                                                                                                       3.2      Shape Function
+network.
+The type relation must be generalized to properly handle                                               The introduction of Any dimension invalidates the pre-
+dynamic shapes. For example, a program which grows a ten-                                              allocation mechanism adopted in the existing deep learning
+sor on each loop iteration (a case existing in the decoder of                                          compiler. Instead, we now have to track the amount of
+many NLP models) is both impossible to type and compile                                                memory required to be allocated in parallel to computing.
+without proper type system support. With the introduction                                              Furthermore, static type checking cannot eliminate all type
+of Any, we are able to improve the existing type relations                                             errors at compile-time due to dynamic tensor shapes. Con-
+to support dynamic models.                                                                             sequently, we define a shape function to compute the output
+                                                                                                            2
+                                                                                                              arange generates a range of values in a (start, stop, step) interval the arrays output size is
+There are two dynamic type relation cases in particular.                                               a function of input arguments.
+                                                                                                            3
+      1                                                                                                       unique selects the unique elements of a tensor.
+          Relay (Roesch et al., 2019) includes more details of the type relations with static cases.        4
+                                                                                                              https://docs.scipy.org/doc/numpy/user/basics.broadcasting
+                         Nimble: Efficiently Compiling Dynamic Neural Networks for Model Inference
+
+shape for storage allocation and verify the type relation in          to adjust memory allocation for heterogeneous execution,
+accord with the semantics of every operator. The shape func-          modifications to the runtime are required. TVM’s graph run-
+tion is similar in structure to the type relations described in       time is one such example of static memory planning. Due
+Section 3.1 but are present at runtime instead of compile-            to the coarse-grained memory semantics of deep learning
+time. It enables compiling and embedding the computation              models, it is essential that memory optimizations occur at
+of output shapes into the program.                                    a suitably high-level of abstraction, unlike traditional com-
+                                                                      pilers. Existing work provides no clear path to performing
+Based on the characteristics of operators, we divide the
+                                                                      static optimization on dynamic memory allocation.
+shape functions in three different modes: data independent,
+data dependent, and upper bound. Data independent shape               In order to perform what we refer to as “dynamic memory
+functions are used for operators in which the output shape            planning” we have extended TVM to transform its IR with
+only depends on the shapes of inputs such as normal 2-                implicit memory allocations to one with explicit buffer
+D convolution. Data dependent shape functions require                 allocation and manipulation. The key to this transformation
+the concrete input values to compute the output shapes.               is an inter-procedural change of calling convention, with
+For example, the output shape of arange depends on the                each operator now taking its outputs explicitly. The
+value of start, stop, and step. In addition, there are certain        transformation makes it possible to track and optimize
+operators such as Non Maximum Suppression (nms) where                 dynamic memory allocations in the IR. In order to perform
+the complexity of computing the output shapes is on par               this optimization we have introduced four new IR con-
+with the complexity of executing the operator itself. To              structs, (a) invoke_mut(op, inputs, outputs)
+avoid the redundant computation, we use an upper bound                which takes outputs as mutable in-out arguments, (b)
+shape function to quickly estimate an upper bound shape for           alloc storage(size, alignment, device)
+the output. We require such operators to return the output            which allocates a region of memory of a particular size,
+shape along with output value, so as to use the real shape to         (c) alloc tensor(storage, offset, shape,
+slice the output tensors into precise output shape and layout.        dtype, attrs) which allocates a tensor at a partic-
+                                                                      ular storage offset with a shape and data type, and (d)
+It is worth noting that in the presence of dynamic shape
+                                                                      kill(tensor) which frees a tensor before its reference
+functions, operator fusion needs to be specially taken care
+                                                                      count becomes zero due to exiting the frame.
+of. Operator fusion, which combines basic operators into a
+composite operator, is a critical technique for performance           We illustrate how this works with an example of trans-
+optimization as it reduces unnecessary memory copies and              forming a single statically shaped operation such as broad-
+improves the cache locality. The compiler can easily con-             casting addition. Note that in the below code examples
+nect the shape functions of basic operators to form the shape         Tensor<d1, ..., dn> is shorthand for a tensor of
+function for a composite operator when all shape functions            shape (d1, ..., dn) containing floating point values.
+are data independent. However, a basic operator with a data
+                                                                  1   fn main() -> Tensor<10> {
+dependent or upper bound shape function cannot be fused to        2     let t1, t2 : Tensor<10> = ...;
+other operators, i.e., taking the outputs of other operators as   3     add(t1, t2)
+its inputs to fuse together, as the shape function requires to    4   }
+access to the intermediate result within a composite operator.        Here we only must allocate a single buffer, that is, the return
+As a result, we explicitly define the fusion policy to prevent        buffer for the addition operation.
+this from happening.
+                                                                  1   fn main() -> Tensor<10> {
+                                                                  2     let t1 = ...; let t2 = ...;
+3.3   Memory Planning                                             3     let buf1 = alloc_storage(40,64,cpu);
+                                                                  4     let out1 = alloc_tensor(buf1,0,(10),f32);
+Many deep learning compilers use a form of static memory          5     invoke_mut(add, (t1, t2), (out1));
+planning that coalesces memory into contiguous chunks and         6     out1
+minimizes allocations. For devices such as GPUs these opti-       7   }
+mizations are essential for reducing memory fragmentation             The above transformation replaces the operator invocation
+and ensuring allocation does not hamper kernel performance.           add to code which first allocates an output tensor from
+Existing deep learning compiler IRs hide memory allocation            backing storage at offset zero, and call to invoke_mut.
+behind a functional interface, where each operator implic-            For the sake of space, we present a more complex example
+itly allocates its output storage. Before execution, the sys-         in the Appendix A, which illustrates how to handle memory
+tem then performs static memory planning on the data flow             allocation when operators have dynamic shaped inputs. The
+graph enabling efficient pre-allocation of the output buffers.        key insight is to internalize a notion of memory allocation
+Due to this “out-of-band” nature of memory allocation, it             into the IR, enabling static optimization of both static and
+is challenging to customize, modify, or compose memory                dynamic allocations in the presence of control and dynamic
+optimizations with other passes. For example, if one needs            shapes. Now that all allocations are explicit in the IR, we
+                         Nimble: Efficiently Compiling Dynamic Neural Networks for Model Inference
+
+           CPU     GPU                                            Based on these rules, we use a union-find data structure to
+                           device copy
+
+      shape func                                 invoke_mut
+                                                                  bidirectionally propagate and unify the device placement
+                           device copy                            of each IR node. We introduce two operations, union(s,
+         (a)                   (b)                  (c)           t) and find(s), to achieve DeviceDomain unification
+                                                                  throughout the entire program. union(s,t) unions the
+Figure 2: Some heterogeneous device placement rules. (a)          equivalence device domains of s and t into one equivalence
+The inputs and outputs of shape functions are placed on           domain when the device types match. find(s) returns the
+CPU. (b) device copy changes the device of output ac-             representative of the device domain that s belongs to. These
+cordingly. (c) The device of all arguments to invoke mut          two operations are applied until all IR nodes are annotated.
+must be the same.                                                 If there is no constraint to a device domain, we assign the
+                                                                  compilation target (i.e., GPU) to it in favor of better kernel
+can provide analogous optimizations in the static case on         performance. The result of the heterogeneous device place-
+dynamic programs, for example we have implemented a               ment composes with memory planning and shape function
+storage coalescing pass to group storage into a larger region     insertion resulting in correctly placed allocations.
+which allows the multiplexing of multiple tensor allocations
+to a single piece of storage. Futher optimization like liveness   3.5   Symbolic Codegen
+analysis and graph coloring algorithm can be applied to the
+program to reuse the storages.                                    Deep learning compilers (Chen et al., 2018a; Ragan-Kelley
+                                                                  et al., 2013) have demonstrated competitive performance
+3.4   Heterogeneous Device Placement                              compared to manually tuned kernels on multiple platforms.
+                                                                  Recent trends apply machine learning based search to fur-
+As discussed in Section 3.2, shape functions are executed at      ther reduce or eliminate complex manual performance tun-
+runtime to calculate the output shape of an operator. These       ing using either template based (Chen et al., 2018b; Zheng
+functions should execute on the CPU as their outputs are          et al., 2020b) or search based (Adams et al., 2019; Zheng
+used to compute the size of allocated memory. In the case of      et al., 2020a) approaches. However, existing work which
+heterogeneous execution (i.e., CPU and GPU), it is essential      focuses on tuning in the presence of static shapes falls short
+to carefully place the execution of IR nodes to proper de-        with symbolic or dynamic shapes. There are two inherent
+vices. Otherwise, considerable overhead from data transfers       challenges with regard to codegen of symbolic shapes.
+and device synchronization will occur if the inputs to shape
+functions and kernels need to be copied from or to GPU. To        • How to achieve the same performance of kernels gener-
+minimize the performance penalty, we analyze the program            ated with symbolic shapes as that with static shapes when
+to place sub-expressions on the most suitable devices.              applying the same schedule?
+                                                                  • How to extend the machine learning based approach to
+We introduce a unification based analysis for computing             tune kernels with symbolic shapes?
+the correct device placement and allocation based on the
+                                                                  Loop parallelism and loop tiling are common optimization
+previous scheduling of the compute kernels. The goal of
+                                                                  techniques that exploit multi-core capabilities by achieving
+our device analysis is to assign each IR node properly to
+                                                                  data access patterns which are memory hierarchy aware for
+minimize the number of cross-device copies. We introduce
+                                                                  both CPUs and GPUs. However, the combination of these
+a concept of DeviceDomain to represent the domain of a
+                                                                  techniques lead to complex loop boundary conditions. In
+device, including source and destination. Each expression in
+                                                                  static cases, we can prove these conditions always hold, and
+the IR defaults to the empty domain, meaning no constraint
+                                                                  thus eliminate checks that hamper further optimizations such
+on its device placement. In addition, a new IR construct,
+                                                                  as unrolling. While straightforward to handle with static
+device_copy, is introduced to facilitate the heteroge-
+                                                                  shapes, it becomes a non-trivial challenge when performing
+neous execution of the Nimble runtime. It represents a data
+                                                                  symbolic codegen. If not carefully handled, the boundary
+transfer between different devices and is inserted when a
+                                                                  condition checks will stay, leading to poor performance.
+cross-device data copy is mandatory. Our analysis is for-
+mulated as a set of device placement rules which describes        To address this issue, we generate multiple kernels according
+how device constraints flow, and then we use unification,         to the residues modulo of the tiling factor and then dispatch
+a technique common in type inference and compilers, to            based on the actual shape at runtime. For example, suppose
+compute the precise device placement. Figure 2 depicts            a symbolic dimension x is tiled by a factor of 8, we then
+some highlights of the rules to assign and propagate the          duplicate the generated kernel for 8 times, and replace the
+device types: (a) both inputs and outputs of shape function       symbolic var x by 8k+r in each copy, where k = bx/8c and
+are assigned to CPU, (b) the output of device_copy is             r ∈ [0..7]. By applying this technique in conjunction with
+assigned to the device that is copied to, (c) all arguments to    an enhanced symbolic expression simplification pass, we
+invoke_mut should have the same device domain. The                can eliminate most boundary checks to achieve performance
+full set of rules can be found in the Appendix B.                 that is nearly identical to kernels compiled with a single
+                          Nimble: Efficiently Compiling Dynamic Neural Networks for Model Inference
+
+static shape. Lastly, we automatically generate a dispatch           In Nimble, we compile a dynamic model into a VM exe-
+function that invokes the corresponding kernel based on the          cutable that contains platform-independent bytecode and
+residue. In addition, the dispatch function can be extended          platform-dependent kernel code, which can be later loaded
+to invoke either compiler generated kernels or third party           and executed. The bytecode consists of a series of instruc-
+library whichever is faster from the profiling results. The          tions that predicate the order of kernel invocation and control
+increased kernel size is relatively small compared to the            flow execution logic. This design compliments conventional
+overall deep learning models. In case where resources are            runtime’s capability for executing highly optimized kernels
+extremely limited, we can either generate fewer number of            but not directly handling orchestration between kernels.
+kernels than the tiling factor or reduce the tiling factor to find
+                                                                     The design of the VM instruction set is motivated by the
+an acceptable trade-off between code size and performance.
+                                                                     simple observation that kernel execution dominates neural
+A known issue to machine learning based tuning is that it            network execution time. It is quite different from traditional
+takes a long time (usually hours) to find the best schedule          language virtual machines, which contain many instructions
+for a single kernel. When it comes to symbolic shapes,               that perform little work, leading to a profile where the cost
+the tuning time can be exponentially longer if we naively            of each instruction executed matters. Our ISA is composed
+tune for every possible shape. In this paper, we extend the          of CISC-style instructions in which each instruction cor-
+template based tuning approach for symbolic shapes to make           responds to a primitive IR expression on tensors, such as
+tuning time tractable. The template based tuning approach            allocation and kernel invocation, which in turn may corre-
+takes a human-defined code template and a search space,              spond to executing multiple “low-level” operations. For
+and searches the best configuration within the search space          example, LoadConst idx, $reg is capable of multi-
+using machine learning algorithms. We observe that a good            ple addressing modes as it first reads the index idx and then
+configuration for one shape usually performs well on other           loads the data from a constant pool to the destination regis-
+shapes. Based on this observation, we devise the following           ter $reg. A complete list of instruction set can be found
+mechanism to tune the kernel for symbolic shapes.                    in the Appendix C. We naturally select a register-based
+1. First replace the symbolic dimensions by a large enough           virtual machine design (Davis et al., 2003) for a compact
+   value (e.g., 64) so that the search space can cover most          bytecode, which is easy for users to read and modify. We
+   possibilities, and run the tuning algorithm on the static         provide the abstraction of an infinite set of virtual registers
+   shape for a sufficient number of iterations.                      as it significantly simplifies optimizations and allocation
+                                                                     (similar to SSA) and minimizes conceptual barriers to rapid
+2. Pick top k configurations, apply them to a selection of           prototyping and modification.
+   other shapes, and evaluate their performance.
+                                                                     Instructions are represented using a traditional tagged union
+3. Pick the configuration that performs best on average
+                                                                     containing the op-code and the data payload. This repre-
+   among shapes previously evaluated.
+                                                                     sentation enables both efficient serialization and instruction
+Empirically, we found that k = 100 covers most of the best           decoding and dispatch. Nimble uses variable-length instruc-
+configurations for other shapes. Current popular dynamic             tion format due to the inclusion of variable sized operands
+models usually only require kernels with one symbolic vari-          such as data shapes in the instructions.
+able. As a result, we choose the values of power of two
+up to 256 in the cross evaluation of other shapes. If there          After we have generated an executable from the compiling
+is more than one symbolic variable, a more sophisticated             phase, we can create an interpreter to load it. When exe-
+selection approach might be required to limit the evaluation         cution begins, the interpreter runs a dispatch loop which
+time of step 2. We leave this to the future work. Further,           checks the op-code and executes the appropriate logic, then
+if the workload distribution is known, we can adjust the             repeats. As our instructions are coarse-grained (i.e., they can
+weighting of known shapes in step 3.                                 be viewed as super-instructions), the number of branches
+                                                                     generated by the dispatch-loop is lower than traditional
+                                                                     programming language VMs, adding negligible overhead
+4    V IRTUAL M ACHINE                                               compared to ahead of time compilation.
+The conventional runtime of existing deep learning compil-           Discussion An alternative solution to the runtime is ahead
+ers which naively executes a model operator by operator in           of time compilation to eliminate dispatch overhead. But due
+topological order does not work for executing the compiled           to the granularity of the operations, dispatch time makes
+modules of dynamic models. A more intelligent and pow-               up a very small portion in the execution. More importantly,
+erful execute engine is required to handle the control flow          our VM provides flexibility traditionally attributed to virtual
+execution logic, and dispatch different kernels accordingly.         machines and a clear compiler/runtime split. We see the
+In order to achieve these goals and be portable to differ-           potential of VM to be integrated as a runtime module into
+ent platforms, we design and implement a virtual machine             a larger system. For example, VM can provide resource
+(VM)-based runtime.
+                                       Nimble: Efficiently Compiling Dynamic Neural Networks for Model Inference
+
+isolation where multiple inference instances share the same                                     For Tree-LSTM, we used the Stanford Sentiment Treebank
+hardware in the cloud. Furthermore, a Quality of Service                                        (SST) (Socher et al., 2013) with various tree structures as
+(QoS)-aware system, e.g., (Kang et al., 2018; Yachir et al.,                                    the input dataset.
+2009), could leverage VM to suspend the current model
+execution for a higher priority or time-critical model. Last,                                   5.2   Overall performance
+thanks to the simplicity of the VM design, one can verify the                                   We compared the overall performance of Nimble against
+implementation of VM for security and privacy purposes.                                         baselines for each dynamic model. Nimble successfully ac-
+                                                                                                complished inference for all models on all platforms. How-
+5          E VALUATION                                                                          ever, not all baseline systems could perform inference for
+                                                                                                these models. For instance, Tree-LSTM only runs on Py-
+This section evaluates the performance of Nimble on dy-                                         Torch, DyNet, and TensorFlow Fold as other frameworks
+namic models against existing state-of-the-art solutions, as                                    cannot handle dynamic data structures. TensorFlow Fold
+well as its optimization implication. Specifically, the section                                 was not designed to process BERT hence no result was ob-
+seeks to answer the following questions:                                                        tainable. We cannot find a BERT implementation on DyNet.
+                                                                                                Finally, the model inference of Tree-LSTM on Nvidia GPU
+• What is the overall performance of Nimble for dynamic
+                                                                                                was omitted as it’s hard to saturate GPU compute capabil-
+  models compared against state-of-the-art alternatives on
+                                                                                                ity due to excessive control flows and small kernel sizes,
+  various hardware platforms?
+                                                                                                making GPU less favorable deployment targets.
+• How much overhead does Nimble VM introduce for han-
+  dling dynamism at runtime?                                                                    The baseline systems all make use of third-party kernel li-
+• How effective are the proposed optimization techniques,                                       braries to achieve high-performance by leveraging the heav-
+  such as memory planning and symbolic codegen?                                                 ily hand-optimized operators, which is handicapped when an
+                                                                                                operator is not supported on a specific target. However, Nim-
+5.1         Experiment setup                                                                    ble has the ability to select either the self-compiled kernels
+                                                                                                or the ones provided by third-party library based on which
+All experiments were conducted on Amazon EC2 instances.
+                                                                                                one maximizes performance. It uses dynamic dispatch logic
+We evaluated Nimble on three hardware platforms: Intel
+                                                                                                to invoke the selected kernels using platform-independent
+Skylake CPUs (c5.9xlarge, 18 physical cores, hereinafter
+                                                                                                bytecode at runtime.
+called Intel CPU), Nvidia Tesla T4 GPUs (g4dn.4xlarge, 1
+card, 2,560 CUDA cores, hereinafter called Nvidia GPU),                                         First, the latency result comparison is shown in Table 1.
+and ARM Cortex A72 (a1.4xlarge, 16 physical cores, here-                                        Nimble consistently outperforms the baseline on both 1-
+inafter called ARM CPU). Although all tests are done on                                         and 2-layer cases, with 2.2×, 1.3×, and 3.2× faster than
+the cloud, our results of ARM CPU are portable to the edge                                      the best alternative on Intel CPU, Nvidia GPU, and ARM
+devices, e.g. Raspberry Pi, due to the same architecture.                                       CPU, respectively. We implemented the LSTM model using
+                                                                                                a for-loop control flow in all systems for fair comparison.
+To study the efficiency of Nimble in handling dynamic mod-
+                                                                                                PyTorch has an alternative implementation for LSTM that
+els, we compared it with mainstream deep learning frame-
+                                                                                                unrolls the LSTM cells along the sequence length and dy-
+works, including TensorFlow (v1.15), MXNet (v1.6), Py-
+                                                                                                namically batches the matrix multiplication for the inputs.
+Torch (v1.5) 5 , DyNet (v2.1), as well as dynamic-specific
+                                                                                                Note that this optimization is orthogonal to the control flow
+systems TensorFlow Fold based on TensorFlow v1.0. We
+                                                                                                handling and can be implemented in Nimble. DyNet is
+were unable to compare Nimble with Cavs (Xu et al., 2018),
+                                                                                                significantly slow on CPU because it only utilizes a single
+JANUS (Jeong et al., 2019), or Jeong et al.(Jeong et al.,
+                                                                                                core. We observe that latency on Nvidia GPU is higher
+2018) as none of them is open-source. No public deep
+                                                                                                than Intel CPU with Nimble. This is because the size of
+learning compiler has claimed support for dynamic models.
+                                                                                                LSTM model is relative small so that it cannot fully utilize
+Three popular models that represent different classes                                           the massive parallelism in the GPU. The significant perfor-
+of dynamism were chosen in this experiment, viz.                                                mance improvement of Nimble comes from two aspects:
+LSTM (Hochreiter & Schmidhuber, 1997) (dynamic control                                          (a) utilizing the deep learning compiler for better kernel fu-
+flow), Tree-LSTM (Tai et al., 2015) (dynamic data structure),                                   sion and implementation, (b) encoding the control flow into
+and BERT (Devlin et al., 2018) (dynamic data shape). The                                        platform-independent instructions with minimal overhead.
+input size / hidden size used in the LSTM and Tree-LSTM
+                                                                                                Next, we inspected the performance of model inference
+model are 300/512 and 300/150, respectively. We used
+                                                                                                on Tree-LSTM as exhibited in Table 2. The table shows
+BERT base implementation. For LSTM and BERT, we used
+                                                                                                that Nimble runs substantially faster than the baselines. On
+Microsoft Research’s Paraphrase Corpus (MRPC) (Dolan
+                                                                                                PyTorch, the performance speedups are 17.4× on Intel CPU
+et al., 2005) with variable input lengths as our input dataset.
+                                                                                                and 19.8× on ARM CPU as PyTorch uses Python to handle
+      5
+          We use PyTorch v1.4 on ARM CPU because PyTorch v1.5 fails to build on ARM instance.   the tree data structure. DyNet performs much better than
+                                       Nimble: Efficiently Compiling Dynamic Neural Networks for Model Inference
+
+ Unit:                          1 layer                                2 layers                      Unit: µs/token     Intel     Nvidia   ARM
+ µs/token Intel                  NV           ARM            Intel      NV         ARM
+                                                                                                     Nimble             307.0     95.2     2862.6
+ Nimble              47.8        54.6         182.2          97.2      107.4        686.4            PyTorch            479.5     220.4    11851.2
+ PT                 103.6        80.6        2735.9         224.0      158.1       5862.2            MXNet              455.8     152.9    8628.0
+ DY                 936.4        68.8        5701.6        2350.8      140.7      12811.3            TensorFlow         768.7     125.2    2995.4
+ MX                 212.9       135.7        3695.9         401.7      223.8       7768.0
+ TF                 301.4       304.7         978.3         687.3      406.9       2192.8            Table 3: BERT model inference latency.
+Table 1: LSTM model inference latency of Nimble, PyTorch                                                      TVM        Nimble       kernel     others
+                                                                                                  Device
+                                                                                                            lat. (ms)   lat. (ms)    lat. (ms)    (ms)
+(PT), DyNet (DY), MXNet (MX), and TensorFlow (TF) on
+Intel CPU, Nvidia (NV) GPU, and ARM CPU.                                                           Intel      19.38       24.32        21.06     3.26
+                                                                                                  ARM        223.50      237.41       228.59     8.82
+                         Unit: µs/token           Intel       ARM                                 Nvidia       5.58        5.86        5.60      0.26
+
+                         Nimble                   40.3        86.3
+                                                                                            Table 4: BERT model latency (sequence length 128) using
+                         PyTorch                  701.6       1717.1
+                         DyNet                    98.2        312.9                         TVM and Nimble on different hardware. kernel latency
+                         TF Fold 6                209.9       –                             shows the time of kernel execution in Nimble, and others
+                                                                                            shows the extra latency introduced by other instructions.
+             Table 2: Tree-LSTM model inference latency.
+                                                                                            TVM is 5% to 25% faster than Nimble on static shapes,
+PyTorch as it handles the control flow execution carefully in                               though the absolute latency difference is small. The over-
+C++. However, Nimble still outperforms it as DyNet does                                     head comes from two aspects: (a) kernels generated with
+not optimize computation kernels for CPUs. TensorFlow                                       symbolic shapes cause extra overhead in the index com-
+Fold is 5.2× slower than Nimble on Intel CPU because it                                     putation; (b) other instructions in the VM are required to
+has to re-compile upon every input.                                                         handle the dynamic execution, such as shape functions, dy-
+                                                                                            namic memory allocation, instruction dispatch, etc. On
+Last, Table 3 summarizes the performance comparison of                                      Nvidia GPU, most of the bytecode latency is overlapped
+BERT. The results indicate that Nimble outstrips the base-                                  with the GPU execution thanks to the heterogeneous device
+lines for all frameworks on all platforms in the experiment.                                placement (Section 3.4), and therefore the overhead of other
+The reduction in latency compared to the best alternative                                   instructions is negligible.
+is 1.5×, 1.3×, and 1.05× on Intel CPU, Nvidia GPU, and
+ARM CPU, respectively. The reasons are two-fold: (a) simi-                                  Memory planning Section 3.3 proposed memory planning
+lar to frameworks, Nimble is also able to use the well-tuned                                to coalesce memory allocation together and reuse the already
+third-party libraries on Intel CPU (MKL) and Nvidia GPU                                     allocated memory chunks. This pass reduces the number
+(cuDNN); (b) Nimble can leverage more thorough operator                                     of buffer allocation by 47%, and the memory allocation
+fusion brought by the deep learning compiler.                                               latency is reduced by 75% on Intel CPU. We also compared
+                                                                                            the memory usage of Nimble with memory planning to TVM
+In sum, the evaluation results demonstrate that Nimble pro-                                 which statically analyze and pre-allocate memory on popu-
+duces more portable performance for all dynamic models on                                   lar computer vision models such as ResNet (He et al., 2016),
+different platforms. Instead, the performance of frameworks                                 MobileNet (Howard et al., 2017), VGG (Simonyan & Zisser-
+is more platform dependent and varies from model to model.                                  man, 2014) and SqueezeNet (Iandola et al., 2016). It turned
+                                                                                            out that Nimble uses up to 8% more memory footprint.
+5.3         Microbenchmark
+                                                                                            Symbolic codegen We selected 3 dense layers from BERT
+This subsection analyzes the performance gain of Nimble                                     model and compared the performance between symbolic
+by using BERT as the microbenchmark. Three studies will                                     codegen and static codegen on ARM CPU. For symbolic
+be conducted to examine (a) the overhead introduced by the                                  codegen, we use Any as the sequence length during the com-
+VM, (b) the advantage of the proposed memory planning                                       pilation and evaluate the kernel with the sequence length 128
+pass, and (c) the performance discrepancy between symbolic                                  at runtime. For static codegen, we directly set the sequence
+and static codegen. Other models share similar observations.                                length to 128 at compilation time. Figure 3 illustrates the
+Overhead in handling dynamism In order to understand                                        relative latency of kernels generated with symbolic shapes
+the overhead that Nimble spends to take care of dynamism,                                   to the baseline – kernel compiled with static shapes. The
+we compared it to TVM where static sequence length and                                      auto-tuning algorithm tiles the symbolic axis by 8 in all three
+TVM static runtime is used to execute BERT. Table 4 de-                                     kernels. We varied the number of generated kernels to be dis-
+tails the performance difference between Nimble and TVM.                                    patched during the symbolic codegen from 8 (full dispatch)
+                                                                                            to 1 (no dispatch) as described in Section 3.5. We observe
+      5
+          TensorFlow Fold was not built successfully on ARM CPU.                            that symbolic codegen with full dispatch can achieve nearly
+                                           Nimble: Efficiently Compiling Dynamic Neural Networks for Model Inference
+
+                              static           dispatch/4     no dispatch        a dynamic model. Tracing based approaches provide a flex-
+                              dispatch/8       dispatch/2                        ible and friendly programming model at the cost of ahead
+                       200%                                                      of time optimization. Additionally, it requires the creation
+                                                                                 of a data flow graph for each trace, introducing overhead
+    Relative latency
+
+
+
+                       150%
+                                                                                 for control-flow constructs and limiting whole-program op-
+                       100%                                                      timization, a challenge also faced in traditional tracing JIT
+                                                                                 compilation. JAX (Bradbury et al., 2018) also supports re-
+                       50%                                                       stricted forms of dynamic networks but its optimizations are
+                                                                                 fundamentally restricted by XLA, its underlying compiler.
+                        0%
+                                 Dense1         Dense2        Dense3             For example, dynamic value dependent control-flow is not
+                                                                                 supported in JAX’s JIT mode. In contrast Nimble makes
+Figure 3: Relative latency of 3 dense operators using sym-                       dynamic behaviors less costly to use without compromising
+bolic codegen and static codegen on ARM CPU. The latency                         performance for the static subset.
+of static-shaped kernels is used as the baseline. “dispatch/k”
+                                                                                 In addition, frameworks rely on third-party libraries (Chetlur
+means that we generate k symbolic kernels to be dispatched
+                                                                                 et al., 2014; Intel, 2020) to implement operators with dif-
+at runtime. “no dispatch” means that only one symbolic
+                                                                                 ferent data shapes, namely, they achieve good performance
+kernel is generated and therefore no dispatching is needed.
+                                                                                 for models with dynamic shapes on a specific hardware plat-
+identical performance to that for static codegen, while reduc-                   form only if the corresponding high-performance third-party
+ing the number of kernels hurts the performance. Similar                         library supports an operation. Therefore, frameworks, as
+trends are seen in dense operators with different shapes,                        well as the runtime systems derived from them for dynamic
+other operators, and on other platforms.                                         models (Xu et al., 2018; Gao et al., 2018), generally perform
+                                                                                 poorly on devices in the second tier of support such as ARM
+                                                                                 CPU, and on operator and shape combinations not found in
+6        R ELATED W ORK                                                          popular benchmarks. In contrast Nimble works across all
+This section contrasts Nimble to existing solutions for exe-                     platforms and can generate performant code for new shapes
+cuting dynamic neural networks.                                                  and new devices on demand (Section 3.5).
+
+Deep learning frameworks Some frameworks support dy-                             Deep learning compilers Existing deep learning compil-
+namic control flow via the addition of primitives in their                       ers, including XLA (XLA Team, 2017), TVM (Chen et al.,
+graph representations, such as switch and merge in Tensor-                       2018a), and Glow (Rotem et al., 2018), can compile deep
+Flow (Yu et al., 2018) and foreach, cond, and while loop                         learning models to run on multiple hardware platforms with
+in MXNet (Zheng, 2018). Indirect encodings of control                            accelerated performance. However, little work has been
+flow require specialized data-flow runtimes which handle                         done on optimizing compilation for dynamic neural net-
+operations like switch, or hybrid runtimes which separate                        works. MLIR (Lattner et al., 2021) is a promising direction
+execution of the control and data planes. Both are heavily                       and its IR supports dynamic shapes, but no dynamic opti-
+intrusive to the framework codebase. In addition, there have                     mizations or end to end performance have been reported
+been many framework extensions to support different kinds                        yet. Nimble’s compilation and VM design is largely inspired
+of dynamism.TensorFlow Fold (Looks et al., 2017) conducts                        by production compilers and VMs, such as LLVM (Lattner
+an analysis of the user’s provided computation graph to iden-                    & Adve, 2004), GCC (gcc, 2019), and JVM (jvm, 2013)
+tify dynamic operations that can be batched together. Once                       for general solutions to handle dynamic behaviors, such as
+such operations are found, a batched TensorFlow graph                            control flow and variable-length input arrays.
+is generated which provides shape specialized sub-graphs.
+Although this may provide speedup, it introduces large over-                     7    C ONCLUSION
+head as each path must be executed as a separated sub-
+                                                                                 This paper proposed Nimble, an end-to-end compiler and
+computation graph, as well as limits further optimization.
+                                                                                 runtime solution to dynamic neural networks. Nimble is the
+Jeong et al. (Jeong et al., 2018) and JANUS (Jeong et al.,
+                                                                                 first deep learning compiler that supports neural networks
+2019) also extend TensorFlow to improve the performance
+                                                                                 with dynamism, via a lightweight and portable VM-based
+for dynamic models. These extensions are framework spe-
+                                                                                 runtime for executing compiled models on multiple plat-
+cific and are not directly related to compilation techniques
+                                                                                 forms. Experimental results showed that Nimble efficiently
+we employ. The use of speculative execution is complimen-
+                                                                                 executed popular dynamic models on multiple platforms
+tary to our techniques.
+                                                                                 with better performance and broader coverage compared
+Dynet (Neubig et al., 2017) and PyTorch (Paszke et al.,                          to the state-of-the-art. Future work includes enabling dy-
+2019) use host language features (i.e., Python’s control flow)                   namic model inference on emerging AI accelerators and
+to dynamically unroll control flow to produce a static trace of                  high-performance training of dynamic models.
+                        Nimble: Efficiently Compiling Dynamic Neural Networks for Model Inference
+
+R EFERENCES                                                      Dolan, B., Brockett, C., and Quirk, C. Microsoft research
+                                                                   paraphrase corpus. Retrieved March, 29(2008):63, 2005.
+The java R virtual machine specification. https:
+  //docs.oracle.com/javase/specs/jvms/                           Gao, P., Yu, L., Wu, Y., and Li, J. Low latency rnn inference
+  se7/html/index.html/, 2013.                                      with cellular batching. In Proceedings of the Thirteenth
+                                                                   EuroSys Conference, pp. 31. ACM, 2018.
+Gcc, the gnu compiler collection. https://gcc.gnu.
+  org/, 2019.                                                    Han, S., Liu, X., Mao, H., Pu, J., Pedram, A., Horowitz,
+                                                                   M. A., and Dally, W. J. EIE: Efficient inference engine on
+Adams, A., Ma, K., Anderson, L., Baghdadi, R., Li, T.-             compressed deep neural network. In Proceedings of the
+  M., Gharbi, M., Steiner, B., Johnson, S., Fatahalian, K.,        43rd International Symposium on Computer Architecture,
+  Durand, F., et al. Learning to optimize halide with tree         ISCA 16, pp. 243254, 2016.
+  search and random programs. ACM Transactions on
+ Graphics (TOG), 38(4):1–12, 2019.                               He, K., Zhang, X., Ren, S., and Sun, J. Deep residual learn-
+                                                                   ing for image recognition. In Proceedings of the IEEE
+Amadio, R. M. and Cardelli, L. Subtyping recursive types.          conference on computer vision and pattern recognition,
+ ACM Trans. Program. Lang. Syst., 15(4):575631, Septem-            pp. 770–778, 2016.
+ ber 1993.
+                                                                 Hochreiter, S. and Schmidhuber, J. Long short-term
+Bradbury, J., Frostig, R., Hawkins, P., Johnson, M. J., Leary,     memory. Neural Comput., 9(8):1735–1780, Novem-
+  C., Maclaurin, D., and Wanderman-Milne, S. JAX: com-             ber 1997. ISSN 0899-7667. doi: 10.1162/neco.1997.
+  posable transformations of Python+NumPy programs,                9.8.1735. URL http://dx.doi.org/10.1162/
+  2018. URL http://github.com/google/jax.                          neco.1997.9.8.1735.
+                                                                 Howard, A. G., Zhu, M., Chen, B., Kalenichenko, D., Wang,
+Chen, T., Moreau, T., Jiang, Z., Zheng, L., Yan, E., Shen,
+                                                                   W., Weyand, T., Andreetto, M., and Adam, H. Mobilenets:
+  H., Cowan, M., Wang, L., Hu, Y., Ceze, L., Guestrin,
+                                                                   Efficient convolutional neural networks for mobile vision
+  C., and Krishnamurthy, A. TVM: An automated end-
+                                                                   applications. arXiv preprint arXiv:1704.04861, 2017.
+  to-end optimizing compiler for deep learning. In 13th
+  USENIX Symposium on Operating Systems Design and               Iandola, F. N., Han, S., Moskewicz, M. W., Ashraf, K.,
+  Implementation (OSDI 18), pp. 578–594, Carlsbad, CA,             Dally, W. J., and Keutzer, K. Squeezenet: Alexnet-level
+  2018a.                                                           accuracy with 50x fewer parameters and¡ 0.5 mb model
+                                                                   size. arXiv preprint arXiv:1602.07360, 2016.
+Chen, T., Zheng, L., Yan, E., Jiang, Z., Moreau, T., Ceze, L.,
+  Guestrin, C., and Krishnamurthy, A. Learning to optimize       Intel.    Intel math kernel library for deep learning
+  tensor programs. In Advances in Neural Information                networks, 2020.    URL https://github.com/
+  Processing Systems, pp. 3389–3400, 2018b.                         oneapi-src/oneDNN. [Online; accessed 3-Mar-
+                                                                    2021].
+Chetlur, S., Woolley, C., Vandermersch, P., Cohen, J., Tran,
+  J., Catanzaro, B., and Shelhamer, E. cudnn: Efficient          Jeong, E., Jeong, J. S., Kim, S., Yu, G.-I., and Chun, B.-G.
+  primitives for deep learning. CoRR, abs/1410.0759, 2014.         Improving the expressiveness of deep learning frame-
+  URL http://arxiv.org/abs/1410.0759.                              works with recursion. In Proceedings of the Thirteenth
+                                                                   EuroSys Conference, pp. 1–13, 2018.
+Dahl, G. E., Yu, D., Deng, L., and Acero, A. Context-
+                                                                 Jeong, E., Cho, S., Yu, G.-I., Jeong, J. S., Shin, D.-J., and
+  dependent pre-trained deep neural networks for large-
+                                                                   Chun, B.-G. JANUS: Fast and flexible deep learning via
+  vocabulary speech recognition. IEEE Transactions on
+                                                                   symbolic graph execution of imperative programs. In
+ Audio, Speech, and Language Processing, 20(1):30–42,
+                                                                   16th USENIX Symposium on Networked Systems Design
+  2012.
+                                                                   and Implementation (NSDI 19), pp. 453–468, 2019.
+Davis, B., Beatty, A., Casey, K., Gregg, D., and Waldron, J.     Johnson, M. J., Duvenaud, D. K., Wiltschko, A., Adams,
+  The case for virtual register machines. In Proceedings of        R. P., and Datta, S. R. Composing graphical models with
+  the 2003 workshop on Interpreters, virtual machines and          neural networks for structured representations and fast
+  emulators, pp. 41–49. ACM, 2003.                                 inference. In Advances in Neural Information Processing
+                                                                   Systems 29, pp. 2946–2954. 2016.
+Devlin, J., Chang, M.-W., Lee, K., and Toutanova, K. Bert:
+  Pre-training of deep bidirectional transformers for lan-       Kang, L., Zhao, W., Qi, B., and Banerjee, S. Augmenting
+  guage understanding. arXiv preprint arXiv:1810.04805,            self-driving with remote control: Challenges and direc-
+  2018.                                                            tions. In Proceedings of the 19th International Workshop
+                        Nimble: Efficiently Compiling Dynamic Neural Networks for Model Inference
+
+  on Mobile Computing Systems & Applications, pp. 1924,        Roesch, J., Lyubomirsky, S., Kirisame, M., Pollock, J., We-
+  2018.                                                          ber, L., Jiang, Z., Chen, T., Moreau, T., and Tatlock, Z.
+                                                                 Relay: A high-level ir for deep learning. arXiv preprint
+Lattner, C. and Adve, V. Llvm: A compilation framework           arXiv:1904.08368, 2019.
+  for lifelong program analysis & transformation. In Inter-
+  national Symposium on Code Generation and Optimiza-          Rotem, N., Fix, J., Abdulrasool, S., Deng, S., Dzhabarov,
+  tion, 2004. CGO 2004., pp. 75–86. IEEE, 2004.                  R., Hegeman, J., Levenstein, R., Maher, B., Nadathur,
+                                                                 S., Olesen, J., Park, J., Rakhov, A., and Smelyanskiy, M.
+Lattner, C., Amini, M., Bondhugula, U., Cohen, A., Davis,        Glow: Graph lowering compiler techniques for neural
+  A., Pienaar, J. A., Riddle, R., Shpeisman, T., Vasilache,      networks. CoRR, abs/1805.00907, 2018. URL https:
+  N., and Zinenko, O. Mlir: Scaling compiler infrastruc-         //arxiv.org/abs/1805.00907.
+  ture for domain specific computation. In Proceedings of
+  the 19th ACM/IEEE International Symposium on Code            Siek, J. G. and Taha, W. Gradual typing for functional
+  Generation and Optimization, 2021.                             languages. In In Scheme and Functional Programming
+                                                                 Workshop, pp. 81–92, 2006.
+Liang, X., Shen, X., Feng, J., Lin, L., and Yan, S. Semantic
+  object parsing with graph lstm. In European Conference       Simonyan, K. and Zisserman, A. Very deep convolu-
+  on Computer Vision, pp. 125–143. Springer, 2016.               tional networks for large-scale image recognition. arXiv
+                                                                 preprint arXiv:1409.1556, 2014.
+Liskov, B. H. and Wing, J. M. A behavioral notion of
+  subtyping. ACM Trans. Program. Lang. Syst., 16(6):           Socher, R., Perelygin, A., Wu, J., Chuang, J., Manning,
+  18111841, November 1994.                                       C. D., Ng, A. Y., and Potts, C. Recursive deep models for
+                                                                 semantic compositionality over a sentiment treebank. In
+Liu, Y., Wang, Y., Yu, R., Li, M., Sharma, V., and Wang,         Proceedings of the 2013 conference on empirical methods
+  Y. Optimizing CNN model inference on cpus. In 2019             in natural language processing, pp. 1631–1642, 2013.
+  USENIX Annual Technical Conference (USENIX ATC
+  19), pp. 1025–1040, 2019.                                    Sutskever, I., Vinyals, O., and Le, Q. V. Sequence
+                                                                 to sequence learning with neural networks. CoRR,
+Looks, M., Herreshoff, M., Hutchins, D., and Norvig, P.          abs/1409.3215, 2014. URL http://arxiv.org/
+  Deep learning with dynamic computation graphs. arXiv           abs/1409.3215.
+  preprint arXiv:1702.02181, 2017.
+                                                               Tai, K. S., Socher, R., and Manning, C. D. Improved seman-
+Neubig, G., Dyer, C., Goldberg, Y., Matthews, A., Am-            tic representations from tree-structured long short-term
+  mar, W., Anastasopoulos, A., Ballesteros, M., Chiang,          memory networks. CoRR, abs/1503.00075, 2015. URL
+  D., Clothiaux, D., Cohn, T., et al. Dynet: The dynamic         http://arxiv.org/abs/1503.00075.
+  neural network toolkit. arXiv preprint arXiv:1701.03980,
+  2017.                                                        Wang, L., Chen, Z., Liu, Y., Wang, Y., Zheng, L., Li, M.,
+                                                                and Wang, Y. A unified optimization approach for cnn
+Paszke, A., Gross, S., Massa, F., Lerer, A., Bradbury, J.,      model inference on integrated gpus. In Proceedings of
+  Chanan, G., Killeen, T., Lin, Z., Gimelshein, N., Antiga,     the 48th International Conference on Parallel Processing,
+  L., Desmaison, A., Kopf, A., Yang, E., DeVito, Z., Raison,    pp. 1–10, 2019.
+  M., Tejani, A., Chilamkurthy, S., Steiner, B., Fang, L.,
+  Bai, J., and Chintala, S. PyTorch: An imperative style,      XLA Team. Xla - tensorflow, compiled, March 2017.
+  high-performance deep learning library. In Advances           URL https://developers.googleblog.com/
+  in Neural Information Processing Systems 32, pp. 8024–        2017/03/xla-tensorflow-compiled.html.
+  8035. Curran Associates, Inc., 2019.
+                                                               Xu, S., Zhang, H., Neubig, G., Dai, W., Kim, J. K., Deng,
+Ragan-Kelley, J., Barnes, C., Adams, A., Paris, S., Durand,      Z., Ho, Q., Yang, G., and Xing, E. P. Cavs: An efficient
+  F., and Amarasinghe, S. Halide: A language and compiler        runtime system for dynamic neural networks. In 2018
+  for optimizing parallelism, locality, and recomputation in    USENIX Annual Technical Conference (USENIX ATC
+  image processing pipelines. In Proceedings of the 34th        18), pp. 937–950, 2018.
+  ACM SIGPLAN Conference on Programming Language
+  Design and Implementation, PLDI ’13, pp. 519–530, New        Yachir, A., Tari, K., Amirat, Y., Chibani, A., and Badache,
+  York, NY, USA, 2013. ACM. ISBN 978-1-4503-2014-6.              N. Qos based framework for ubiquitous robotic services
+  doi: 10.1145/2491956.2462176. URL http://doi.                  composition. In 2009 IEEE/RSJ International Conference
+  acm.org/10.1145/2491956.2462176.                               on Intelligent Robots and Systems, pp. 2019–2026, 2009.
+                       Nimble: Efficiently Compiling Dynamic Neural Networks for Model Inference
+
+Yu, Y., Abadi, M., Barham, P., Brevdo, E., Burrows, M.,
+  Davis, A., Dean, J., Ghemawat, S., Harley, T., Hawkins,
+  P., et al. Dynamic control flow in large-scale machine
+  learning. In Proceedings of the Thirteenth EuroSys Con-
+  ference, pp. 18. ACM, 2018.
+Zhang, X., Wang, Q., and Chothia, Z. Openblas. http:
+  //xianyi.github.io/OpenBLAS, 2014. [Online;
+  accessed 13-May-2019].
+Zheng, D. Optimize dynamic neural network models with
+  control flow operators, 7 2018. URL https://cwiki.
+  apache.org/confluence/display/MXNET/
+  Optimize+dynamic+neural+network+
+  models+with+control+flow+operators.
+Zheng, L., Jia, C., Sun, M., Wu, Z., Yu, C. H., Haj-Ali, A.,
+  Wang, Y., Yang, J., Zhuo, D., Sen, K., Gonzalez, J. E.,
+  and Stoica, I. Ansor: Generating high-performance tensor
+  programs for deep learning. In 14th USENIX Symposium
+  on Operating Systems Design and Implementation (OSDI
+  20), pp. 863–879, 2020a.
+Zheng, S., Liang, Y., Wang, S., Chen, R., and Sheng, K.
+  Flextensor: An automatic schedule exploration and opti-
+  mization framework for tensor computation on heteroge-
+  neous system. In Proceedings of the Twenty-Fifth Interna-
+  tional Conference on Architectural Support for Program-
+  ming Languages and Operating Systems, pp. 859–873,
+  2020b.
+                             Nimble: Efficiently Compiling Dynamic Neural Networks for Model Inference
+
+     A PPENDICES                                                          • Shape functions. These IRs take the output of one or
+                                                                            multiple shape_of and then derive the shape of an
+     A     M EMORY P LANNING E XAMPLE                                       operation according to predefined type inference rules.
+     In the case of operators with dynamic shaped inputs, we                The output of a shape function is used to compute the
+     need to insert shape functions before the kernel invocation to         amount of memory that this operator requires at run-
+     compute the output shapes and allocate memory accordingly              time, which only needs a few cheap scalar arithmetic
+     as detailed in Section 3.2. Our uniform treatment of shape             computation. Therefore, the inputs and outputs would
+     functions as standard tensor expressions enables them to               be better on a CPU domain as well.
+     be fused and optimized like normal, but one challenge is             • device_copy. The input and output of this IR are
+     that we must now manifest memory allocations in a fixed                on different domains as it copies data from one domain
+     point until we allocate the outputs for both the compute and           to another. The device domains of the input and output
+     necessary shape functions. We illustrate this below how                are propagated in the opposite directions to other IR
+     the explicit memory allocation transformation works with a             nodes that are reachable to/from the device copy node.
+     single dynamic concatenation.
+1    fn (x: Tensor<?, 2>, y: Tensor<1, 2>)                                • Memory operations. The device domain of stor-
+2        ->Tensor<?, 2> {                                                   age from alloc_storage is designated in the ex-
+3      concat((%x, %y))                                                     pression, and later is propagated to the device do-
+4    }                                                                      main of the tensors allocated from this storage via
+                                                                            alloc_tensor.
+     This is the same transformation as the simple example
+     shown in Section 3.3 with the addition of carefully inserting        • invoke_mut.     All arguments used in the
+     invocations to the shape function to compute sizes of output           invoke_mut must have the same device domain.
+     buffers for the dynamically sized kernel.
+1    fn (x: Tensor<?, 2>, y: Tensor<1, 2>)                                • Other common IR nodes. The device domain of other
+2        ->Tensor<?, 2> {                                                   common IR nodes, e.g. variables, constants, operators,
+3      let in_sh0 = shape_of(x);                                            etc., can be directly propagated from the above nodes.
+4      let in_sh1 = shape_of(y);
+5      let buf0 = alloc_storage(16, 64, ...);
+6      let out_sh0 = alloc_tensor(buf0, ...);                         C      VM ISA
+7      invoke_shape_func(concat,
+8          (in_sh0, in_sh1), (out_sh0,), ...);                        Table C.1 details the opcode and the functionality of each
+9      let buf1 = alloc_storage(...);                                 instruction. Recall that Nimble is designed to support neural
+10     let out0 = alloc_tensor(                                       networks with dynamic features, such as control flow and dy-
+11         buf1, out_sh0, ...);
+12     invoke_mut(concat, (x, y), (out0));
+                                                                      namic data structures etc., in a portable, high-performance,
+13     out_0                                                          and light-weight manner. A set of instructions are proposed
+14   }                                                                to fulfill this task. These instructions provide not only high-
+                                                                      level information about the dynamic model behavior but
+     After the transformation you may notice we have introduced       also an architectural level interface for better orchestration
+     a call to invoke_shape_func which invokes a shape                and virtualization of the execution of control logic and op-
+     function for a kernel (line 7). The shape function requires      timized operator kernels. The current instruction set only
+     input shapes as arguments which further require us to invoke     contains 22 instructions for dynamic model inference. It
+     shape_of for both %x and %y (line 3-4). shape_of will            largely reduces the dispatching overhead and simplifies byte-
+     be directly mapped to a VM instruction to retrieve the shape     code serialization and deserialization. We categorize these
+     of a tensor at runtime. The transformation also inserts an       instructions as follows:
+     additional storage and tensor allocation for the output of the
+     shape function (line 5-6).                                           • Register-to-Register Operations. Register-to-Register
+                                                                            operations, e.g. Move, transfer data between different
+     B     H ETEROGENEOUS D EVICE P LACEMENT                                offset of the register file. Objects are reference counted,
+           RULES                                                            make use of copy-on-write and passed by reference
+                                                                            ensuring register operations are cheap even if the size
+     The full set of heterogeneous device placement rules are               of underlying container is large.
+     listed below:
+                                                                          • Memory Operations. Memory operations can allocate
+         • shape_of. Defaults to the CPU domain because we                  space for tensors, load constant tensors, and so on.
+           can access the shape of a tensor regardless of which             Due to the design of our constant pool, weights (which
+           device it is placed on.                                          are constant during inference) can remain in-memory
+                      Nimble: Efficiently Compiling Dynamic Neural Networks for Model Inference
+
+               Instruction         Description
+               Move                Moves data from one register to another.
+               Ret                 Returns the object in the result register to the caller’s register.
+               If                  Jumps to the true or false offset depending on the condition.
+               Goto                Unconditionally jumps to an offset.
+               LoadConst           Loads a constant at an index from the constant pool.
+               LoadConsti          Loads a constant immediate.
+               AllocStorage        Allocates a storage block on a specified device.
+               AllocTensor         Allocates a tensor object with a static shape from a storage.
+               AllocTensorReg      Allocates a tensor object given the shape in a register.
+               AllocADT            Allocates a data type using the entries from a register.
+               AllocClosure        Allocates a closure with a lowered virtual machine function.
+               FreeStorage         Free allocated memory back to memory manager.
+               FreeTensor          Release the memory occupied by a tensor back to the storage object.
+               Invoke              Invokes a function.
+               InvokeClosure       Invokes a closure.
+               InvokePacked        Invokes an optimized operator kernel.
+               GetField            Gets the value at a certain index from a VM object.
+               GetTag              Gets the tag of an Algebraic Data Types (ADT) constructor.
+               DeviceCopy          Copies a chunk of data from one device to another.
+               ShapeOf             Retrieves the shape of a tensor.
+               ReshapeTensor       Assigns a new shape to a tensor without altering its data.
+               Fatal               Raises fatal in the VM.
+
+                        Table C.1: The opcode and the description of Nimble’s instruction set.
+
+
+  with no specialized support. They can be referenced          • Miscellaneous Operations. To ease compiler optimiza-
+  by the LoadConst instruction. FreeStorage and                  tions (e.g. memory planning and device placement)
+  FreeTensor free the memory before the reference                and code generation, we offer the native support of
+  count becomes zero.                                            several instructions in the VM, namely ShapeOf,
+                                                                 DeviceCopy, and ReshapeTensor. These three
+• Call Operations. Call operations are the most fre-             instructions are used to directly manipulate runtime
+  quently executed instructions. The ISA has specialized         data, such as extracting the shape of a tensor, moving
+  call instructions for invoking a global function, a kernel     data between different devices, and transforming the
+  primitive, and a closure. InvokePacked is the most             shape of a tensor. With the help of them, we could pre-
+  performance-critical one. It is in charge of invoking          serve more coarse-grained IR at the frontend making
+  the operator kernels that are optimized either by the un-      optimization simpler.
+  derlying deep learning compiler or a third-party library.
+  Kernel primitives are ahead-of-time compiled and can
+  leverage both compiler-generated kernels and the third-
+  party libraries using the dispatch function described in
+  Section 3.5. On the other hand, both Invoke and
+  InvokeClosure call into a global VM function
+  where a closure object carries the captured registers.
+
+• Control Flow Operations. Unconditional jump instruc-
+  tions, e.g. Goto and Ret, are used by both static and
+  dynamic models to jump to a specific program point.
+  Only dynamic models need conditional control opera-
+  tions, e.g. If, to determine the direction of branching.
+  The interpreter updates the PC using the offset from
+  either the true branch or false branch based on the
+  conditional value.
+

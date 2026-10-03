@@ -1,0 +1,821 @@
+   #Index Search Dynamic Shapes Core Concepts Custom Backends LLM Navigation Guide
+
+   IFRAME: https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS
+
+   [tr?id=243028289693773&ev=PageView&noscript=1]
+
+   Skip to main content
+
+   (BUTTON) Back to top [ ] [ ]
+
+   ____________________ Ctrl+K
+
+   (BUTTON)
+   PyTorch - Home
+   PyTorch - Home
+
+     * Install PyTorch
+     * User Guide
+          + PyTorch Main Components
+          + torch.compiler
+          + torch.export
+          + Developer Notes
+          + Accelerator Integration
+     * Reference API
+          + torch
+          + torch.nn
+          + torch.nn.functional
+          + torch.Tensor
+          + Tensor Attributes
+          + Tensor Views
+          + Automatic Mixed Precision package - torch.amp
+          + Automatic differentiation package - torch.autograd
+          + torch.library
+          + torch.accelerator
+          + torch.cpu
+          + torch.cuda
+          + Understanding CUDA Memory Usage
+          + torch.mps
+          + torch.xpu
+          + torch.mtia
+          + torch.mtia.memory
+          + torch.mtia.mtia_graph
+          + Meta device
+          + torch.backends
+          + torch.export
+          + Distributed communication package - torch.distributed
+          + torch.distributed.tensor
+          + Generic Join Context Manager
+          + Torch Distributed Elastic
+          + FullyShardedDataParallel
+          + torch.distributed.fsdp.fully_shard
+          + Tensor Parallelism - torch.distributed.tensor.parallel
+          + Distributed Optimizers
+          + Pipeline Parallelism
+          + PyTorch Symmetric Memory
+          + Distributed Checkpoint - torch.distributed.checkpoint
+          + Probability distributions - torch.distributions
+          + torch.compiler API reference
+          + torch.fft
+          + torch.foreach
+          + torch.func
+          + torch.futures
+          + torch.fx
+          + torch.fx.experimental
+          + torch.hub
+          + torch.linalg
+          + torch.monitor
+          + torch.signal
+          + torch.special
+          + torch.overrides
+          + torch.nativert
+          + torch.package
+          + torch.profiler
+          + torch.nn.init
+          + torch.nn.attention
+          + torch.onnx
+          + torch.optim
+          + Complex Numbers
+          + DDP Communication Hooks
+          + Quantization
+          + Distributed RPC Framework
+          + torch.random
+          + torch.masked
+          + torch.nested
+          + torch.Size
+          + torch.sparse
+          + torch.Storage
+          + torch.testing
+          + torch.utils
+          + Benchmark Utils - torch.utils.benchmark
+          + torch.utils.checkpoint
+          + torch.utils.cpp_extension
+          + torch.utils.data
+          + torch.utils.deterministic
+          + JIT Utils - torch.utils.jit
+          + torch.utils.dlpack
+          + torch.utils.mobile_optimizer
+          + torch.utils.model_zoo
+          + torch.utils.tensorboard
+          + torch.utils.module_tracker
+          + Type Info
+          + torch.config
+          + torch.__future__
+          + torch._logging
+          + Torch Environment Variables
+     * Developer Notes
+          + Automatic Mixed Precision examples
+          + Autograd mechanics
+          + Broadcasting semantics
+          + CPU threading and TorchScript inference
+          + CUDA semantics
+          + PyTorch Custom Operators Landing Page
+          + Distributed Data Parallel
+          + Extending PyTorch
+          + Extending torch.func with autograd.Function
+          + Frequently Asked Questions
+          + Getting Started on Intel GPU
+          + Gradcheck mechanics
+          + HIP (ROCm) semantics
+          + Features for large-scale deployments
+          + LibTorch Stable ABI
+          + LocalTensor Tutorial: Single-Process SPMD Debugging
+          + MKLDNN backend
+          + Modules
+          + MPS backend
+          + Multiprocessing best practices
+          + Numerical accuracy
+          + Out Notes
+          + Reproducibility
+          + Serialization semantics
+          + TensorIterator (Python)
+          + Windows FAQ
+     * Community
+          + PyTorch Governance | Build + CI
+          + PyTorch Contribution Guide
+          + PyTorch Design Philosophy
+          + PyTorch Governance | Mechanics
+          + PyTorch Governance | Maintainer Guide
+          + PyTorch Governance | Maintainers
+          + viable/strict CI Jobs
+     * Tutorials
+
+   Go to pytorch.org
+   ____________________ Ctrl+K
+   ____________________
+   [ ]
+     * X
+     * GitHub
+     * PyTorch Forum
+     * PyPi
+
+   (BUTTON)
+
+     * Install PyTorch
+     * User Guide
+          + PyTorch Main Components
+          + torch.compiler
+          + torch.export
+          + Developer Notes
+          + Accelerator Integration
+     * Reference API
+          + torch
+          + torch.nn
+          + torch.nn.functional
+          + torch.Tensor
+          + Tensor Attributes
+          + Tensor Views
+          + Automatic Mixed Precision package - torch.amp
+          + Automatic differentiation package - torch.autograd
+          + torch.library
+          + torch.accelerator
+          + torch.cpu
+          + torch.cuda
+          + Understanding CUDA Memory Usage
+          + torch.mps
+          + torch.xpu
+          + torch.mtia
+          + torch.mtia.memory
+          + torch.mtia.mtia_graph
+          + Meta device
+          + torch.backends
+          + torch.export
+          + Distributed communication package - torch.distributed
+          + torch.distributed.tensor
+          + Generic Join Context Manager
+          + Torch Distributed Elastic
+          + FullyShardedDataParallel
+          + torch.distributed.fsdp.fully_shard
+          + Tensor Parallelism - torch.distributed.tensor.parallel
+          + Distributed Optimizers
+          + Pipeline Parallelism
+          + PyTorch Symmetric Memory
+          + Distributed Checkpoint - torch.distributed.checkpoint
+          + Probability distributions - torch.distributions
+          + torch.compiler API reference
+          + torch.fft
+          + torch.foreach
+          + torch.func
+          + torch.futures
+          + torch.fx
+          + torch.fx.experimental
+          + torch.hub
+          + torch.linalg
+          + torch.monitor
+          + torch.signal
+          + torch.special
+          + torch.overrides
+          + torch.nativert
+          + torch.package
+          + torch.profiler
+          + torch.nn.init
+          + torch.nn.attention
+          + torch.onnx
+          + torch.optim
+          + Complex Numbers
+          + DDP Communication Hooks
+          + Quantization
+          + Distributed RPC Framework
+          + torch.random
+          + torch.masked
+          + torch.nested
+          + torch.Size
+          + torch.sparse
+          + torch.Storage
+          + torch.testing
+          + torch.utils
+          + Benchmark Utils - torch.utils.benchmark
+          + torch.utils.checkpoint
+          + torch.utils.cpp_extension
+          + torch.utils.data
+          + torch.utils.deterministic
+          + JIT Utils - torch.utils.jit
+          + torch.utils.dlpack
+          + torch.utils.mobile_optimizer
+          + torch.utils.model_zoo
+          + torch.utils.tensorboard
+          + torch.utils.module_tracker
+          + Type Info
+          + torch.config
+          + torch.__future__
+          + torch._logging
+          + Torch Environment Variables
+     * Developer Notes
+          + Automatic Mixed Precision examples
+          + Autograd mechanics
+          + Broadcasting semantics
+          + CPU threading and TorchScript inference
+          + CUDA semantics
+          + PyTorch Custom Operators Landing Page
+          + Distributed Data Parallel
+          + Extending PyTorch
+          + Extending torch.func with autograd.Function
+          + Frequently Asked Questions
+          + Getting Started on Intel GPU
+          + Gradcheck mechanics
+          + HIP (ROCm) semantics
+          + Features for large-scale deployments
+          + LibTorch Stable ABI
+          + LocalTensor Tutorial: Single-Process SPMD Debugging
+          + MKLDNN backend
+          + Modules
+          + MPS backend
+          + Multiprocessing best practices
+          + Numerical accuracy
+          + Out Notes
+          + Reproducibility
+          + Serialization semantics
+          + TensorIterator (Python)
+          + Windows FAQ
+     * Community
+          + PyTorch Governance | Build + CI
+          + PyTorch Contribution Guide
+          + PyTorch Design Philosophy
+          + PyTorch Governance | Mechanics
+          + PyTorch Governance | Maintainer Guide
+          + PyTorch Governance | Maintainers
+          + viable/strict CI Jobs
+     * Tutorials
+
+   Go to pytorch.org
+   ____________________ Ctrl+K
+   ____________________
+   [ ]
+     * X
+     * GitHub
+     * PyTorch Forum
+     * PyPi
+
+   Section Navigation
+
+   Introduction
+     * PyTorch Overview
+     * Get Started
+     * Learn the Basics
+
+   Core Concepts
+     * PyTorch Main Components
+
+   Torch Compile
+     * Torch.compile
+          + Getting Started
+          + Core Concepts
+               o torch.compile Programming Model
+                    # Dynamo Core Concepts
+                    # Working with Graph Breaks
+                    # Non-strict Tracing Programming Model
+                    # Dealing with Recompilations
+                    # Reducing Compile Time
+                    # Reducing Guard Overhead
+                    # tlparse / TORCH_TRACE
+                    # Reporting Issues
+               o Dynamo Overview
+               o PyTorch 2.0 NNModule Support
+               o torch.compile has different autograd semantics
+          + Performance
+               o PyTorch 2.0 Performance Dashboard
+               o TorchInductor GPU Profiling
+               o Profiling to understand torch.compile performance
+               o CUDAGraph Trees
+          + Advanced
+               o Dynamo Deep-Dive
+               o Writing Graph Transformations on ATen IR
+               o Fake tensor
+               o Custom Backends
+               o Dynamic Shapes
+                    # Dynamic Shapes Core Concepts
+                    # Troubleshooting Dynamic Shapes
+                    # Advanced Options to Control Dynamic Behavior
+                    # Beyond the Basics
+               o Ahead-of-Time Compilation with torch.compile
+               o Complex Number Support in torch.compile
+          + Troubleshooting FAQs
+               o tlparse / TORCH_TRACE
+               o Reporting Issues
+               o torch.compile Troubleshooting
+               o Frequently Asked Questions
+          + Reference/API
+               o torch.compiler API reference
+                    # torch.compiler.compile
+                    # torch.compiler.reset
+                    # torch.compiler.nonstrict_trace
+                    # torch.compiler.allow_in_graph
+                    # torch.compiler.substitute_in_graph
+                    # torch.compiler.assume_constant_result
+                    # torch.compiler.list_backends
+                    # torch.compiler.disable
+                    # torch.compiler.set_default_backend
+                    # torch.compiler.get_default_backend
+                    # torch.compiler.set_stance
+                    # torch.compiler.set_enable_guard_collectives
+                    # torch.compiler.cudagraph_mark_step_begin
+                    # torch.compiler.cudagraph_mark_warmup_incomplete
+                    # torch.compiler.is_compiling
+                    # torch.compiler.is_dynamo_compiling
+                    # torch.compiler.is_exporting
+                    # torch.compiler.keep_portable_guards_unsafe
+                    # torch.compiler.skip_guard_on_inbuilt_nn_modules_unsafe
+                    # torch.compiler.skip_guard_on_all_nn_modules_unsafe
+                    # torch.compiler.keep_tensor_guards_unsafe
+                    # torch.compiler.skip_guard_on_globals_unsafe
+                    # torch.compiler.skip_all_guards_unsafe
+                    # torch.compiler.nested_compile_region
+                    # torch.compiler.load_cache_artifacts
+                    # torch.compiler.load_compiled_function
+                    # torch.compiler.save_cache_artifacts
+                    # torch.compiler.wrap_numpy
+               o torch.compiler.config
+               o TorchDynamo APIs for fine-grained tracing
+               o TorchInductor and AOTInductor Provenance Tracking
+     * Torch.export
+          + torch.export API Reference
+          + torch.export Programming Model
+          + torch.export IR Specification
+          + PT2 Archive Spec
+          + Draft Export
+          + Joint with descriptors
+          + Control Flow Operators
+               o Control Flow - Cond
+               o Control Flow - Switch
+               o Control Flow - While Loop
+               o Control Flow - Scan
+               o Control Flow - Associative Scan
+               o Control Flow - Map
+          + ExportDB
+               o torch.escape-hatch
+               o torch.dynamic-shape
+               o torch.cond
+               o python.closure
+               o torch.dynamic-value
+               o python.data-structure
+               o python.assert
+               o python.control-flow
+               o torch.map
+               o python.builtin
+               o python.object-model
+               o python.context-manager
+               o torch.operator
+               o torch.mutation
+          + AOTInductor: Ahead-Of-Time Compilation for Torch.Export-ed Models
+               o torch._logging
+                    # torch._logging.set_logs
+               o AOTInductor Minifier
+               o AOTInductor Debugging Guide
+          + IRs
+          + Dynamic Shapes
+               o Dynamic Shapes Core Concepts
+               o Troubleshooting Dynamic Shapes
+                    # Debugging with tlparse and TORCH_LOGS=dynamic
+                    # Troubleshooting GuardOnDataDependentSymNode Errors
+               o Advanced Options to Control Dynamic Behavior
+               o Beyond the Basics
+                    # The Zero-One Specialization Problem
+                    # Backed vs Unbacked Symints
+          + Fake tensor
+          + Writing Graph Transformations on ATen IR
+
+   Developer Notes
+     * Developer Notes
+          + Automatic Mixed Precision examples
+          + Autograd mechanics
+          + Broadcasting semantics
+          + CPU threading and TorchScript inference
+          + CUDA semantics
+          + PyTorch Custom Operators Landing Page
+          + Distributed Data Parallel
+          + Extending PyTorch
+          + Extending torch.func with autograd.Function
+          + Frequently Asked Questions
+          + Getting Started on Intel GPU
+          + Gradcheck mechanics
+          + HIP (ROCm) semantics
+          + Features for large-scale deployments
+          + LibTorch Stable ABI
+          + LocalTensor Tutorial: Single-Process SPMD Debugging
+          + MKLDNN backend
+          + Modules
+          + MPS backend
+          + Multiprocessing best practices
+          + Numerical accuracy
+          + Out Notes
+          + Reproducibility
+          + Serialization semantics
+          + TensorIterator (Python)
+          + Windows FAQ
+
+   Accelerator Integration
+     * Accelerator Integration
+          + Device Management
+          + Accelerator Hooks
+          + Guard
+          + Autoload Mechanism
+          + Operator Registration
+          + Automatic Mixed Precision
+          + Profiler Integration
+          + Distributed Training Integration
+          + CI Integration
+
+     *
+     * User Guide
+     *
+     * Advanced
+     * Dynamic Shapes
+
+   Rate this Page
+   ★ ★ ★ ★ ★
+
+                                                    Dynamic Shapes#
+
+   Created On: May 19, 2023 | Last Updated On: Aug 18, 2026
+
+   This section explains how to work with dynamic shapes in PyTorch, including how to debug and fix common errors,
+   implement support for dynamic shapes in operators, and understand the underlying mechanisms.
+
+   Dynamic shapes allow PyTorch models to handle inputs with varying dimensions without recompilation. This
+   enables more flexible models that can process different batch sizes, sequence lengths, or image dimensions in a
+   single compiled artifact. Dynamic shapes work by symbolically tracing tensor dimensions rather than using
+   concrete values, creating a computation graph that adapts to different input shapes at runtime. By default,
+   PyTorch assumes all input shapes to be static.
+
+   Typically, deep learning compilers only support static shapes, requiring recompilation for input shape changes.
+   While this approach covers many use cases, there are situations where this is insufficient:
+     * Variable Dimensions - Batch sizes or sequence lengths vary, such as in adaptive batching.
+     * Data-Dependent Outputs - Models produce outputs based on input data, like variable bounding boxes in
+       detection models.
+     * Sparse Representations - Processing depends on data-varying sparse structures, such as in sparse tensors,
+       jagged tensors, and graph neural networks.
+
+   Dynamic shapes do not support dynamic rank programs, programs which input tensors change in dimensionality, as
+   this is uncommon and unnecessarily complex.
+
+What does it mean for a size/integer to be dynamic?#
+
+   Dynamic shapes allow avoiding recompilations by making certain dimensions or integers dynamic. For example, if
+   a function f(x) is compiled with a static size, it will need recompilation for different sizes:
+
+   Note
+
+   For simplicity, this example uses @torch.compile(dynamic=True). Note, that this option is not recommended due
+   to it being error prone. For a recommended way of enabling dynamic shapes, see Enabling Dynamic Behavior.
+
+import torch
+@torch.compile(dynamic=False)
+def f(x):
+     return x* x.size()[0]
+
+f(torch.rand(10))
+f(torch.rand(20))
+f(torch.rand(30))
+f(torch.rand(40))
+
+   In the produced output, you can see that four graphs were generated. See the corresponding tlparse output
+
+   By making the size dynamic, the function can handle various sizes without recompilation:
+
+import torch
+@torch.compile(dynamic=True)
+def f(x):
+     return x* x.size()[0]
+
+f(torch.rand(10))
+f(torch.rand(20))
+f(torch.rand(30))
+f(torch.rand(40))
+
+   With dynamic shapes enabled, only one graph is created. See the corresponding tlparse output.
+
+   While compilation time differences are minimal for this small example, more complex use cases would show
+   significant performance improvements.
+
+What is a specialization?#
+
+   Specialization refers to optimizing a computational graph for specific input shapes by examining shape
+   conditions during control flow. If a branch is taken based on a shape condition, the graph is tailored for that
+   condition. If a new input doesn’t meet this condition, the system will recompile the graph.
+
+   Specialization allows you to create optimized computational graphs for specific input shapes, which can
+   significantly improve execution speed.
+
+import torch
+@torch.compile(dynamic=True)
+def f(x):
+    if x.size()[0] == 10:
+        return x * 10
+
+    if x.size()[0] <= 30:
+        return x*200
+
+    return x*x.size()[0]
+
+f(torch.rand(10))
+f(torch.rand(20))
+f(torch.rand(30))
+f(torch.rand(40))
+f(torch.rand(50))
+
+   In the code above, we specialize that the graph requires an input size of 10, in which case it will return x *
+   10. If the input size is less than 30, it will return x * 200. In the output, you can see that this creates
+   three graphs.
+
+   See the corresponding tlparse output
+
+   This is how graphs created for the above function:
+   ../../_images/dynamic_shapes_example_specialization.png
+
+Enabling Dynamic Behavior#
+
+   There are the following ways to make things dynamic:
+     * Automatic dynamic
+     * User Annotations (preferred)
+     * torch.compile (dynamic=true) (Not recommended) (for testing only)
+     * Advanced Options to Control Dynamic Behavior (for advanced use cases)
+
+   Read below about each of this options.
+
+  Automatic dynamic#
+
+   Automatic dynamic is the default behavior where torch.compile() performs the initial compilation assuming
+   static shapes are used, while tracking the input sizes from that first compilation. When a recompile is
+   triggered, it uses this information to identify which dimensions have changed and marks those as dynamic for
+   the second compilation.
+
+  User Annotations#
+
+   Several APIs allow users to explicitly mark specific inputs by name or code as dynamic. This is useful for
+   avoiding initial compilations that would eventually become dynamic with the previous tools. It is also used to
+   mark elements that do not automatically get marked as dynamic, such as neural network module parameters, and so
+   on. User annotations are the preferred way to enable dynamic shapes.
+
+    mark_dynamic(tensor, dim, min=min, max=max)#
+
+   ⚠️ Warning
+
+   torch._dynamo.mark_dynamic() must not be called inside any function that is being compiled by torch.compile()
+   (for example, a model’s forward() method or any function it calls).
+
+   This function is a tracing-time API. If it is invoked from within compiled code, Dynamo will raise an error
+   such as:
+AssertionError: Attempt to trace forbidden callable
+
+   Correct usage is to call mark_dynamic on input tensors before invoking torch.compile, for example:
+torch._dynamo.mark_dynamic(x, 0)
+compiled_model = torch.compile(model)
+
+   The torch._dynamo.mark_dynamic() function marks a tensor dimension as dynamic and will fail if it gets
+   specialized. It does not work for integers. Use this function only if you know all graphs in the frame using
+   this input converge to a single dynamic graph. Otherwise, you may encounter a misleading constraint violation
+   error. In such cases, consider using torch._dynamo.maybe_mark_dynamic(). Currently,
+   torch._dynamo.mark_dynamic() does not have precedence over force_parameter_static_shapes = True or
+   force_nn_module_property_static_shapes = True.
+
+   If you know in advance that a particular dimension will be dynamic, you can avoid the initial recompilation by
+   using torch._dynamo.mark_dynamic(tensor, dim)(). Additionally, if you already know the minimum and maximum
+   possible values for this dimension, you can specify them with torch._dynamo.mark_dynamic(tensor, dim, min=min,
+   max=max)().
+
+   Here is a quick example:
+
+import torch
+
+@torch.compile
+def f(x):
+    return x * x.size()[0]
+
+x = torch.randn(10)
+torch._dynamo.mark_dynamic(x, 0)
+
+# first invocation we give it is a tensor marked as dynamic
+f(x)
+# rest of these invocations will use dynamically compiled code
+f(torch.randn(20))
+f(torch.randn(30))
+f(torch.randn(40))
+
+    maybe_mark_dynamic(tensor, dim)#
+
+   The torch._dynamo.maybe_mark_dynamic() function shares all properties with torch._dynamo.mark_dynamic() but
+   does not fail if the size gets specialized. Use it for inputs shared by multiple graphs or if the number of
+   graphs does not converge to one for a specific frame. For instance, in the example above, use
+   torch._dynamo.maybe_mark_dynamic() because graphs with sizes 0 and 1 will specialize. However, you can use
+   torch._dynamo.mark_dynamic() to ensure you never specialize.
+
+    mark_unbacked(tensor, dim)#
+
+   The torch._dynamo.decorators.mark_unbacked() function marks a tensor dimension as unbacked. It is unlikely to
+   be the tool you need, but it could be useful if the specialization occurs inside a condition
+   guard_size_oblivious(x), and if using it removes the specialization. Ensure it fixes the specialization and
+   does not introduce a data-dependent error that converts to a graph break at or before the specialization
+   location you are trying to avoid. It might be better to use the next option.
+
+    Dynamic Allow List (DYNAMIC_SOURCES)#
+
+   Use the evnironmental variable TORCH_COMPILE_DYNAMIC_SOURCES to pass a configuration list of source names to be
+   marked as dynamic. For example: TORCH_COMPILE_DYNAMIC_SOURCES=L[‘x’],L[‘y’] It’s easiest to find these dynamic
+   source names using the PGO artifact in tlparse. You can copy and paste the dynamic source names from the PGO
+   artifact. This method works for integers and tensor sizes and has the highest precedence over all other flags
+   that force static shapes. It will not throw an error if what is marked dynamic gets specialized or if the
+   provided input does not exist.
+
+   Here is an example:
+
+import torch
+
+@torch.compile()
+def f(x):
+     return x * x.size()[0]
+
+with torch.compiler.config.patch(dynamic_sources="L['x']"):
+    f(torch.rand(10))
+f(torch.rand(20))
+f(torch.rand(30))
+f(torch.rand(40))
+
+    Static Source List (STATIC_SOURCES)#
+
+   The inverse of the dynamic source list: use the environment variable TORCH_COMPILE_STATIC_SOURCES (or
+   torch.compiler.config.static_sources) to pass a list of source names that should stay static. This is useful
+   when automatic dynamic shapes or PGO makes something dynamic and that dynamism hurts you, for example when it
+   produces a worse kernel. It accepts the same exact-name, regex and :N per-dim syntax as
+   TORCH_COMPILE_DYNAMIC_SOURCES, and works for both integers and tensor sizes.
+
+   Entries override automatic dynamic shapes, PGO and dynamic=True. They do not override an explicit
+   torch._dynamo.mark_dynamic().
+
+   Here is an example:
+
+import torch
+
+@torch.compile()
+def g(x):
+     return x * x.size()[0]
+
+with torch.compiler.config.patch(static_sources="L['x']"):
+    g(torch.rand(10))
+    g(torch.rand(20))
+    g(torch.rand(30))
+
+    torch.compiler.set_stance ("eager_then_compile")#
+
+   At times, identifying the appropriate inputs to mark as dynamic can be challenging. If you are willing to
+   accept a performance cost for the first batch, another convenient option is to use the eager_then_compile
+   stances, which automatically determine dynamic inputs for you. For more information, see
+   torch.compiler.set_stance() and Dynamic Compilation Control with torch.compiler.set_stance.
+
+  torch.compile (dynamic=true) (Not recommended)#
+
+   This setting forces all sizes and integers to be dynamic, increasing the chance of encountering dynamic shape
+   bugs. Setting this option is not recommended due to it being error prone. It would make every input size
+   dynamic which may result it performance regressions and ultimately increase compilation time.
+
+   PyTorch also provides advanced control options for dynamic shapes, see: Advanced Options to Control Dynamic
+   Behavior.
+
+Where Do I Go From Here?#
+
+   If you encounter a framework code bug or an issue with specialization, file an issue so it can be reviewed and
+   potentially improved. If the issue is within your user code, consider whether you are willing to rewrite your
+   code to avoid it. Determine if it affects correctness or if it’s a redundant check. If the issue involves a
+   Triton custom kernel with a constexpr argument, evaluate whether you can rewrite it to address the problem.
+
+     * Dynamic Shapes Core Concepts
+     * Troubleshooting Dynamic Shapes
+     * Advanced Options to Control Dynamic Behavior
+     * Beyond the Basics
+
+   See also
+     * tlparse documentation
+     * The dynamic shapes manual
+
+   Rate this Page
+   ★ ★ ★ ★ ★
+   (BUTTON) Send Feedback
+
+   previous
+
+   Custom Backends
+
+   next
+
+   Dynamic Shapes Core Concepts
+
+   Built with the PyData Sphinx Theme 0.15.4.
+
+   previous
+
+   Custom Backends
+
+   next
+
+   Dynamic Shapes Core Concepts
+
+   On this page
+
+     * What does it mean for a size/integer to be dynamic?
+     * What is a specialization?
+     * Enabling Dynamic Behavior
+          + Automatic dynamic
+          + User Annotations
+               o mark_dynamic(tensor, dim, min=min, max=max)
+               o maybe_mark_dynamic(tensor, dim)
+               o mark_unbacked(tensor, dim)
+               o Dynamic Allow List (DYNAMIC_SOURCES)
+               o Static Source List (STATIC_SOURCES)
+               o torch.compiler.set_stance ("eager_then_compile")
+          + torch.compile (dynamic=true) (Not recommended)
+     * Where Do I Go From Here?
+
+   Edit on GitHub
+   Show Source
+   PyTorch Libraries
+     * ExecuTorch
+     * Helion
+     * torchao
+     * kineto
+     * torchtitan
+     * TorchRL
+     * torchvision
+     * torchaudio
+     * tensordict
+     * PyTorch on XLA Devices
+
+Docs
+
+   Access comprehensive developer documentation for PyTorch
+   View Docs
+
+Tutorials
+
+   Get in-depth tutorials for beginners and advanced developers
+   View Tutorials
+
+Resources
+
+   Find development resources and get your questions answered
+   View Resources
+
+   Stay in touch for updates, event info, and the latest news
+
+   By submitting this form, I consent to receive marketing emails from the LF and its projects regarding their
+   events, training, research, developments, and related announcements. I understand that I can unsubscribe at any
+   time using the links in the footers of the emails I receive. Privacy Policy.
+     *
+     *
+     *
+     *
+     *
+     *
+
+   © PyTorch. Copyright © The Linux Foundation®. All rights reserved. The Linux Foundation has registered
+   trademarks and uses trademarks. For more information, including terms of use, privacy policy, and trademark
+   usage, please see our Policies page. Trademark Usage. Privacy Policy.
+
+   To analyze traffic and optimize your experience, we serve cookies on this site. By clicking or navigating, you
+   agree to allow our usage of cookies. As the current maintainers of this site, Facebook’s Cookies Policy
+   applies. Learn more, including about available controls: Cookies Policy.
+   (BUTTON)
+
+   © Copyright PyTorch Contributors.
+
+   Created using Sphinx 7.2.6.
+
+   Built with the PyData Sphinx Theme 0.15.4.

@@ -1,0 +1,1128 @@
+Welder: Scheduling Deep Learning Memory Access
+                 via Tile-graph
+Yining Shi, Peking University & Microsoft Research; Zhi Yang, Peking University;
+  Jilong Xue, Lingxiao Ma, Yuqing Xia, Ziming Miao, Yuxiao Guo, Fan Yang,
+                     and Lidong Zhou, Microsoft Research
+
+             https://www.usenix.org/conference/osdi23/presentation/shi
+
+
+
+
+        This paper is included in the Proceedings of the
+        17th USENIX Symposium on Operating Systems
+                 Design and Implementation.
+                     July 10–12, 2023 • Boston, MA, USA
+                                978-1-939133-34-2
+
+
+                                      Open access to the Proceedings of the
+                                      17th USENIX Symposium on Operating
+                                       Systems Design and Implementation
+                                                is sponsored by
+             W ELDER: Scheduling Deep Learning Memory Access via Tile-graph
+
+                  Yining Shi†⋄∗ Zhi Yang† Jilong Xue⋄ Lingxiao Ma⋄ Yuqing Xia⋄
+                          Ziming Miao⋄ Yuxiao Guo⋄ Fan Yang⋄ Lidong Zhou⋄
+                                  † Peking University ⋄ Microsoft Research
+
+
+
+
+                             Abstract                                   putation. To utilize accelerators efficiently, DNN frameworks
+With the growing demand for processing higher fidelity                  and compilers explore various optimization techniques, such
+data and the use of faster computing cores in newer hard-               as code specialization [15,50,52] and operator fusion [15,31].
+ware accelerators, modern deep neural networks (DNNs)                      Although these computation centric optimizations are
+are becoming increasingly memory intensive. A disparity                 shown effective for classic DNN models, we observe that
+between underutilized computing cores and saturated memory              modern DNNs are becoming increasingly memory intensive.
+bandwidth has been observed in various popular DNN models.              Our profiling on a range of state-of-the-art DNN models
+This inefficiency is caused by both the conventional treatment          reveals that the bottleneck of the end-to-end DNN compu-
+of DNNs as compute-intensive workloads and the lack of                  tation is mostly on GPU memory. The memory bandwidth
+holistic memory access optimization in DNN models.                      utilization can be as high as 96.7% while the average utiliza-
+   In this paper, we introduce W ELDER, a deep learning                 tion of computing cores is only 51.6% (§2). Moreover, we
+compiler that optimizes the execution efficiency from a                 observe the disparity between the underutilized cores and the
+holistic memory access perspective. The core of W ELDER                 saturated memory bandwidth could become even larger with
+is tile-graph, an abstraction that facilitates fine-grained data        the evolution of both hardware and DNN models. Modern
+management at tile level. By leveraging the observation of              models are processing higher fidelity data, e.g., larger images,
+optimization independence across memory layers, W ELDER                 longer sentences, high-definition graphics, which consume
+is able to decompose the whole combinatorial DNN opti-                  more memory bandwidth in the computation. Furthermore,
+mization space into several independent ones and effectively            the faster computing cores (e.g., TensorCore [6]) impose an
+trade off between intra- and inter-operator data reuse using a          even greater pressure on memory.
+tile traffic-based cost model. This allows W ELDER to unify                Optimizing memory intensive DNN workloads is challeng-
+previous ad-hoc memory optimizations into a single space,               ing as it requires improving the sophisticated data access
+generate efficient execution plans with 89 more optimization            and reuse patterns across multiple memory layers (e.g., GPU
+patterns, and outperform state-of-the-art solutions signifi-            DRAM and shared memory). From the memory perspective,
+cantly. W ELDER is also able to handle DNN models with                  DNN computation comprises of a repetitive process for each
+arbitrarily large input by combining the existing accelerator           operator to 1) load input tensors across memory hierarchy, 2)
+memory and host memory as a whole system.                               compute at the cores, and 3) store the resulting tensors across
+                                                                        memory hierarchy. To derive a good data access pattern, it
+                                                                        requires a careful calculation of the size of tile, a partition
+1    Introduction                                                       of a tensor, along each tile dimension. Such a tiling strategy
+                                                                        is already difficult to obtain in existing practice [5, 50, 52].
+Deep neural networks (DNNs) have been used in a wide
+                                                                        As a further complication, due to the different algorithmic
+range of tasks like vision and language analysis and synthesis.
+                                                                        semantics, each operator may require a different data access
+Conventional wisdom treats DNNs as compute-intensive
+                                                                        patterns. Such diversity across operators makes inter-operator
+workloads. A DNN model is often defined as a dataflow
+                                                                        data reuse especially challenging, and often infeasible. If the
+graph (DFG), where each node represents a compute-intensive
+                                                                        derived tile shape of an operator at a certain memory layer
+operator (e.g., matrix multiplication). These operators are
+                                                                        does not match that of a downstream operator, it is difficult to
+offloaded to modern accelerators with massive parallel com-
+                                                                        reuse the tile at that layer. Consequently, existing approaches
+puting cores, such as GPUs and TPUs [23], to speed up com-
+                                                                        either focus on intra-operator optimization and leave all inter-
+    *Work is done during the internship at Microsoft Research.          operator intermediate tensors in the lowest memory layer
+
+
+
+USENIX Association                                  17th USENIX Symposium on Operating Systems Design and Implementation           701
+(e.g., GPU memory), or rely on rule-based operator fusions          puting interfaces defined in the hardware layer: Allocate,
+to alleviate the inter-operator memory overhead. These rules        LoadTiles, ComputeTile, and StoreTiles.
+are only applicable for specific operator combinations (e.g.,          With the tile level holistic data-flow scheduling, W ELDER
+register fusion for element-wise operators [10, 13, 15], shared     is the first to unify all common operator fusions (e.g., register-
+memory fusion for a limited set of operator types [51]) and can     based element-wise fusion, shared-memory fusion, etc.) into
+be suboptimal when having different input sizes or running          a single framework. This generality allows W ELDER to find
+on different hardware configurations.                               89 uncommon operator fusion patterns automatically that are
+   In this paper, we introduce W ELDER, a deep learning com-        mostly unexplored by existing rule-based approaches (§5.2).
+piler that holistically optimizes memory access for end-to-end      Interestingly, our approach can easily support new require-
+DNN models consisting of general operators. The design of           ments for handling DNN models with arbitrarily large input
+W ELDER is based on three key observations. First, to resolve       (e.g., high-resolution images), where even a single operator
+potential tile shape conflicts between two adjacent operators,      may be too large to fit in the GPU memory. Specifically, by
+we observe that their aligned tile shape can be automatically       extending the current memory hierarchy with additional layers
+inferred by propagating an output tile shape from back to front,    (e.g., host memory), W ELDER can generate an optimized
+given that the computing logic in each operator can be accu-        execution plan across the combined hierarchy of host and
+rately preserved (e.g., through the tensor expression). Second,     device memory.
+to decide which tile shape will lead to better performance, by         We have implemented W ELDER on top of TVM [15], Ram-
+enforcing the computation pattern to be aligned with hardware       mer [31] and Roller [52]. Our evaluation is conducted on 10
+feature (e.g., TensorCore), we can just minimize the data           state-of-the-art DNN models covering both classic and recent
+traffic across all memory layers. Given the operators with          model structures for various tasks including vision, NLP,
+aligned tile configuration, we notice that their data traffic can   3D-graphics, etc. The evaluation results show that W ELDER
+be easily modeled based on their input/output tile sizes and        significantly outperforms the state-of-the-art DNN framework
+the input/output tensor shapes. Finally, when considering the       and compilers like PyTorch, ONNXRuntime, and Ansor on
+whole memory hierarchy, we observe that the optimization            both NVIDIA and AMD GPUs, with up to 21.4×, 8.7×, 2.8×
+of memory traffic is inherently independent across memory           speedups, respectively. W ELDER’s automatic optimization
+layers, i.e., inter-layer independence. Particularly, the above     even outperforms TensorRT [7] and Faster Transformer [2],
+traffic model is determined only by the tile configuration at       which are a highly optimized handcrafted DNN inference
+the memory layer of interest. These observations allow us to        library and a model-specific implementation from NVIDIA,
+optimize the whole space with an effective process: starting        with up to 3.0× and 1.7× speedups. Furthermore, when
+from aligning two adjacent operators at independent memory          running these models on hardware with faster computing
+layers, deciding their optimal tiling size at the right memory      cores such as TensorCore, we observe a larger improvement
+layer guided by traffic costs, and expanding the optimization       in performance, highlighting the importance of memory
+to include further operators.                                       optimization for future AI accelerators.
+   W ELDER incorporates these insights into a new DNN
+compiler design. First, to facilitate fine-grained data man-        2   Motivation
+agement, W ELDER proposes tile-graph, a tile-level data-flow
+graph to model DNN computation. Each node in the graph              Modern DNNs are memory-bounded. Figure 1 presents
+processes one data tile of a tensor at a time. To map DNN           the average GPU utilization, including both computational
+computation to a multi-layered memory hierarchy, W ELDER            FLOPS and global memory throughput, for a representative
+allows the control of each node’s data tile size and the desired    DNN benchmark running with ONNXRuntime [8]. As shown,
+memory layer to reuse the data tile between two nodes.              the average computation utilization is only 51.6% while
+Specifically, W ELDER provides a SetConnect interface to            memory utilization is 96.7%. When examining the model
+set the data reuse layer for each edge and a Propagate              types, we find that ResNet and BERT, which are dominated
+interface to infer the tile configurations within a group of        by convolution and matrix multiplication operators and can
+connected nodes. Second, to efficiently optimize the tile level     achieve relatively high computation utilization (e.g., >80%),
+data-flow scheduling holistically, W ELDER exploits the inter-      are two representative classical models. However, the remain-
+layer independence properties in the data-flow computation          ing models, which are popular models proposed in recent
+to decouple the optimization space into multiple sub-spaces.        years, exhibit low computation efficiency due to introducing
+Based on this, W ELDER proposes a two-layered scheduling            more memory-intensive patterns beyond compute-intensive
+policy that enumerates different memory connection options          operators. Additionally, we observe that the new DNN
+for each edge and decides on an efficient tile configuration for    models often have a higher ratio of memory store traffic to
+each sub-space guided by the traffic cost model. Finally, the       load traffic compared to classical models. The primary reason
+optimized execution plan is mapped to executable code for           is these models tend to process high-fidelity data and generate
+a specific hardware accelerator through four abstracted com-        large activations across layers. However, current systems such
+
+
+
+702   17th USENIX Symposium on Operating Systems Design and Implementation                                     USENIX Association
+                                                                    input tile shape is also [4×128]. Then, by using [4×128] as
+                                                                    the output tile of Matmul, we can further deduce that input
+                                                                    tile shapes of Matmul will be [4×k] and [k×128], where k is
+                                                                    an reduction size that can be set as any number not exceeding
+                                                                    the reduction dimension size of the Matmul. In this way, the
+                                                                    two operators can be fused by reusing the intermediate data
+                                                                    tile ([4×128]) in shared memory.
+Figure 1: Computation FLOPS and memory bandwidth                       Second, given the aligned tile configuration and the original
+utilization for different models on NVIDIA V100 GPU.                tensor shapes, the total memory traffic can be easily derived
+                                                                    analytically. In this example, the Matmul takes input tensors A
+                                                                    in shape [98304×64] and B in [64×128] respectively, and an
+                                                                    output tensor C in [98304×128]. The Softmax then takes
+                                                                    C as input and produces an output tensor D in the same
+                                                                    shape. Input tensors A, B, and the output tensor D are in
+                                                                    global memory. Given these shapes, we can first calculate
+Figure 2: Latency numbers of unfused, fused, and each               the memory traffic when computing a single output tile (i.e.,
+individual kernels of Matmul and Softmax.                           [4×128]) of tensor D. To do so, it will first load a tile of
+                                                                    shape [4×k] from tensor A and a [k×128] tile from tensor B
+as ONNXRuntime have limited optimizations for reducing
+                                                                    for Matmul, and then the intermediate tile [4×128] will be
+inter-operator traffic. This indicates that these models will
+                                                                    consumed by Softmax in shared memory, and write a tile of
+frequently exchange large intermediate data across operators
+                                                                    shape [4×128] to tensor D, where the k can be replaced as 64
+through global memory. The results highlight the need for
+                                                                    given the input tensor shape of [98304×64]. Thus, the total
+optimizing memory access efficiency across operators.
+                                                                    traffic incurred in global memory for an individual output
+Conflicted intra- and inter-operator data reuse patterns.           tile is 35KB ((4*64+64*128+4*128)*4Bytes(FP32)), where
+Optimizing intra-operator and inter-operator data reuse simul-      the traffic of the intermediate tile [4×128] is saved due to
+taneously is challenging. An operator is often implemented          data reuse in shared memory. To compute the full output
+as nested multi-level loops over all tensor dimensions. Within      tensor D, a total of 24,576 such computations are required
+the operator, the data reuse across multiple memory layers          (i.e., (98304*128)/(4*128), resulting in a total global memory
+are often implicitly optimized using sophisticated loop tiling      traffic of 840MB (i.e., 24,576*35KB). Interestingly, changing
+techniques [5, 50, 52]. We consider a typical pattern of two        the output tile to [16×128] will reduce the total traffic to only
+consecutive operators, i.e., Matmul and Softmax. When the           264MB, following the same calculation.
+two operators are optimized independently, their optimal               Finally, our traffic-cost calculation is only determined by
+tile sizes in shared memory are different, e.g., [32×64] for        the tile configuration at the memory layer of interest, e.g., the
+Matmul and [4×128] for Softmax. As a result, Softmax is             output tile shapes of [4×128] or [16×128] in shared memory,
+unable to reuse the intermediate data from Matmul in shared         once the tensor shapes are specified. This allows us to choose
+memory, leading to a total latency of 0.36ms, as shown in           the tile size for each layer independently in order to optimize
+Figure 2. However, if we force them to take into account            the traffic cost from the lower memory layers.
+both intra- and inter-operator data reuse, the fused operator          These observations together provide us an effective way to
+latency can be reduced to 0.29ms, achieving a 1.26x speedup.        optimize memory access holistically, i.e., aligning a group of
+Upon examining their aligned tile size (i.e., [16×128]), we         adjacent operators through an output tile shape, deciding on
+observe that both operators sacrifice their own efficiency (e.g.,   the best tile shape based on memory traffic, and optimizing
+with 15% and 4% performance degradation when running                for each memory layer independently. In this way, W ELDER
+separately, due to suboptimal data tile for intra-operator data     is able to change the original coarse-grained inter-operator
+reuse) in favor of overall efficiency. This demonstrates the        dependency into a more fine-grained tile-level dependency,
+need for an efficient data reuse solution across intra-operator     which essentially removes some false barriers between opera-
+and inter-operator to optimize memory access holistically.          tors and enables more concurrency.
+
+Key observations. Through a further analysis on the ex-
+ample in Figure 2, we have identified three key observations.
+                                                                    3   W ELDER Design
+First, an aligned tile configuration across operators can be        The observations in §2 motivate W ELDER, a deep learning
+deduced based on a chain of shape inference starting from           compiler that aims to improve the performance of modern
+an output tile shape. For example, if we want to compute a          DNNs in a holistic memory access scheduling space. Figure 3
+[4×128] output tile of Softmax, based on its computing logic        shows the system overview. W ELDER takes a full DNN model
+(e.g., tensor expression), we can deduce that its dependent         as input and converts it into a data-flow graph of tile-based
+
+
+
+USENIX Association                            17th USENIX Symposium on Operating Systems Design and Implementation              703
+                           DNN Model                                                                              F              F
+                                                                                        C
+                                                                                                              H                                  MaxPool
+                                                                                       H               Conv                  H
+                                                       Tile-graph                                                                                        H/2         F
+                                                                                                                                                               W/2
+                                                                                            W                           W               W
+                                                                                                    (a) Conv3x3                                (b) MaxPool2x2
+                                                                    Tile-graph
+        Graph Connecting             Sub-graph Scheduling           Scheduler                   C
+                                                                                                                                                         H/2
+                                                                                                                      Conv           MaxPool
+               Tile-graph Scheduling Interface                                                  H                                                    F
+                                                                                                                                               W/2
+                                                                                                        W
+                                                                                                              (c) Connected Conv-MaxPool
+                                                                       Memory
+  L0-Mem                                                               Info.
+                                                                                 Figure 4: Illustration of two operator-tiles: (a) Conv and
+                                                                                 (b) MaxPool; and (c) connecting them into a tile-graph (the
+  L1-Mem
+                                                                                 weight tensor of Conv is omitted for simplicity).
+                           Hierarchical Tile-Graph
+  L2-Mem
+                           on Abstracted Accelerator                             sources, such as the shared memory, W ELDER allows two
+                   Hardware Accelerators
+                                                                                 adjacent operator-tiles to be “connected” through a common
+                                                                                 intermediate data tile, also known as a reuse-tile. This allows
+           Figure 3: System overview of W ELDER.                                 the second operator-tile to consume the data produced by
+                                                                                 the first operator-tile directly, without the need to materialize
+computing tasks (i.e., operator-tiles), which is called tile-                    it into a full intermediate tensor. Figure 4(c) illustrates an
+graph (§3.1). A tile-graph provides fine-grained control over                    example of this connection between two operator-tiles for
+data tile configurations and memory placement. Given a tile-                     Conv and MaxPool, using a [2 × 2 × F] reuse-tile. Multiple
+graph, W ELDER resolves the intra-operator and inter-operator                    operator-tiles can be connected along each adjacent edge to
+data-reuse conflicts through a "first-connect-then-schedule"                     form a data flow graph of operator-tiles, known as a tile-graph.
+approach: it first assumes two adjacent operators can reuse
+data tile at a certain memory layer (i.e., connect), and then                    Tile propagation. Once connected, most tiles in a tile-
+derives the best common tile shape to see if the total memory                    graph are correlated, which can be automatically inferred
+traffic can be reduced. To facilitate this goal, W ELDER                         by propagating an output tile shape to the entire graph. This is
+provides two tile-graph scheduling interfaces: SetConnect                        achieved by using a chain of shape inferences from the output
+and Propagate (for the chain of shape inference). Based on                       nodes to the inputs. For each operator-tile, the dependent
+this, we propose a two-step scheduling algorithm, i.e., graph                    region of the input tensor can be accurately determined
+connecting and sub-graph scheduling, to recursively decide                       by analyzing its tensor expression and output tile size. In
+an efficient tile-graph execution plan for multiple memory                       cases where the input region may contain irregular patterns
+layers, known as a hierarchical tile-graph (§3.2). Finally, this                 such as sparse or noncontinuous access (e.g., Gather or
+plan is then mapped to an executable code for a specific hard-                   Convolution with strides), our expression analysis provides
+ware accelerator using four abstracted computing interfaces                      a conservative upper bound as the input tile shape. If the tile-
+defined in the hardware layer, i.e., Allocate, LoadTiles,                        graph has multiple output nodes, their output shapes may also
+ComputeTile, and StoreTiles (§3.3). The memory specifi-                          be correlated, as they may share a common ancestor node in
+cation of the abstracted accelerator is used by the tile-graph                   the graph. In this case, after propagating the first output tile,
+scheduling layer to guide the optimization process.                              we propagate separate shapes for the remaining output nodes,
+                                                                                 aligning them with the first one. If there is an inconsistent tile
+3.1    Operator-tile and Tile-graph                                              shape between the two propagations, we do not connect the
+W ELDER defines DNN computation in a fined-grained task                          latter output node to the current graph.
+granularity named operator-tile. A DNN operator, such as
+convolution, can be implemented as multiple homogeneous                          Memory traffic and footprint. After the tile propagation,
+operator-tiles, which are executed either in a streaming or                      the memory traffic and footprint of a tile-graph can be
+parallel manner to compute all the data tiles in the output                      determined. First, the memory traffic for an individual tile-
+tensors [31]. Each operator-tile takes as input a data tile sliced               graph can be calculated by summing its input and output tile
+from the input tensors and computes a data tile in the output                    sizes. The total traffic is obtained through further multiplying
+tensors, with the computing logic described by an index-based                    this value by the number of tile-graphs needed to compute the
+tensor expression [15]. Figure 4(a) and (b) shows examples of                    full output tensor (e.g., through dividing the tensor size by the
+operator-tiles for Conv and MaxPool, where the Conv operator                     output tile size). Second, the minimum memory footprint for
+computes a [1 × 1 ×C] data tile by taking a [3 × 3 ×C] data                      the tile-graph can be calculated using a memory allocation
+tile as input, and the MaxPool operator takes an input tile of                   algorithm (e.g., bestfit [19]) by allocating all data tiles in a
+[2 × 2 × F] and computes an output tile of [1 × 1 × F].                          topological order. As a footprint optimization, input tiles that
+   To improve the utilization of hierarchical memory re-                         contain reduction axes can be further partitioned into smaller
+
+
+
+704   17th USENIX Symposium on Operating Systems Design and Implementation                                                                     USENIX Association
+                                            L0                        L1
+                            Conv                         Relu                     MaxPool                             void SetConnect ( Edge * edge , MemLevel level );
+                                                                                                                      TileConfig Propagate ( TileGraph g ,
+         tile-graph                                                        tile-graph
+                                                                                                                                             Map < Axis , Dim > config );
+                               reuse-tile
+                                                                                                                      size_t MemFootprint ( TileGraph g );
+   L0                   Conv                     Relu                                 MaxPool
+                                   [1, 1]                                                                             size_t MemTraffic ( TileGraph g );
+            [3, 3]                                      [1, 1]   [2, 2]                                   [1, 1]
+
+                                                                                                                          Figure 6: The scheduling interface in W ELDER
+   L1                        Conv+Relu                                              MaxPool
+                                                                      [2, 2, F]
+                                                         reuse-tile                                                traffic across memory layers. Specifically, the total data
+            [4, 4, C]                 tile-graph                                              [1, 1, F]            traffic loaded from and stored to a lower memory layer for
+                                                                                                                   a given tile-graph can be estimated by just its output tile
+                         H                  Conv+Relu+MaxPool
+   L2
+                                                                                            H/2
+                                                                                                                   shape, i.e., used to deduce all the input and output tile shapes.
+                                                                                                            F
+           W
+                        C                                                                         W/2              Based on this property, different tile-graphs from the same
+                                                                                                                   or different memory layers can independently optimize their
+Figure 5: Map three consecutive operators to a three-layer                                                         memory traffic by searching for the optimal tile shapes. For
+memory hierarchy (the weight of Conv is omitted).                                                                  example, in Figure 5, the tile-graph of Conv and ReLU at
+                                                                                                                   L0 can be optimized independently of the L1 tile-graph
+ones, which can be loaded and consumed sequentially by                                                             (e.g., formed by the Conv+ReLU and MaxPool operators),
+accumulating their results to the output tile. Specifically, a                                                     which is referred to as inter-layer independence. This further
+particular policy can automatically try different tiling sizes                                                     implies that the optimal tile configurations of the sub-graphs
+along the reduction axes during the tile propagation.                                                              Conv-Relu and MaxPool at L0 are also independent, due
+                                                                                                                   to their independence with the tile-graphs at L1, to which
+                                                                                                                   we refer as intra-layer independence. In practice, the only
+3.2     Tile-graph Scheduling                                                                                      constraint is that the tile size at the lower memory level must
+To map a DNN model represented by an inital data flow                                                              be larger than the tile size at the upper memory level. This is
+graph to an accelerator, we can recursively partition each                                                         often the case, as the lower memory level typically has greater
+operator into multiple operator-tiles to fit within each memory                                                    capacity than the upper memory level. With these properties,
+layer, and connect operator-tiles at higher memory layers to                                                       we can independently schedule each tile-graph given a graph
+exploit inter-operator data reuse. As a result, an entire DNN                                                      connection plan.
+computation can be modeled as a data streaming pipeline
+over a two-dimensional space, with data tiles moving up and                                                        Scheduling interface. W ELDER provides two scheduling
+down the memory hierarchy vertically and being passed to                                                           interfaces to control graph connecting and sub-graph tiling,
+successor operators at different layers horizontally.                                                              as shown in Figure 6. First, the graph connecting is imple-
+   Figure 5 illustrates an example of mapping three consecu-                                                       mented using the SetConnect interface, which assigns a
+tive operators (Conv, ReLU, and MaxPool) to a three-layered                                                        memory level for an edge in the tile-graph (the lowest level
+memory hierarchy (e.g., from L2 to L0). The input tile of the                                                      by default). After connecting, the tile shapes in the graph
+Conv operator is repeatedly loaded from L2 to L1 and then L0                                                       is inferred through the Propagate interface, by specifying
+for computation. By connecting the Conv and ReLU operators                                                         the dimensional sizes of the output tiles and the optional
+at L0, the output of the Conv operator can be reused as the                                                        reduction axes in input tiles. For example, in Figure 5,
+input for the ReLU operator, and the two operators form a tile-                                                    we can use the SetConnect interface to connect Conv and
+graph at L0. At the same time, they are consolidated into a                                                        Relu at L0 and connect Relu and MaxPool at L1. After the
+virtual node (i.e., Conv+ReLU) in L1. The output of the ReLU                                                       connection, for the sub-graph Conv+Relu, we can use the
+is then continuously spilled into the data tile at L1 and reused                                                   Propagate to infer the intermediate reuse-tile shape (i.e., [1,
+as the input for the MaxPool, through further connection at L1.                                                    1]) by specifying the output tile shape of [1, 1]. Similarly,
+This allows all three operators to form a single tile-graph at the                                                 we can also infer the intermediate reuse-tile shape of sub-
+L1 layer, resulting in the virtual node Conv+ReLU+MaxPool                                                          graph Conv+Relu+MaxPool (i.e., [2, 2, F]) by specifying the
+in L2. After this recursive process, all operators are connected                                                   output tile shape of [1, 1, F]. The two scheduling primitives
+at the lowest layer as a single tile-graph.                                                                        are essentially two interfaces to update the edges and vertices
+                                                                                                                   of the tile-graph. Particularly, SetConnect is used to add a
+Decoupling optimization space. Given the observation that                                                          connection between two nodes and Propagate is used to set
+DNN computation is mostly memory-bounded, our major                                                                tile configuration for a node. They together form a complete
+optimization goal of the data streaming pipeline can be                                                            interface for updating the tile-graph. Note that these primitives
+transformed to minimizing the memory traffic. This allows us                                                       are only used by W ELDER’s scheduling policy and transparent
+to decompose the whole optimization space into several sub-                                                        to the end users. W ELDER also provides two cost interfaces,
+spaces by leveraging the inherent independence of optimizing                                                       MemFootprint and MemTraffic, to calculate the memory
+
+
+
+USENIX Association                                                                   17th USENIX Symposium on Operating Systems Design and Implementation                      705
+                                                                        Allocate       Allocate workspace in a memory layer
+1    Func GraphConnecting(g:Graph, d:Device):                          LoadTiles       Load input tiles from lower memory layer
+ 2     for node : TopologySort(g.nodes()) do                          ComputeTile      Compute an operator-tile at the top layer
+ 3        for edge : node.out_edges() do                              StoreTiles       Store result tiles back to lower memory layer
+ 4           for level : d.MemLevels() do                              MemLevels       Query memory hierarchy configurations
+ 5              SetConnect(edge, level);
+ 6              s = ExtractSubgraph(node, 0);
+                                                                     Table 1: Device interfaces in abstracted hardware accelerator.
+ 7              configs = SubGraphTiling(s, 0, tensor_shapes);
+ 8              if t = Min(d.Profile(configs)) < best_latency        levels higher than 0. Here, we use the number 0 to represent
+ 9                   best_latency = t;                               the lowest memory level, and larger numbers for higher
+10                   best_level = level;                             levels. The ExtractSubgraph function is implemented in
+11           SetConnect(edge, best_level);                           line 26-31. For the extracted sub-graph, W ELDER calls
+                                                                     the SubGraphTiling function to get several efficient tile
+12   Func SubGraphTiling(g:Graph, level:Memory, c: Config)
+13     configs = PriorityQueue();                                    configurations and chooses the optimal one by profiling on
+14     for subtile : EnumerateSubtiles(g, c) do                      the hardware (line 7-10). After comparing with all other
+15        config = Propogate(g, subtile);                            connection levels, W ELDER sets the best connection level
+16        if MemFootprint(g) > level.capacity                        for the current edge.
+17            continue;                                                 Then, the sub-graph scheduler (i.e., the SubGraphTiling
+18        configs.push(config, priority=MemTraffic(g));              function) takes as input a sub-graph and the last level tile
+19     results = Dict();                                             configuration and searches for efficient tile configurations for
+20     for config : TopK(configs, k) do                              the current level. First, W ELDER enumerates the tile sizes (i.e.,
+21        // return empty sub-graph at top level to exit recursion   EnumerateSubtiles in line 14) for output dimensions using
+            subgraphs = unique([ExtractSubgraph(node, level+1)
+                                                                     a tile shape expanding approach similar to Roller [52], which
+            for node in g.nodes()]);
+                                                                     enlarges initial tile shape (e.g., size of 1) towards the shapes
+22        for subgraph : subgraphs do
+23            subgraph_configs = SubGraphTiling(subgraph,            that can reduce total traffic and align with hardware features.
+                level+1, config);                                    After getting the output tile shapes, we can infer the complete
+24            results[config].append(subgraph_configs);              tile configuration using the Propagate interface and check
+25     Return results;                                               if it exceeds the memory capacity using the MemFootprint
+                                                                     interface, or appends it to a sorted result list with the memory
+26   Func ExtractSubgraph(node:Node, level:Memory)
+                                                                     traffic as the key (e.g., using the MemTraffic interface)
+27     nodes = Set();
+28     for edge : node.InOutEdges() do                               (line 15-18). Finally, we choose the top K configurations
+29        if edge.connect_level > level                              with the least memory traffic for the current level, and then
+30            nodes.insert(ExtractSubgraph(edge.node, level));       extract the upper-level sub-graphs and decide their best tile
+31     return SubGraph(nodes);                                       configurations recursively by calling ExtractSubgraph and
+                                                                     SubGraphTiling (line 20-24).
+      Figure 7: Two-step tile-graph scheduling algorithm.
+                                                                        Note that W ELDER has no assumption on the memory size
+                                                                     on different memory hierarchies, as our scheduling policy
+                                                                     can always try its best to determine the optimal layer and
+footprint and the total traffic of a tile-graph, which serve as      tile size to place intermediate data, so as to minimize the
+our cost models to guide the scheduling.                             overall latency. While W ELDER always favors hardware with
+                                                                     large higher-level fast memory (e.g., shared memory) that
+Scheduling policy. W ELDER adopts a two-step scheduling              can hold a sufficiently large intermediate data tile, because
+algorithm to optimize data flow computation effectively.             too small tile sizes could lead to worse intra-operator data
+Specifically, a graph-connecting scheduler first enumerates          reuse. The scheduling result of a data flow graph in W ELDER
+different graph connecting plans by setting different memory         is a hierarchical tile-graph, which starts as a full graph at
+reuse levels for each edge, and then a sub-graph scheduler           the lowest memory level and is recursively split into several
+quickly searches for efficient tile configurations for each sub-     sub-graphs in the upper layers, all the way to the top level.
+graph decoupled by the graph-connecting scheduler. Figure
+7 shows the two-step scheduling algorithm in W ELDER. First,         3.3    Mapping to Hardware Accelerator
+given a DNN data flow graph g and an accelerator device d,
+the graph-connecting scheduler enumerates all graph nodes            The hierarchical tile-graph generated by W ELDER is an
+and their output edges in a topological order (line 1-3). For        abstracted execution plan that can be mapped to an executable
+each edge, W ELDER tries different connection levels (e.g.,          code for a specific hardware accelerator. To facilitate this
+using the SetConnect interface) (line 5). It then extracts           mapping, W ELDER provides an abstracted accelerator device
+the connected sub-graphs where all edges have connection             with hierarchical memory layers. The memory configura-
+
+
+
+706      17th USENIX Symposium on Operating Systems Design and Implementation                                   USENIX Association
+void ExecuteGraph ( TileGraph g , MemLevel level ,                   4     Implementation
+                     void *in , void * out ) {
+  void * mem = Allocate(g. MemFootprint () , level );                W ELDER is implemented based on open-source DNN com-
+  LoadTiles(in , mem );
+  for ( auto n : g. nodes ()                                         pilers, TVM [15], Roller [52] and Rammer [31]. It leverages
+    if ( level == MemLevel . top )                                   TVM for writing kernel schedule, Roller for enumerating
+      ComputeTile(n , mem . in [n], mem . out [n ]);                 efficient tile configurations, and Rammer for the end-to-end
+    else
+                                                                     graph optimization. W ELDER’s core mechanisms, includ-
+      ExecuteGraph (n. TileGraph () , level +1 ,
+                      mem . in [n], mem . out [n ]);                 ing the tile-graph, tile propagation, scheduling algorithm,
+  StoreTiles(mem , out );                                            code generation, etc., are implemented in 5.2k lines of code.
+}                                                                    W ELDER takes an ONNX graph as input and performs com-
+// execute a full DNN graph at memory level 0
+ExecuteGraph ( graph , 0, inputs , outputs );
+                                                                     mon graph optimizations such as constant folding and simple
+                                                                     element-wise fusion. It then converts the optimized graph
+                                                                     into a tile-graph for holistic memory scheduling optimization.
+  Figure 8: Compilation routine of hierarchical tile-graph.
+                                                                     W ELDER is implemented on both CUDA and ROCm GPUs,
+                                                                     and GraphCore IPU through the unified device interface
+                                                                     (Table 1). For CUDA and ROCm GPUs, W ELDER schedules
+tions, such as the number of layers, memory capacity, and            data tiles on three memory layers: global memory (DRAM),
+transaction width of each layer, can be obtained through             shared memory, and register. To handle large images on
+a MemLevels interface (e.g., used in Figure 7). With this            CUDA GPUs and GraphCore IPU, we also extend their device
+abstracted memory layer, it is easy to extend an existing            memory by adding a host memory layer.
+accelerator with additional memory layers (e.g., host memory
+or SSD) as a new device, allowing it to handle very large            4.1    Hardware-aligned Tile Search
+tensors that may not fit in the single device memory (§5.4 for
+more details). W ELDER’s performance gain mainly comes               Enumerate efficient data tile size. W ELDER takes into
+from the bandwidth gap between memory layers. Thus, as               account several hardware-related factors that could impact
+long as a lower-level memory becomes the bottleneck and              the data access efficiency by introducing a penalty factor to
+a high-level memory can hold the intermediate data tile,             the traffic cost model. First, if there is uncoalesced memory
+W ELDER can automatically pipeline the inter-operator data           access, the total memory traffic will include the additional
+transfer on the faster, high-level memory.                           transactions required for these accesses. For instance, in
+                                                                     CUDA GPUs, it is always preferable to use coalesced memory
+   In order to execute a hierarchical tile-graph on a                access for a contiguous 128 bytes of data (one transaction).
+hardware accelerator, W ELDER provides four comput-                  Second, when there is insufficient parallelism due to a large
+ing interfaces: Allocate, LoadTiles, ComputeTile, and                tile size, the memory traffic is increased proportionally based
+StoreTiles (listed in Table 1). The routine for executing            on the utilization percentage of the computing cores. Finally,
+a hierarchical tile-graph using these interfaces is shown in         we add an infinite penalty if the total memory footprint of
+Figure 8. The process starts by executing the bottom-layer           a given tile configuration exceeds the memory capacity. To
+tile-graph (i.e., the full DNN graph). For each tile-graph, it       avoid enumerating inefficient candidates, W ELDER searches
+first allocates the necessary workspace in the corresponding         for output tiles by only enumerating the dimensions that
+memory layer (using the Allocate interface) and loads the            can reduce traffic the most according to the cost model, and
+input tiles into this space (LoadTiles). Then, it executes all       retrieves only top k candidates with the minimum traffic.
+the nodes in the sub-graph in a topological order. If the current
+memory layer is the top level, the node is executed directly in      Decide aligned computation parallelism. In GPUs, the
+the computing cores (ComputeTile). Otherwise, the execu-             top-level operator-tiles that are executed in the same thread-
+tion of the upper-level tile-graph is called recursively. Finally,   blocks must agree on a unified block size (e.g., number of
+the result tiles in the current space are stored in the lower        threads). To ensure this alignment, W ELDER first enforces
+memory layer (StoreTiles). This execution routine can be             sufficient parallel tiles at the register level to align with the
+used as both a code generation process or a runtime process,         hardware parallelism (i.e., by enumerating hardware-aligned
+depending on whether a specific accelerator implements these         tiles). For example, in NVIDIA V100 GPUs, the tile number
+computing interfaces as code emitters or executable function         should be greater than 128, as each SM has 4 warp schedulers
+calls. In W ELDER, they are currently implemented as code            and each warp has 32 threads. We then determine the greatest
+emitters to generate the accelerator-specific computing logic.       common divisor among the tile numbers of all operators as
+By executing this recursive routine, the entire hierarchical tile-   the common thread-block size, if it is larger than the hardware
+graph is unrolled and a full-model computation program with          parallelism (e.g., 128) and less than the maximum limitation
+all the necessary optimizations is generated automatically.          (e.g., 1024). Otherwise, we set the block size to a number
+
+
+
+USENIX Association                             17th USENIX Symposium on Operating Systems Design and Implementation              707
+that equals the hardware parallelism. Once the block size           operator reuse buffer, in a uniform manner. First, we analyze
+is decided, we bind all operator-tiles at the register level to     the liveness of each buffer based on the topology execution
+these threads. If a single thread needs to run multiple tiles,      order and convert them into a sequence of allocation and free
+we use TVM’s virtual thread to bind them, thus allowing             operations. We then use the bestfit algorithm to compute the
+concurrent data access over all memory banks and avoiding           offset for each shared memory allocation, taking into account
+bank conflicts.                                                     any alignment requirements for data types and TensorCore
+                                                                    operations (e.g., aligning to 32 bytes to avoid misaligned
+Support TensorCore. W ELDER leverages TensorCore to                 address access).
+accelerate certain operators such as GEMM, BatchMatmul,
+and Convolution (using implicit GEMM [28]) on CUDA                  Compilation speedup. W ELDER optimizes the compilation
+GPUs. We add annotations to these operators indicating which        speed through parallel compilations and sub-graph caching.
+axes will be bound to CUDA’s Warp-Level Matrix Operations.          First, by taking advantage of the independence between
+For top-level operator tiles, we bind them to warps (instead        configurations, W ELDER can use multi-processes to build
+of threads) to perform MMA operations. Additionally, we             and evaluate each configuration in parallel. Second, in most
+introduce some extra constraints when enumerating tile sizes,       DNN models, some sub-graph patterns often repeat for mul-
+such as ensuring that the number of threads is an integral          tiple times. To avoid the redundant optimization, W ELDER
+multiple of the warp size and that the axes (M, N, and K) in        leverages a sub-graph signature to cache each unique graph
+each tile are an integral multiple of the fragment size of the      pattern. For example, in a 12-layer BERT model, we can cache
+MMA operations.                                                     the optimization result (kernel code and profiled latency) for
+                                                                    the first layer and reuse it for all the remaining 11 layers.
+4.2    Code Generation and Compilation
+W ELDER’s kernel generation is based on TVM. In particular,         5     Evaluation
+the register level tile connection is implemented using TVM’s       5.1    Experimental Setup
+compute_inline schedule primitive. For shared memory
+                                                                    We evaluate W ELDER using three servers equipped with
+level connection, we only use TVM to generate standalone
+                                                                    different accelerators: NVIDIA GPU, AMD GPU, and Graph-
+kernels for each connected part above the shared memory,
+                                                                    core IPU. Two servers are equipped with the NVIDIA GPUs.
+and then apply several additional passes to compose these
+                                                                    The first one is an Azure NC24s_v3 VM with Intel Xeon
+standalone kernels into a single fused kernel.
+                                                                    E5-2690v4 CPUs and NVIDIA Tesla V100 (16GB) GPUs,
+Load/store rewriting. The standalone kernels generated by           running on Ubuntu 16.04 with CUDA 11.0. The second one is
+TVM load and store data from global memory. We rewrite              a local workstation with Intel(R) Xeon(R) E5-2678 v3 CPUs
+these global memory accesses to shared memory accesses              and NVIDIA GeForce RTX 3090 GPUs, running on Ubuntu
+by adding an additional TIR [11] pass to TVM’s lowering             18.04 with CUDA 11.3. The AMD GPU server is equipped
+procedure. Additionally, we add memory fences to prevent            with Intel Xeon CPU E5-2640 v4 CPU and AMD Radeon
+race conditions and apply padding to handle bank conflicts          Instinct MI50 (16GB) GPUs, running on Ubuntu 18.04 with
+in the buffers. As a result, the original global kernel can be      ROCm 5.2.3. The IPU server is an Azure ND40s_v3 VM with
+transformed into a device function, which is included in the        Intel Xeon Platinum 8168 CPUs and 16 IPUs with Poplar-sdk
+final fused kernel.                                                 3.0.
+
+Block/thread index remapping. Some operators cannot be              DNN workloads. W ELDER is evaluated on 10 DNN models
+directly connected to others and require remapping of their         with different model types, including CNNs, Transformer,
+blockIdx and threadIdx values. The BlockIdx remapping               CNN-Transformer and multilayer perceptrons (MLP), and
+is used for operators such as Transpose. The remapping              most of which are the state-of-art in the corresponding tasks.
+relationship is deduced from their tensor expressions. The          Table 2 characterizes them with a comparison of their model
+ThreadIdx remapping is used to connect 2D thread blocks             types, tasks, and the years of publication. For all models in the
+to 1D thread blocks. This is necessary when inter-thread            table, we use their official PyTorch implementations without
+reduction or TensorCore primitives require the use of a 2D          modification.
+thread block (both threadIdx.x and threadIdx.y), while
+others may use a 1D thread block (only threadIdx.x). A 2D           Baselines. We compare W ELDER with several DNN frame-
+thread block can be mapped to a 1D thread block as long as          works, including PyTorch (v1.12) [10] and ONNXRuntime
+their total number of threads is equal.                             (v1.12) [8], as well as state-of-the-art DNN compilers such
+                                                                    as Ansor (v0.9) [50] and Rammer [31]. We also compare
+Memory management. We manage all shared memory,                     W ELDER with TensorRT (v8.4) [7], a vendor-specific infer-
+including that allocated in each standalone kernel and the inter-   ence library for NVIDIA GPUs. For transformer models,
+
+
+
+708   17th USENIX Symposium on Operating Systems Design and Implementation                                    USENIX Association
+Figure 9: End-to-end model inference performance on NVIDIA V100 GPU (SIMT Core only). (left : batch size of 1, right :
+batch size of 64).
+
+        Model                 Type                 Task             Year   W ELDER improve both the memory and computational effi-
+    MobileNet [41]            CNN           Image Classification    2018   ciency? 5) What is the search efficiency of W ELDER’s holistic
+      BERT [16]            Transformer             NLP              2018
+       ViT [17]            Transformer      Image Classification    2020
+                                                                           optimization?
+    Conformer [20]       CNN+Transformer    Speech Recognition      2020
+    MobileViT [32]       CNN+Transformer    Image Classification    2021
+ Swin-Transformer [30]     Transformer      Image Classification    2021
+                                                                           End-to-end performance. Figure 9 shows the performance
+      NeRF [33]               MLP           3D-scene Generation     2021   of W ELDER and other baselines for batch size of 1, expressed
+     NAFNet [14]              CNN            Image Restoration      2022   as the normalized speedup relative to the best result. The
+    Restormer [48]       CNN+Transformer     Image Restoration      2022
+      BSRN [29]               CNN          Image Super-resolution   2022   geometric mean speedup that W ELDER achieves over DNN
+                                                                           frameworks is 4.29× for PyTorch and 2.07× for ONNXRun-
+        Table 2: DNN models evaluated in W ELDER.                          time. PyTorch does not perform well for models with batch
+                                                                           size 1 due to high Python overhead in its computation graph.
+we further compare W ELDER with NVIDIA’s FasterTrans-
+                                                                           In contrast, ONNXRuntime is a more optimized framework
+former (v5.2) [2], a hand-crafted C++ library optimized for
+                                                                           that removes Python overheads and implements pattern-based
+transformer models. We also include BladeDISC (v0.3.0) [1]
+                                                                           graph optimizations. W ELDER also outperforms Rammer by
+that implements the latest AStitch [51] for the kernel fusion
+                                                                           1.96×, as Rammer can only fuse independent parallel kernels
+optimization. We also include Nimble [25] which implements
+                                                                           instead of dependent ones through shared memory. When
+multi-stream scheduling as a baseline on NVIDIA GPUs.
+                                                                           evaluating BladeDISC (implementing AStitch), we notice
+   To evaluate a model on these baselines, we first trace the
+                                                                           that it encounters "unsupported operator" failures and falls
+model in PyTorch and export it to the ONNX format. We
+                                                                           back to PyTorch runtime for the majority of models. For
+then use this ONNX model as input to other frameworks,
+                                                                           models without encountering any failure (including BERT,
+including W ELDER, Ansor, ONNXRuntime, and TensorRT.
+                                                                           MobileNet, BSRN and NeRF), W ELDER is 2.70× faster
+For the ONNXRuntime, we use its CUDA execution provider
+                                                                           than BladeDISC. Regarding the Nimble baseline, W ELDER
+and set its graph optimization level to "ALL" to achieve the
+                                                                           achieves an average speedup of 1.79×, excluding the models
+best performance. For TensorRT, we use its Python API to
+                                                                           where Nimble fails to execute.
+build an engine for the input ONNX model. For Ansor, we set
+the total number of tuning trials to 800× the number of tasks                 Ansor improves DNN performance by generating high-
+in each model. For all frameworks, we place the input and                  performance tensor programs and using rule-based fusion
+output tensors in GPU device memory to avoid additional data               across operators at the register level (e.g., Matmul+BiasAdd,
+movement costs. During evaluation, we first performe some                  Conv2D+ReLU). However, it cannot exploit further memory
+warm-up iterations and then run each workload repeatedly                   reuse opportunities, leading to an average performance gap
+for at least 5 seconds. We only report the average speed for               of 1.44× compared to W ELDER. This is evident in CNN
+each model, as we observe very little variation in all cases.              models such as NAFNet (1.70×) and BSRN (1.43×), which
+The average performance (e.g., speedup) across models is                   mainly consist of convolutions with relatively small channels
+calculated by geometric mean in all experiments.                           that can be well optimized by W ELDER. W ELDER also
+                                                                           outperforms Ansor by a significant margin on Transformer-
+                                                                           based models such as BERT (1.71×), Swin-Transformer
+5.2    Evaluation on NVIDIA GPUs                                           (1.45×), and ViT (1.56×), due to Ansor’s inability to fuse
+This section answers the following questions: 1) How does                  patterns like LayerNorm or Softmax in the attention block.
+W ELDER perform in comparison with state-of-the-art DNN                    Furthermore, W ELDER performs well for CNN+Transformer
+frameworks or compilers? 2) To what extent can W ELDER fur-                models, achieving speedups of 1.64×, 1.39×, and 1.29×
+ther boost performance with TensorCores? 3) Can W ELDER                    on MobileViT, Conformer, and Restormer, respectively, as
+automatically discover new optimization patterns beyond                    W ELDER can cover fusion opportunities in both the CNN
+previous expert-designed fusion rules? 4) How well does                    and Transformer parts of these models. We also observe that
+
+
+
+USENIX Association                                 17th USENIX Symposium on Operating Systems Design and Implementation             709
+W ELDER only slightly outperforms Ansor on NeRF (1.09×),                   Model    DT    BS    W ELDER(ms)    FT-CPP(ms)
+mainly due to that the compute-intensive MLP dominates the                 BERT FP32        1       3.13          3.15
+computation without further optimization opportunities.                    BERT FP32 64            118.6          119.8
+                                                                           BERT FP16        1       1.49          1.50
+   Finally, TensorRT is a specialized DNN inference li-                    BERT FP16 64            24.82          22.29
+brary provided by NVIDIA with highly optimized operators.                   ViT    FP32     1       1.33          1.96
+W ELDER is comparable to TensorRT on popular transformer                    ViT    FP32 64         15.29          15.68
+                                                                            ViT    FP16     1       1.09          1.89
+models such as BERT (1.02×) and Swin-T (0.97×). This is                     ViT    FP16 64          4.79          5.15
+because TensorRT has incorporated expert-designed fusion                   swin-T FP32      1       2.59          2.38
+rules and in-house kernels for some popular models, including              swin-T FP32 64          66.13          72.62
+                                                                           swin-T FP16      1       1.43          1.60
+transformer-based models, thereby leaving limited room for                 swin-T FP16 64          23.12          28.67
+further optimization. In contrast, W ELDER identifies optimiza-              geometric mean         6.71          7.46
+tion patterns automatically and achieves performance that is
+on par with TensorRT, despite relying on less performant           Table 3: Performance for W ELDER and FasterTransformer
+kernels for compute-intensive operators. It is worth noting
+that kernel optimization is complementary to W ELDER, and         1.53× (up to 2.98× on NAFNet) to TensorRT, respectively.
+further optimized kernels may offer even greater benefits for        For the remaining 7 cases in Figure 10 that uses a batch size
+W ELDER. Additionally, for newer and more diverse models          of 64, W ELDER outperforms PyTorch by 1.98×, ONNXRun-
+such as NAFNet, W ELDER has demonstrated superior perfor-         time by 2.13×, BladeDISC by 1.97×, Nimble by 3.84×,
+mance to TensorRT, with speedups of up to 3.09× due to its        Rammer by 3.45× and TensorRT by 1.16× respectively.
+generality. Overall, our system outperforms TensorRT with            Some of the speedups are much larger than the ones
+an average speedup of 1.47×.                                      achieved on SIMT cores. Especially for the NeRF model,
+   Figure 9 also shows the normalized performance for a           W ELDER outperforms TensorRT by 2.34× on TensorCore,
+larger batch size of 64. The last three models in Table 2 are     while the speedup on SIMT cores is only 1.16×. This
+unable to be traced on PyTorch with large batch sizes due to      is mainly because TensorCore can greatly accelerate the
+their use of large input size. Under this setting, W ELDER con-   compute-intensive part of the model, making the optimization
+tinues to outperform all other baselines, providing an average    of the remaining memory-intensive part more critical.
+speedup of 1.83× over PyTorch, 1.90× over ONNXRuntime,               Note that Ansor is not included in this experiment as it
+2.1× over Rammer, 1.57× over BladeDISC, 1.49× over Nim-           does not support TensorCore. For a fair comparison, we
+ble, 1.47× over Ansor, and 1.21× over TensorRT, respectively.     disable W ELDER’s TensorCore feature and evaluate these
+We observe that for large batch sizes, frameworks using           FP16 models on SIMT cores by comparing with Ansor in
+CUDA libraries perform much better, compared to the results       Figure 11. It shows a slightly higher speedups (1.74× on
+for a batch size of 1. This leads to smaller speedups over        average and up to 2.82×) compared with the ones in FP32.
+PyTorch, ONNXRuntime, and TensorRT for W ELDER, while
+                                                                  Performance on another NVIDIA GPU We also conduct
+the speedup over Ansor remains similar to the results for a
+                                                                  evaluations on RTX-3090, another widely-used GPU, which
+batch size of 1.
+                                                                  utilizes a distinct Ampere architecture. The RTX-3090 ex-
+                                                                  hibits various new features compared to the V100, including
+Performance with TensorCore. The faster computing                 advancements in memory load and TensorCore instructions,
+throughput of TensorCore can put greater pressures on mem-        as well as a different number of streaming multiprocessors
+ory access. To understand the optimization behaviors when         (SM). For the sake of conciseness, we solely compared
+running on TensorCore, we convert our benchmark models            W ELDER with TensorRT on the RTX-3090, as TensorRT
+(both weights and activations) to half-precision float type       consistently delivers superior performance compared to other
+(FP16) with PyTorch, as TensorCore only supports FP16.            baselines on NVIDIA GPUs. The results, depicted in Figure
+This is done using the tools in the onnxconverter_common          12, illustrate that W ELDER outperforms TensorRT with an
+package [9], with the exception for TensorRT, which converts      average speedup of 1.40×, calculated using the geometric
+through its own converter as it often produces better results.    mean of all 34 test cases. Notably, this speedup is similar
+   Figure 10 shows the performance comparisons of W ELDER         to the one observed on the V100 GPU, which amounted to
+with other frameworks using TensorCore for batch sizes of 1       1.36×, thereby highlighting W ELDER’s adaptability across
+and 64. For the 10 cases that use a batch size of 1, W ELDER      diverse GPU architectures.
+outperforms PyTorch, ONNXRuntime, BladeDISC, Nimble,
+Rammer, and TensorRT. The averaged speedup is 7.18× (up           Patterns automatically discovered. W ELDER automati-
+to 21.4× on MobileNet) to PyTorch, 3.08× (up to 8.72× to          cally discovers around 300 different fused subgraphs, which
+on Conformer) to ONNXRuntime, 5.29× (up to 16.9× on               is counted by unique operator types under all 34 compiled test
+MobileNet) to BladeDISC, 2.72× (up to 5.58× on NeRF) to           cases of the 10 models. Among them, 89 patterns contain at
+Nimble, 2.76× (up to 5.42× on NAFNet) to Rammer, and              least two reduction-based operators which cannot be covered
+
+
+
+710   17th USENIX Symposium on Operating Systems Design and Implementation                                    USENIX Association
+Figure 10: End-to-end model inference performance on NVIDIA V100 GPU (TensorCore enabled). (left : batch size of 1, right :
+batch size of 64).
+
+                                                                    Fused operators                                           # Ops
+                                                                    DepthwiseConv2dNative Broadcast Add Broadcast Di-          48
+                                                                    vide Erf Broadcast Add Multiply Broadcast Multiply Con-
+                                                                    volution Broadcast Add Broadcast Divide Erf Broadcast
+                                                                    Add Multiply Broadcast Multiply Convolution Broadcast
+                                                                    Add Broadcast Divide Erf Broadcast Add Multiply Broad-
+                                                                    cast Multiply Convolution Broadcast Add Broadcast
+                                                                    Divide Erf Broadcast Add Multiply Broadcast Multiply
+                                                                    Concat Convolution Broadcast Add
+                                                                    Dot Relu Dot Relu Dot Relu Dot Relu Dot Relu Dot Relu      13
+                                                                    Dot
+Figure 11: Comparing with Ansor under FP16 w/o Tensor-
+Core                                                             Table 4: Examples of fusion patterns discovered by W ELDER.
+
+                                                                 in BERT where the sequence length is 128, but are not
+                                                                 fused in Conformer where the sequence length is 512, this is
+                                                                 automatically decided by W ELDER).
+                                                                    For the three models supported by FasterTransformer, we
+                                                                 compare its performance with W ELDER in Table 3. In general,
+                                                                 W ELDER achieves an average speedup of 1.11× (up to 1.73×
+                                                                 on ViT) over FasterTransformer. Based on our profiled data,
+                                                                 The notable speedup for ViT under batch size of 1 can be
+Figure 12: Comparing with TensorRT on NVIDIA RTX-3090            attributed to a convolution operator with a non-conventional
+by simple element-wise fusion rule in Ansor. To the best         shape, where both stride and kernel size are 32 (ViT’s patch
+of our knowledge, many of these patterns are uncommon            size). For this single operator, W ELDER’s generated kernel
+fusion patterns that have not been explored by manually-         is 4.4x faster. This highlights W ELDER’s adaptability in
+designed rules or automatic fusion optimizations. Figure 4       managing new operator shapes or model patterns.
+illustrates two examples of such patterns, which fuse multi-        Another example is NeRF, a popular 3D scene generation
+ple Convolution or MatMul (i.e., Dot) operators with other       model that is typically implemented as a 7-layer MLP. To
+memory-intensive operators into a single kernel. The number      take full advantage of GPUs, domain experts often need to
+of operators fused in each pattern ranges from 2 to 48 and can   implement such models from scratch to achieve better fusion
+achieve an average speedup of 1.87× (up to 5.4×) compared        result (e.g., fully-fused MLP in [35]). With W ELDER, we
+to basic fusion methods such as those used in Ansor. The         can automatically fuse this 7-layer MLP into a single GPU
+most common pattern has been used 191 times in all models.       kernel. The generated kernel uses TensorCore for the first
+   Such a general fusion capability often allows W ELDER         6 layers and uses SIMT Core for the output layer, with all
+to outperform the model-specific implementations opti-           intermediate results stored in shared memory. We observe
+mized by experts. For example, FasterTransformer [2] is          that our automatic fusion result can achieve a similar speedup
+a manually-optimized benchmark for transformer models            (over 5×) to the values reported in [35] (we are unable to
+from NVIDIA. It supports both element-wise fusion, such          evaluate their code [34] as it does not support V100 GPUs).
+as BiasAdd+Transpose, and non-element-wise fusion, such             Finally, for CNN models such as NAFNet, BSRN, and
+as Layernorm+Softmax. In W ELDER, all these patterns can         MobileNet, W ELDER is able to fuse different types of con-
+be automatically fused. Even more, W ELDER can further           volutions with other operators (e.g., Pooling, PixelShuffle,
+fuse Q*K with the following Softmax in the attention block       etc.). For example, in NAFNet, our system can fuse back-to-
+when the sequence length is not long (e.g., they are fused       back pointwise convolutions together with the normalization
+
+
+
+USENIX Association                          17th USENIX Symposium on Operating Systems Design and Implementation                    711
+                                                                    Model      Ansor time(s)   Ansor Trials     W ELDER Time(s)     W ELDER Trials
+                                                                    BERT          15285            8000               244                651
+                                                                   Mobilenet      45527           25600               561                927
+
+
+                                                                       Table 5: Compilation time of Ansor and W ELDER
+
+                                                                                Model          Ansor      W ELDER       TensorRT
+                                                                               Resnet50        2.403          2.327         2.351
+                                                                               Resnet18        1.071          1.094         1.158
+                                                                                UNet           8.670          9.251         4.429
+Figure 13: Latency, GPU kernel count, global memory transac-                   VGG16           4.267          4.123         2.584
+tion executed and intermediate result size (IRS) For 3 selected
+                                                                      Table 6: Performance on compute intensive models
+models (FP32, batch size 64).
+                                                                  65% compared with W ELDER-base. Note that the reduction
+                                                                  of memory transactions is less than the reduction of IRS,
+                                                                  because memory access on the model weights part cannot be
+                                                                  optimized by fusion.
+                                                                     In addition, we conducted a sensitivity study by varying
+                                                                  the input sizes of three selected models: BERT (128-512
+                                                                  text length), Conformer (128-512 audio frames), and NAFNet
+Figure 14: Varying input size, comparing with Welder-base.        (256x256-1024x1024 image input). The results, as depicted
+                                                                  in Figure 14, reveal that the fusion gain significantly increases
+operations between them. Another interesting pattern is in        for NAFNet when employing larger images. Conversely, the
+models with multiple separable convolution layers, where          gain diminishes for the other two transformer-based models.
+each layer consists of two operations: a depthwise convolution    This discrepancy can be attributed to the fact that transformer-
+(DWConv) and a pointwise convolution (PWConv). W ELDER            based models exhibit quadratic computational growth with
+is able to determine the optimal fusing order for these two       respect to the input sequence length, thereby reducing their
+types of operators based on their operator configurations. For    memory-intensive nature.
+example, on the top layers where the feature maps are large
+and the number of channels is small, W ELDER constructs a         Compilation time. Table 5 compares W ELDER’s compila-
+DWConv+PWConv fusion group because it is better to cache          tion time against Ansor, which is a search-based compiler
+a complete feature map in shared memory. In contrast, on          requiring many tuning and profiling trails. We chose not to
+the bottom layers, W ELDER constructs a PWConv+DWConv             include other baselines in the comparison since they directly
+fusion group which caches a complete channel for DWConv           invoke library kernels, thereby eliminating the need for extra
+to reuse, as the feature map becomes smaller.                     time dedicated to tuning and code generation. It shows that
+                                                                  the end-to-end compilation speed of W ELDER is more than
+Ablation and sensitivity study. To demonstrate the benefits       an orders of magnitude faster than Ansor. This is because
+of the holistic memory optimization provided by W ELDER,          Ansor generates a very large search space for all the oper-
+we create two variants of W ELDER: “W ELDER-none” dis-            ators, and implicitly optimizes data reuse through machine
+ables all inter-operator tile connection and only searches for    learning-based tuning. This often requires a large number of
+intra-operator schedules, and “W ELDER-base” only enables         tuning trials (e.g., 800 per operator in our evaluation) and
+inter-operator tile connection at the register layer. We also     has additional overheads to train a cost model on the fly. In
+include Ansor in this experiment, as it is another codegen-       contrast, W ELDER decomposes the optimization space using
+based approach similar to ours. As shown in Figure 13,            a layered scheduling policy and searches for efficient tiling
+enabling register layer tile connection, W ELDER-base reduces     configurations using an analytic cost model to estimate traffic
+latency by an averaged 52% (i.e., 2.08× speedup), kernel          costs. As a result, W ELDER requires significantly fewer tuning
+launch count by 67% , global memory transactions by 52%           trials (20 per subgraph in our evaluation) than Ansor.
+and intermediate result size (IRS) by 66% compared with
+W ELDER-none. Note that the metrics of W ELDER-base is            Performance on compute intensive models. Traditional
+similar to that of Ansor, demonstrating the efficiency of our     models like ResNet [21], VGG [43], and UNet [40] are
+general tile-based memory scheduling compared with the rule-      typically dominated by some large operators such as convolu-
+based fusion in Ansor. Moreover, by enabling tile connection      tion. For these compute intensive models, although W ELDER
+at shared memory layer, W ELDER is able to further reduce         mainly focuses on memory access optimization, W ELDER
+latency by an averaged 29% (with up to 1.82x speedup),            can mostly achieve comparable performance to state-of-
+kernel launches by 60%, transactions by 25% and IRS by            the-art baselines like TensorRT. This is because W ELDER
+
+
+
+712   17th USENIX Symposium on Operating Systems Design and Implementation                                             USENIX Association
+Figure 15: End-to-end model inference performance on AMD ROCm MI50 GPU (left : batch size of 1, right : batch size of 64).
+
+can still generate high performance single operators (using           Model   Image Size   Device   W ELDERBase(s)   W ELDER(s)
+the multi-level tiling abstraction, which is similar to Ansor          UNet     8k*8k      GPU           38.2           14.5
+[50] or Roller [52]) although there might be few chances              VGG16     8k*8k      GPU           15.7           8.30
+                                                                       UNet     2k*2k      IPU           31.1           8.56
+to connect the tile at a higher memory level. However, for            VGG16     2k*2k      IPU           4.98           1.61
+some convolution operators, existing libraries like cuDNN [4]
+implement them using an optimized numerical algorithm              Table 7: Scale-up large DNN models to host memory
+(e.g., winograd [26]), which are difficult to automatically
+                                                                according to the official data-sheet. Such difference makes
+derive from tensor expressions. This can result in W ELDER
+                                                                the workload more compute-intensive on MI50, leaving less
+performing worse than TensorRT if there is no additional
+                                                                optimization chances for memory access optimization.
+memory optimization room to compensate for this gap. For
+example, Table 6 compares the performance of W ELDER,
+Ansor, and TensorRT on four such models. For ResNet, both
+                                                                5.4     Scale-up with Host Memory
+systems achieve comparable performance, as the majority of
+convolution operators in this model perform better when im-     W ELDER’s abstracted device layer allows us to extend the
+plemented with the DirectConv algorithm (which is supported     memory hierarchy to support large DNN tasks. For example,
+by both Ansor and W ELDER) instead of winograd. However,        in cases where classical CNN models like UNet or VGG16
+for UNet and VGG16, the dominant convolution operators are      are used to process high-resolution medical images [42], a
+mostly implemented using winograd in TensorRT, and there        single tensor from some layers is often too large to fit in
+are no further fusion opportunities for W ELDER to exploit,     the GPU memory. In these scenarios, tensor-based memory
+resulting in better performance for TensorRT. Given that this   swapping optimization techniques, such as SwapAdvisor [22]
+is orthogonal to W ELDER’s optimization, we leave the support   or Capuchin [37], may not be effective due to the large tensor
+of the winograd algorithm (by rewriting tensor expressions)     granularity. W ELDER addresses this issue by generating a
+to our future work.                                             tile-based execution plan on the extended memory hierarchy
+                                                                through holistic traffic optimization. This approach allows
+                                                                us to load a data tile from the host memory, compute several
+5.3   Evaluation on AMD ROCm GPUs                               connected operator tiles by reusing the data in device memory,
+We evaluate the efficiency of W ELDER on AMD ROCm GPUs          and store the result back, as if it was being processed on a
+by comparing its performance with PyTorch, ONNXRuntime          single device. To evaluate the efficiency of this scheduling
+and Ansor. TensorRT and AStitch are not included because        approach, we compared W ELDER with a variant that only
+they are exclusive to NVIDIA GPUs. Figure 15 shows the          disables data reuse at the device memory layer.
+end-to-end performance of the 10 DNN models. Compared
+with PyTorch, ONNXRuntime and Rammer, W ELDER can               Scale-up GPUs. As a preliminary experiment, Table 7
+outperform them by an average of 2.62×, 1.71× and 2.14×,        shows the performance of W ELDER when scaling up UNet
+respectively. Compared to Ansor, W ELDER achieves an            and VGG16 on large image data by augmenting the GPU
+average performance improvement of 1.53×. Figure 15 also        memory with a host memory layer. As the results show,
+shows the performance comparison with a larger batch size of    by enabling tile-connection at the device memory layer,
+64, where W ELDER outperforms PyTorch, ONNXRuntime,             W ELDER is able to achieve average speedups of 2.63×
+Rammer and Ansor by an average of 1.69×, 1.23×, 1.86×           and 1.89× for the two models, respectively. It also reduces
+and 1.47×, respectively. Note that we have excluded some        host memory transfer by 3.11× and 2.90×. Note that the
+CNN models for ONNXRuntime as they fail to execute on           ratios of reduced memory traffic are higher than the actual
+it. We notice that W ELDER’s speedup on MI50 is slightly        speedup, as we have implemented double buffering (along
+smaller than that of V100, this is because MI50’s peak FLOPS    with pinned memory and CUDA streams) to overlap some
+is weaker than V100’s, while its peak bandwidth is higher,      memory transfer with computation.
+
+
+
+USENIX Association                         17th USENIX Symposium on Operating Systems Design and Implementation                   713
+Scale-up GraphCore IPU. We also perform a preliminary             allel tasks through multi-stream and CUDA graph. W ELDER
+evaluation of W ELDER’s ability to scale up on the Graphcore      builds upon Rammer by further exploring a complementary
+IPU [3], which is a DNN accelerator with a distinct architec-     optimization to these systems, i.e., holistic memory optimiza-
+ture from NVIDIA and AMD GPUs. The IPU is equipped                tion with a vertical fusion, resulting in a further speedup for
+with massively parallel MIMD processors and a relatively          memory-intensive models.
+small device memory (i.e., 300MB), which poses a challenge           Ansor [50] and Roller [52] are representative tensor compil-
+for it to handle even medium-sized tasks. We apply the same       ers that are focusing on intra-operator optimization through
+tile-based scheduling to the two models for the IPU and set       either loop optimization or tiling optimization. Especially,
+the input image size to 2048*2048 to adapt to the IPU’s           Roller [52] and Triton [44] also utilize the concept of tile to
+memory capacity. The results in Table 7 show that W ELDER’s       optimize kernel performance (e.g., intra-operator data reuse).
+optimization is able to achieve average speedups of 3.63× and     In contrast, W ELDER complements them by optimizing for
+3.09× for the two models, respectively. This improvement          intra- and inter-operator memory access holistically. W ELDER
+ratio is higher than that of the GPU, which is mainly due to      generalizes the tile concept in Roller into a tile-graph ab-
+that we disable the double-buffer optimization for the IPU        straction, exposes a holistic tile-level scheduling space, and
+due to its limited memory.                                        proposes an efficient scheduling mechanism over the holistic
+                                                                  space and the explicit memory hierarchy.
+6     Discussion                                                     Some works optimize for a specific pattern regarding to
+                                                                  a type of models with more aggressive operator fusions,
+W ELDER’s design and implementation mainly focuses on
+                                                                  such as fully-fused MLP for the NeRF model [35], manually
+static models. For dynamic model execution, there are two
+                                                                  fused kernels for CNN models [46], and attention fusion
+practical ways to address this. First, the dynamic graph can be
+                                                                  for transformer models [2, 18]. Our evaluation shows that
+transformed into static sub-graphs through JIT compilation,
+                                                                  W ELDER can achieve most of these fusions automatically and
+such as PyTorch JIT compile, which has become a standard
+                                                                  even produce new fusion patterns to help further optimization.
+practice in PyTorch 2.0. Then, W ELDER can concentrate
+on optimizing the static sub-graphs, which are typically the         Moreover, kernel fusion techniques have been used in
+computationally dominant part. Second, even though tensor         traditional image processing [38, 39] or HPC [45] areas.
+shapes may be dynamic, the internal tile in each operator can     These efforts usually leverage domain-specific fusion rules for
+be statically determined. This presents an opportunity for        their workload. W ELDER focuses on DNN workload, while
+W ELDER to generate a static tile-level fusion plan but leave     it is applicable for general operators represented by tensor
+the number of parallel tasks determined by the input tensor       expressions. It is also potentially helpful for workload that
+shape.                                                            can be implemented in tensor expressions in other domains.
+
+
+7     Related Work                                                8   Conclusion
+Compiler optimization like operator fusion is a widely-used       By observing that modern DNN models are becoming increas-
+technique in DNN computation to reduce kernel launch over-        ingly memory intensive, we introduced W ELDER, a DNN
+head and improve data locality in faster memory. Compilers        compiler that optimizes the execution efficiency based on a
+such as TVM [15], Ansor [50], XLA [12], DNNfusion [36]            new tile-graph abstraction. W ELDER is able to holistically
+all support operator fusion at register level. Other compilers    optimize efficient intra- and inter-operator data reuse across
+try to further fuse operators at shared memory, relying on        multi-level memory hierarchy. W ELDER is the first to unify all
+either fusion rules for a set of known operator types (e.g.,      common operator fusions into a single framework, allowing
+AStitch [51], Apollo [49], DeepCuts [24]) or specific template    for the discovery of 89 uncommon fusion patterns, with the
+for a few operator combinations (e.g., Bolt [47]). Specialized    largest one fusing 48 operators into a single kernel. This
+DNN runtimes such as TensorRT [7] and ONNXRuntime [8]             generality enables W ELDER to significantly outperform state-
+have incorporated expert-designed fusion rules for some com-      of-the-art baselines. More importantly, W ELDER provides a
+mon patterns in popular models such as the transformer-based      systematic approach to take advantage of emerging trends
+models. In contrast, W ELDER works for general operators          in the memory hierarchy, such as larger and more connected
+implemented in tensor expressions without the assumption on       on-chip memory, in the future AI accelerators.
+operator types and decides on the best fusion memory layer
+automatically. This is because an operator’s resource usage
+                                                                  Acknowledgement
+behavior (memory- or compute-intensive) often depends on
+its shape, and therefore the fusion decision.                     We thank anonymous reviewers and our shepherd, Prof.
+   Systems like Rammer [31], HFuse [27], Nimble [25], etc.,       Byung-Gon Chun, for their extensive suggestions. This work
+exploit better hardware parallelism utilization and reduce        was partially supported by the National Key Research and
+kernel launches by either horizontal fusion or scheduling par-    Development Program of China (No. 2021ZD0110202).
+
+
+
+714    17th USENIX Symposium on Operating Systems Design and Implementation                                USENIX Association
+A     Artifact Appendix
+
+Abstract
+W ELDER provides end-to-end DNN model compilation with
+its new tile-graph abstraction. This artifact reproduces the
+main results of the evaluation on NVIDIA V100 GPU.
+
+Scope
+This artifact will validate the following claims:
+    • End-to-end model performances. By reproducing the
+      experiments of Figure 9, Figure 10, Figure 11, Table 3
+      and Table 6.
+
+    • Motivation experiments in Figure 1 and Figure 2.
+    • Ablation study in Figure 13.
+    • Compilation time in Table 5.
+
+    • GPU stale out experiments in Table 7.
+
+Contents
+This artifacts includes all the source code to implement
+W ELDER. We provide a docker file to setup environments. For
+each figure and table mentioned above, we provide a script
+to reproduce its result. Since there are more than 50 model
+test cases to compile to fully reproduce the results, which will
+cost a long time (especially for the Ansor’s baseline), we also
+provide pre-compiled logs and models for NVIDIA V100
+GPU. Please refer to the README.md file in the repository
+for more details.
+
+Hosting
+The artifact is hosted at github repository1 . Please use git to
+clone the repository and checkout to the osdi2023welder
+branch.
+
+Requirements
+This artifacts requires a NVIDIA V100 GPU with CUDA
+driver supporting CUDA runtime larger than 11.0.
+
+
+
+
+    1 https://github.com/microsoft/nnfusion/tree/osdi2023welder
+
+
+
+
+USENIX Association                                   17th USENIX Symposium on Operating Systems Design and Implementation   715
+References                                                   [16] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and
+                                                                  Kristina Toutanova. BERT: pre-training of deep bidirec-
+ [1] BladeDISC.         https://github.com/alibaba/               tional transformers for language understanding. CoRR,
+     BladeDISC.                                                   abs/1810.04805, 2018.
+ [2] FasterTransformer. https://github.com/NVIDIA/           [17] Alexey Dosovitskiy, Lucas           Beyer, Alexander
+     FasterTransformer.                                           Kolesnikov, Dirk Weissenborn, Xiaohua Zhai,
+ [3] IPU PROGRAMMER’S GUIDE.         https://www.                 Thomas Unterthiner, Mostafa Dehghani, Matthias
+     graphcore.ai/docs/ipu-programmers-guide.                     Minderer, Georg Heigold, Sylvain Gelly, et al. An
+                                                                  image is worth 16x16 words: Transformers for image
+ [4] NVIDIA cuDNN. https://developer.nvidia.com/                  recognition at scale. arXiv preprint arXiv:2010.11929,
+     cudnn.                                                       2020.
+ [5] NVIDIA cutlass.      https://github.com/NVIDIA/         [18] Jiarui Fang, Yang Yu, Chengduo Zhao, and Jie Zhou.
+     cutlass.                                                     Turbotransformers: an efficient gpu serving system for
+ [6] NVIDIA Tensor Cores. https://www.nvidia.com/                 transformer models. In Proceedings of the 26th ACM
+     en-us/data-center/tensor-cores/.                             SIGPLAN Symposium on Principles and Practice of
+                                                                  Parallel Programming, pages 389–402, 2021.
+ [7] NVIDIA TensorRT.      https://developer.nvidia.
+     com/tensorrt.                                           [19] M. R. Garey, R. L. Graham, and J. D. Ullman. Worst-
+                                                                  case analysis of memory allocation algorithms. STOC
+ [8] ONNX Runtime. https://github.com/microsoft/                  ’72, page 143–150, New York, NY, USA, 1972. Associ-
+     onnxruntime.                                                 ation for Computing Machinery.
+ [9] onnxconverter_common.   https://github.com/
+                                                             [20] Anmol Gulati, James Qin, Chung-Cheng Chiu, Niki
+     microsoft/onnxconverter-common.
+                                                                  Parmar, Yu Zhang, Jiahui Yu, Wei Han, Shibo Wang,
+[10] PyTorch. https://pytorch.org/.                               Zhengdong Zhang, Yonghui Wu, et al. Conformer:
+                                                                  Convolution-augmented transformer for speech recogni-
+[11] TensorIR.   https://discuss.tvm.apache.org/
+                                                                  tion. arXiv preprint arXiv:2005.08100, 2020.
+     t/rfc-tensorir-a-schedulable-ir-for-tvm/
+     7872.                                                   [21] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian
+[12] XLA. https://www.tensorflow.org/xla.                         Sun. Deep residual learning for image recognition. In
+                                                                  Proceedings of the IEEE conference on computer vision
+[13] Martín Abadi, Paul Barham, Jianmin Chen, Zhifeng             and pattern recognition, pages 770–778, 2016.
+     Chen, Andy Davis, Jeffrey Dean, Matthieu Devin, San-
+     jay Ghemawat, Geoffrey Irving, Michael Isard, Man-      [22] Chien-Chin Huang, Gu Jin, and Jinyang Li. Swapadvi-
+     junath Kudlur, Josh Levenberg, Rajat Monga, Sherry           sor: Pushing deep learning beyond the gpu memory limit
+     Moore, Derek G. Murray, Benoit Steiner, Paul Tucker,         via smart swapping. In 25th International Conference
+     Vijay Vasudevan, Pete Warden, Martin Wicke, Yuan             on Architectural Support for Programming Languages
+     Yu, and Xiaoqiang Zheng. TensorFlow: A System for            and Operating Systems, pages 1341–1355, 2020.
+     Large-Scale Machine Learning. In 12th USENIX Sympo-     [23] Norman P. Jouppi, Doe Hyun Yoon, Matthew Ashcraft,
+     sium on Operating Systems Design and Implementation          Mark Gottscho, Thomas B. Jablin, George Kurian,
+     (OSDI 16), pages 265–283, GA, 2016. USENIX Associ-           James Laudon, Sheng Li, Peter Ma, Xiaoyu Ma, Thomas
+     ation.                                                       Norrie, Nishant Patil, Sushma Prasad, Cliff Young, Zong-
+[14] Liangyu Chen, Xiaojie Chu, Xiangyu Zhang, and Jian           wei Zhou, and David Patterson. Ten lessons from
+     Sun. Simple baselines for image restoration. arXiv           three generations shaped google’s tpuv4i : Industrial
+     preprint arXiv:2204.04676, 2022.                             product. In 2021 ACM/IEEE 48th Annual International
+                                                                  Symposium on Computer Architecture (ISCA), pages
+[15] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin           1–14, 2021.
+     Zheng, Eddie Yan, Haichen Shen, Meghan Cowan,
+     Leyuan Wang, Yuwei Hu, Luis Ceze, Carlos Guestrin,      [24] Wookeun Jung, Thanh Tuan Dao, and Jaejin Lee. Deep-
+     and Arvind Krishnamurthy. TVM: An automated end-             cuts: a deep learning optimization framework for versa-
+     to-end optimizing compiler for deep learning. In 13th        tile GPU workloads. In 42nd ACM SIGPLAN Interna-
+     USENIX Symposium on Operating Systems Design and             tional Conference on Programming Language Design
+     Implementation (OSDI 18), pages 578–594, Carlsbad,           and Implementation (PLDI’21), pages 190–205. ACM,
+     CA, 2018. USENIX Association.                                2021.
+
+
+
+716   17th USENIX Symposium on Operating Systems Design and Implementation                          USENIX Association
+[25] Woosuk Kwon, Gyeong-In Yu, Eunji Jeong, and Byung-          [36] Wei Niu, Jiexiong Guan, Yanzhi Wang, Gagan Agrawal,
+     Gon Chun. Nimble: Lightweight and parallel gpu task              and Bin Ren. Dnnfusion: accelerating deep neural
+     scheduling for deep learning. In NeurIPS, 2020.                  networks execution with advanced operator fusion. In
+                                                                      42nd ACM SIGPLAN International Conference on Pro-
+[26] Andrew Lavin and Scott Gray. Fast algorithms for con-            gramming Language Design and Implementation (PLDI
+     volutional neural networks. In 2016 IEEE Conference             ’21), pages 883–898. ACM, 2021.
+     on Computer Vision and Pattern Recognition (CVPR),
+     pages 4013–4021, 2016.                                      [37] Xuan Peng, Xuanhua Shi, Hulin Dai, Hai Jin, Weiliang
+                                                                      Ma, Qian Xiong, Fan Yang, and Xuehai Qian. Capuchin:
+[27] Ao Li, Bojian Zheng, Gennady Pekhimenko, and Fan                 Tensor-based gpu memory management for deep learn-
+     Long. Automatic horizontal fusion for gpu kernels.               ing. In Proceedings of the 25th International Conference
+     In 2022 IEEE/ACM International Symposium on Code                 on Architectural Support for Programming Languages
+     Generation and Optimization (CGO), pages 14–27.                  and Operating (ASPLOS’20), 2020.
+     IEEE, 2022.
+                                                                 [38] Bo Qiao, Oliver Reiche, Frank Hannig, and Jürgen Teich.
+[28] Xiaqing Li, Guangyan Zhang, H. Howie Huang, Zhufan               Automatic kernel fusion for image processing dsls. In
+     Wang, and Weimin Zheng. Performance analysis of                  21st International Workshop on Software and Compilers
+     gpu-based convolutional neural networks. In 2016 45th            for Embedded Systems, (SCOPES’18), pages 76–85.
+     International Conference on Parallel Processing (ICPP),          ACM, 2018.
+     pages 67–76, 2016.
+                                                                 [39] Bo Qiao, Oliver Reiche, Frank Hannig, and Jürgen Teich.
+[29] Zheyuan Li, Yingqi Liu, Xiangyu Chen, Haoming Cai,               From loop fusion to kernel fusion: A domain-specific
+     Jinjin Gu, Yu Qiao, and Chao Dong. Blueprint separable           approach to locality optimization. In 2019 IEEE/ACM
+     residual network for efficient image super-resolution. In        International Symposium on Code Generation and Opti-
+     Proceedings of the IEEE/CVF Conference on Computer               mization (CGO’19), pages 242–253. IEEE, 2019.
+     Vision and Pattern Recognition (CVPR) Workshops,
+     pages 833–843, June 2022.                                   [40] Olaf Ronneberger, Philipp Fischer, and Thomas Brox. U-
+                                                                      net: Convolutional networks for biomedical image seg-
+[30] Ze Liu, Yutong Lin, Yue Cao, Han Hu, Yixuan Wei,                 mentation. In Medical Image Computing and Computer-
+     Zheng Zhang, Stephen Lin, and Baining Guo. Swin                  Assisted Intervention – MICCAI 2015, pages 234–241,
+     transformer: Hierarchical vision transformer using               Cham, 2015. Springer International Publishing.
+     shifted windows. CoRR, abs/2103.14030, 2021.
+                                                                 [41] Mark Sandler, Andrew Howard, Menglong Zhu, Andrey
+[31] Lingxiao Ma, Zhiqiang Xie, Zhi Yang, Jilong Xue,                 Zhmoginov, and Liang-Chieh Chen. Mobilenetv2:
+     Youshan Miao, Wei Cui, Wenxiang Hu, Fan Yang, Lintao             Inverted residuals and linear bottlenecks. In 2018
+     Zhang, and Lidong Zhou. Rammer: Enabling holistic                IEEE/CVF Conference on Computer Vision and Pattern
+     deep learning compiler optimizations with rtasks. In             Recognition, pages 4510–4520, 2018.
+     14th USENIX Symposium on Operating Systems De-
+     sign and Implementation (OSDI 20), pages 881–897.           [42] Nahian Siddique, Sidike Paheding, Colin P. Elkin, and
+     USENIX Association, November 2020.                               Vijay Devabhaktuni. U-net and its variants for medical
+                                                                      image segmentation: A review of theory and applica-
+[32] Sachin Mehta and Mohammad Rastegari. Mobilevit:                  tions. IEEE Access, 9:82031–82057, 2021.
+     Light-weight, general-purpose, and mobile-friendly vi-
+     sion transformer. arXiv preprint arXiv:2110.02178,          [43] K. Simonyan and A. Zisserman. Very deep convolu-
+     2021.                                                            tional networks for large-scale image recognition. CoRR,
+                                                                      abs/1409.1556, 2014.
+[33] Ben Mildenhall, Pratul P Srinivasan, Matthew Tancik,
+     Jonathan T Barron, Ravi Ramamoorthi, and Ren Ng.            [44] Philippe Tillet, H. T. Kung, and David Cox. Triton: An
+     Nerf: Representing scenes as neural radiance fields for          Intermediate Language and Compiler for Tiled Neural
+     view synthesis. Communications of the ACM, 65(1):99–             Network Computations, page 10–19. Association for
+     106, 2021.                                                       Computing Machinery, New York, NY, USA, 2019.
+
+[34] Thomas Müller. tiny-cuda-nn, 4 2021.                        [45] Mohamed Wahib and Naoya Maruyama. Scalable kernel
+                                                                      fusion for memory-bound GPU applications. In Inter-
+[35] Thomas Müller, Fabrice Rousselle, Jan Novák, and                 national Conference for High Performance Computing,
+     Alexander Keller. Real-time neural radiance caching for          Networking, Storage and Analysis (SC14), pages 191–
+     path tracing. arXiv preprint arXiv:2106.12372, 2021.             202. IEEE Computer Society, 2014.
+
+
+
+USENIX Association                          17th USENIX Symposium on Operating Systems Design and Implementation         717
+[46] Xueying Wang, Guangli Li, Xiao Dong, Jiansong Li,
+     Lei Liu, and Xiaobing Feng. Accelerating deep learning
+     inference with cross-layer data reuse on gpus. In
+     European Conference on Parallel Processing, pages 219–
+     233. Springer, 2020.
+
+[47] Jiarong Xing, Leyuan Wang, Shang Zhang, Jack Chen,
+     Ang Chen, and Yibo Zhu. Bolt: Bridging the gap
+     between auto-tuners and hardware-native performance.
+     In Proceedings of Machine Learning and Systems, vol-
+     ume 4, pages 204–216, 2022.
+
+[48] Syed Waqas Zamir, Aditya Arora, Salman Khan, Mu-
+     nawar Hayat, Fahad Shahbaz Khan, and Ming-Hsuan
+     Yang.     Restormer: Efficient transformer for high-
+     resolution image restoration. In Proceedings of the
+     IEEE/CVF Conference on Computer Vision and Pattern
+     Recognition, pages 5728–5739, 2022.
+
+[49] Jie Zhao, Xiong Gao, Ruijie Xia, Zhaochuang Zhang,
+     Deshi Chen, Lei Chen, Renwei Zhang, Zhen Geng, Bin
+     Cheng, and Xuefeng Jin. Apollo: Automatic partition-
+     based operator fusion through layer by layer optimiza-
+     tion. In Proceedings of Machine Learning and Systems,
+     volume 4, pages 1–19, 2022.
+[50] Lianmin Zheng, Chengfan Jia, Minmin Sun, Zhao Wu,
+     Cody Hao Yu, Ameer Haj-Ali, Yida Wang, Jun Yang,
+     Danyang Zhuo, Koushik Sen, Joseph E. Gonzalez, and
+     Ion Stoica. Ansor: Generating high-performance tensor
+     programs for deep learning. In 14th USENIX Sympo-
+     sium on Operating Systems Design and Implementa-
+     tion (OSDI 20), pages 863–879. USENIX Association,
+     November 2020.
+[51] Zhen Zheng, Xuanda Yang, Pengzhan Zhao, Guoping
+     Long, Kai Zhu, Feiwen Zhu, Wenyi Zhao, Xiaoyong
+     Liu, Jun Yang, Jidong Zhai, Shuaiwen Leon Song, and
+     Wei Lin. Astitch: Enabling a new multi-dimensional
+     optimization space for memory-intensive ml training
+     and inference on modern simt architectures. In Pro-
+     ceedings of the 27th ACM International Conference
+     on Architectural Support for Programming Languages
+     and Operating Systems, ASPLOS 2022, page 359–373,
+     New York, NY, USA, 2022. Association for Computing
+     Machinery.
+[52] Hongyu Zhu, Ruofan Wu, Yijia Diao, Shanbin Ke,
+     Haoyu Li, Chen Zhang, Jilong Xue, Lingxiao Ma,
+     Yuqing Xia, Wei Cui, Fan Yang, Mao Yang, Lidong
+     Zhou, Asaf Cidon, and Gennady Pekhimenko. ROLLER:
+     Fast and efficient tensor compilation for deep learning.
+     In 16th USENIX Symposium on Operating Systems
+     Design and Implementation (OSDI 22), pages 233–248,
+     Carlsbad, CA, July 2022. USENIX Association.
+
+
+
+
+718   17th USENIX Symposium on Operating Systems Design and Implementation   USENIX Association
+

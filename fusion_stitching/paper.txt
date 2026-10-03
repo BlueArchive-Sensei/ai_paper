@@ -1,0 +1,901 @@
+                                                        FusionStitching: Boosting Memory Intensive Computations for
+                                                                          Deep Learning Workloads
+
+                                                                Zhen Zheng, Pengzhan Zhao, Guoping Long, Feiwen Zhu, Kai Zhu,
+                                                                         Wenyi Zhao, Lansong Diao, Jun Yang, Wei Lin
+                                                                                                  Alibaba Group
+                                                                       {james.zz, pengzhan.zpz, guopinglong.lgp, feiwen.zfw, tashuang.zk,
+arXiv:2009.10924v2 [cs.DC] 17 Dec 2021
+
+
+
+
+                                                                         kevin.zwy, lansong.dls, muzhuo.yj, weilin.lw}@alibaba-inc.com
+
+
+                                                                  Abstract                                     maximize the underlying hardware execution efficiency.
+                                            We show in this work that memory intensive computations               Many current research works mainly focus on compute
+                                         can result in severe performance problems due to off-chip             intensive operations, referring to GEMM and convolution
+                                         memory access and CPU-GPU context switch overheads in a               in this paper, as compute intensive operations dominate the
+                                         wide range of deep learning models. For this problem, current         execution time for many DNN workloads [6, 11, 34, 39, 46],
+                                         just-in-time (JIT) kernel fusion and code generation tech-            such as CNN [20, 38, 41]). Compute intensive operations are
+                                         niques have limitations, such as rough fusion plan exploration        usually realized as efficient libraries (cuDNN, cuBLAS).
+                                         strategies and limited code generation ability. We propose               However, recent advancement of deep learning domain has
+                                         FusionStitching , a deep learning compiler capable of fusing          resulted in many novel model structures in which memory
+                                         memory intensive operators, with varied data dependencies             intensive patterns occupies a large proportion of time. In this
+                                         and non-homogeneous parallelism, into large GPU kernels to            paper, we refer to operators that are not GEMM or convo-
+                                         reduce global memory access and context switch overhead               lution as memory intensive ops, such as element wise [42],
+                                         automatically. FusionStitching widens the range of opera-             transpose [44] and reduction [43]. In addition, the amount
+                                         tion combinations that fusion can target beyond previous JIT          of memory intensive operators in modern machine learning
+                                         works by introducing data reuse of intermediate values. It            models can be very large, causing notable GPU kernel launch
+                                         explores large fusion spaces to decide optimal fusion plans           and framework scheduling overhead. Table 2 contains the
+                                         with considerations of memory access costs, kernel calls and          collected metrics of various models with TensorFlow imple-
+                                         resource usage constraints. FusionStitching tunes the optimal         mentation. The execution time of memory intensive ops can
+                                         stitching scheme with a domain-specific cost model efficiently.       be more than that of compute intensive ops in some cases, and
+                                         Experimental results show that FusionStitching can reach up           the kernel calls can be up to 10,406. Optimizing compute in-
+                                         to 2.21× speedup compared to state-of-the-art, with 1.45×             tensive ops alone is inadequate to unlock the full performance
+                                         on average. Besides these experimental results, we integrated         potential for these models.
+                                         our approach into a compiler product and deployed it onto a              It is not feasible to build library for memory intensive op-
+                                         production cluster for AI workloads with thousands of GPUs.           erations, because a single memory intensive op is too simple
+                                         The system has been in operation for more than 4 months and           while the combination of such ops various in different models
+                                         saves 7,000 GPU hours on average for approximately 30,000             and changes fast as the model evolves. Thus, memory inten-
+                                         tasks per month.                                                      sive ops are usually generated just-in-time with compilation
+                                                                                                               techniques in modern machine learning frameworks.
+                                                                                                                  A common approach to address memory intensive patterns
+                                         1   Introduction                                                      is computation fusion. Prior works have explored the basic
+                                         Recent years have witnessed a surge of industry scale appli-          idea in AI workloads [8, 29], database [50], image process-
+                                         cations of deep learning models, ranging from images/videos,          ing [4, 32, 34], and HPC applications [25, 48] ahead-of-time
+                                         text/NLP, to billion scale search and recommendation sys-             (AOT). However, how to fuse kernels just-in-time (JIT) ef-
+                                         tems [49]. Such workloads are typically expressed as computa-         ficiently, with unpredictable varied dependencies and non-
+                                         tion graphs, and mapped to hardware through domain specific           homogeneous parallelism, is still an open problem. Note that
+                                         frameworks (TensorFlow [2], PyTorch [1], MXNet [10], etc).            the rapidly evolving AI models introduce diverse and complex
+                                         Given the flexibility and expressiveness of modern execution          combination patterns of ops.
+                                         frameworks, there are still challenges regarding to transform-           Existing JIT kernel fusion techniques use simple code gen-
+                                         ing high level computation graphs into efficient kernels to           eration and fusion exploration approach. As for XLA [26],
+
+
+                                                                                                           1
+state-of-the-art JIT optimization engine, it only focuses on            subgraph are grouped together to form a set of fusion patterns.
+memory access optimization for memory intensive ops, but                Note that naive composition of multiple computations may
+lacks consideration of computation characteristics. In a fu-            cause notable performance slowdown, as different portions of
+sion kernel generated by XLA, each thread is only capable of            the kernel may have conflicting memory layout, paralleliza-
+reading intermediate results produced by itself. If two threads         tion and on-chip resource requirements [56]. A deep learning
+require the same intermediate value, they will recompute it             computation graph usually brings huge search space about
+independently. It works good for light element-wise ops (like           operation combinations. It is not feasible to evaluate all pos-
+add, sub, mul), but introduces severer re-computation over-             sible combinations with complexity of up to O(2V ) where V
+head for ops like reduction, tan, log and other expensive ops.          is the number of ops in the computing graph. We formulate
+XLA avoids re-computation overhead by only allowing expen-              the fusion plan searching as an approximate dynamic pro-
+sive ops (reduction, tan, et.al.) appear in the tail of a fusion,       gramming problem with complexity of O(V + E), where E is
+that is not being a producer within a fusion. This trade-off            the number of edges in the graph. The approximate dynamic
+limits the fusion exploration space. Meanwhile, XLA uses a              programming process produces a limited set of promising fu-
+conservative fusion exploration strategy. On one hand, it is            sion patterns with a light-weight cost model. FusionStitching
+a rule-based strategy which cannot cover the various combi-             applies beam search to generate the overall fusion plan with
+nation of element wise ops and tensor shapes. On the other              these fusion patterns.
+hand, it uses a greedy approach that is easily to fall into local          We realize FusionStitching into TensorFlow as an opti-
+solution.                                                               mization component beyond XLA. All the optimizations are
+   We propose FusionStitching , a JIT optimization framework            opaque to users. FusionStitching supports JIT optimization
+to systematically perform fusion space exploration and gen-             for both training and inference.
+erate high-performance kernels efficiently. FusionStitching                We evaluate FusionStitching on a set of common machine
+broadens the fusion exploration space by exploring data reuse           learning models, ranging from natural language processing,
+between ops. If the intermediate data can be reused by a set            OCR, speech recognition to searching and recommendation
+of threads, these threads could exchange the intermediate data          models. FusionStitching achieves up to 2.21× speedup com-
+through register-shuffle and shared memory. This approach               pared with XLA, with 1.45× on average.
+allows expensive ops to be fused in the middle of a kernel                 In summary, this work makes the following contributions:
+and widens the fusion possibility. With the expanded fusion                 • It reveals the importance of memory intensive ops, and
+exploration space, FusionStitching is able to compose a large                 broadens the range of op combinations that JIT fusion
+set of ops with diverge and complex patterns into one GPU                     targets by introducing data reuse of to-be-fused ops.
+kernel. This is effective to reduce off-chip memory accesses                • It provides a set of fusion scheme abstractions for mem-
+and context switch overhead. Meanwhile, FusionStitching                       ory intensive ops in machine learning workloads, and
+applies a more effective fusion exploration approach to find                  proposes an approach to generate efficient GPU kernels
+good fusion patterns. FusionStitching addresses two main                      given very complex fusion patterns.
+challenges of large scope JIT fusion.                                       • It proposes a technique to explore good fusion plans just-
+   The first challenge is how to generate efficient GPU ker-                  in-time in the expanded search space of op composition,
+nel given unpredictable complex fusion pattern just-in-time.                  along with a two-layer cost model of GPU kernels.
+A fusion pattern reveals a set of operators to be fused into                • It provides an industry level realization that is opaque
+a single GPU kernel. It is non trivial to handle a complex                    to users and evaluates with various modern machine
+fusion pattern consisting of a broad range of memory inten-                   learning models on production cluster.
+sive ops with various dependence relationships and tensor
+dimensions. We provide 4 types of stitching scheme abstrac-
+tions covering the main patterns for memory intensive ops in            2     Motivation and Challenge
+machine learning workloads, including independent packing,
+re-computation, intra-warp reuse and intra-block reuse scenar-          2.1     Motivation
+ios. With the stitching schemes, we design an approach that             JIT fusion is the state-of-the-art technique to reduce context
+divides a fusion into several sub-groups. Different sub-groups          switch and memory access overhead of intensive memory
+use independent schedules and adjacent sub-groups commu-                operations for machine learning workloads. As the state-of-
+nicate with proper stitching scheme. FusionStitching explores           the-art fusion engine, XLA only supports thread-local data
+sub-group and stitching scheme settings automatically for               transferring for fusion, which relies on index analyzing and re-
+a fusion pattern, along with launch dimension enumeration.              computation to improve thread locality. A bad case is to put a
+Instead of using rule-based approach, we design a cost model            reduction in the middle of a fusion pattern. If different threads
+for code generation tuning.                                             require the same value of reduction result, each thread needs
+   The second challenge is to find the optimal fusion plan              to recompute the reduction independently and redundantly. To
+given complex op graph. A fusion plan reveals how ops in a              avoid this, XLA does not fuse operations that lead to middle-
+
+
+                                                                    2
+reductions. As a result, this strategy misses many optimization        in the overall time for some models. Off-chip memory traffic
+exploration space.                                                     time usually occupies a large portion of the overall execution
+                                                                       time of memory intensive ops. By fusing a large quantity of
+                         xla-fusion.7                                  operations, our system is able to reduce CPU-GPU context
+                        dim[128,1024]                                  switch overhead and leverage high speed on-chip memory to
+                                                stitching-fusion
+                         ele-wise ops           dim[128,1024]          reuse intermediate data between ops.
+   xla-fusion.3
+  dim[128,1024]                                   ele-wise ops
+                           reduce
+   ele-wise ops                                                        2.3    Challenges
+                                                    reduce
+      reduce                                                           Although data reuse is a potential opportunity to fuse a large
+                                                  ele-wise ops
+                               xla-fusion.1                            scope of ops together to avoid redundant re-computation, there
+                              dim[128,1024]                            are several main challenges for both applying reuse given a
+                                                    reduce
+        xla-fusion.2           ele-wise ops                            fusion pattern and deciding op fusion strategy.
+         dim[128]                                 ele-wise ops             As for applying reuse for a given fusion pattern to generate
+        ele-wise ops                                                   kernel:
+                                                                           • The first challenge is how to evaluate reuse bene-
+                  XLA                           FusionStitching
+                                                                             fit. Reuse is not always better than re-computation.
+Figure 1: The difference of fusion pattern between XLA and                   Reuse will lead to extra inter-thread data communication,
+FusionStitching for Layer Normalization.                                     whereas re-computation introduces redundant compute
+                                                                             overhead but without inter-thread communication. Be-
+   Figure 1 shows how XLA and FusionStitching perform                        sides, introducing reuse with shared memory may hurt
+fusion for layer normalization. XLA forms 4 fusions, where                   kernel occupancy, thus hurts parallelism.
+fusion.3 and fusion.7 end with reductions and fusion.2 ends                • The second challenge is how to apply reuse. There
+with expensive operation. XLA does not do other fusion to                    are two types of data reuse: intra-warp reuse and intra-
+avoid re-computation overhead, with the drawback of CPU-                     block reuse. Intra-warp/block reuse means that threads
+GPU context switch and off-chip memory access overhead.                      within a warp/block reuses intermediate data produced
+While FusionStitching generates only one kernel with all                     by other threads within the same warp/block. The trade-
+intermediate results residing in on-chip memory and involves                 off is that, intra-warp reuse has less memory access over-
+no CPU-GPU switching. No re-computation is introduced in                     head while intra-block reuse has better parallelism.
+FusionStitching .
+                                                                           For a given machine learning model, the challenge is to
+   Static libraries are not feasible to solve this problem as
+                                                                       decide what ops should be fused together. XLA also tries to
+a single memory intensive operation is lightweight and the
+                                                                       solve this challenge, but with limited exploration space. One
+combinations of them vary in different models. TVM [11,
+                                                                       main problem is that, forming a fusion pattern by data reuse is
+55] mainly focuses on compute intensive operations but not
+                                                                       not always better than separate kernels. Reuse requires data lo-
+fusion optimization, whereas XLA only provides simple rule-
+                                                                       cality within thread-block or warp, which can potentially limit
+based fusion strategies for memory intensive ops. In addition,
+                                                                       parallelism. Take reduction as an example, reuse of reduction
+TVM relies on pre-defined schedules for code generation and
+                                                                       result requires to compute reduction within a block or warp.
+usually requires a long time for tuning.
+                                                                       However, some reductions perform better with several blocks
+                                                                       work together, which has higher parallelism. Not fusing such
+2.2     Observation                                                    a reduction with its consumers may result in better perfor-
+In this work, we have analyzed a variety of machine learning           mance, even with context switch and off-chip memory access
+workloads (Section 7). we get two main observations.                   overhead. Intra-block reuse may further hurt parallelism as
+   Severe Context Switch Overhead Context switch overhead              it requires extra shared memory. Another typical problem is
+between CPU and GPU is a severe performance issue. Table 2             that, when operation A can be fused with either operation B
+shows the breakdown analysis of a wide range of machine                or operation C, while B and C cannot be fused together due
+learning applications. The count of GPU kernel calls (#) for           to some limitation, it is not always easy to decide which one
+TensorFlow implementation can reach up to 10,406, which                to fuse for A. Rule-based approaches, like XLA, fail to find
+leads to large kernel launch overhead. Even fused with XLA,            effective fusion plans for varied models.
+the kernel calls can be still up to 6,842. As a result, both
+scheduling and pre-/post-processing time on CPU brought by             3     Overview
+machine learning framework dominate the execution time for
+some models (like BERT inference, DIEN, ASR, and CRNN).                3.1    Data Reuse
+   Large Portion of Memory-intensive Ops Also in Table 2,              As described before, FusionStitching widens fusion possi-
+the execution time of memory intensive ops can be up to 40%            bilities by introducing data reuse, a rarely used method in
+
+
+                                                                   3
+state-of-the-art JIT fusion techniques. Data reuse can be ap-                  fusion patterns, and selects the best fusion plan from candi-
+plied when different threads processing operation B requires                   date plans with a cost model. Code generator generates GPU
+the same value generated by operation A. We assume B is                        kernels for each fusion pattern produced by fusion explorer.
+the consumer of A. The threads requiring the same value can                    We pre-define a set of schedules (i.e., templates) for each kind
+read the same data with inter-thread communication, but do                     of operators. A schedule describes code generation about how
+not have to re-compute it redundantly like in XLA. We ob-                      an operation runs in parallel. Meanwhile, it indicates whether
+serve that tensor shapes of a sequence of memory intensive                     threads of an operation reuse data with other threads and the
+operations always shrink and broaden frequently due to oper-                   reuse scope, and whether this operation produces data for con-
+ations like reduce, broadcast, gather, and slice. Thereby the                  sumer’s reuse. FusionStitching divides operations of a fusion
+opportunity to explore data reuse is large.                                    pattern into several groups, and enumerates all valid combi-
+   In our work, we explore both intra-warp reuse and intra-                    nations of the schedules in the groups. With a cost model that
+block reuse, corresponding to warp composition and block                       estimates the performance of each schedule and launch dimen-
+composition in figure 3. Take reduction as an example, intra-                  sion setting, FusionStitching selects the best configuration of
+warp reuse means that each warp does reduction for a row                       the fusion pattern and generates GPU kernel code.
+of data and stores result in the register of the first lane of                    We design a two-level cost model in FusionStitching . Fu-
+the warp. Consumers of the reduction read data with register-                  sion explorer needs to search in large search space and applies
+shuffle from the first lane. Intra-block reuse does reduction                  delta-evaluator (5.4), which is fast but less accurate. Code
+for the row with all threads in the block and stores results in                generator operates on merged GPU kernels and needs more
+shared memory. Consumers of the reduction read data from                       accurate performance estimation, and thus we apply latency-
+shared memory. This approach enables stitching operations                      evaluator (4.3) which is more accurate but slower.
+with on-chip memory while avoiding re-computation. Data                           We first describe how code generator works in section 4
+locality should be guaranteed for correct data reuse. Intra-                   and then describe fusion explorer in section 5.
+warp reuse requires warp level data locality, and intra-block
+reuse requires block level data locality.
+                                                                               4     Code Generation
+                                       Fusion Explorer                         Code generator takes a fusion pattern as input, and produces
+                                                                               a GPU kernel that implements the fused operators. It is non-
+                    candidate-patterns                                         trivial to fuse multiple ops into one high performance GPU
+                        searching                                              kernel due to various dependence scenarios and parallelism
+                     approximate DP
+                                                                               incompatibilities.
+                                              beam search                         The combination patterns of memory intensive operators in
+                     delta-evaluator           candidate
+ Computation
+                                                                               machine workload are numerous, but basic kinds of memory
+                                              fusion plans   fusion plan
+   Graph                                                                       intensive ops are limited. We made three classifications: light
+                                                                               element-wise (most elem-wise ops), expensive element-wise
+                                       Code Generator                          (tan, exponential, et.al.), and reduction ops. We pre-define
+                                                                               a set of schedules for each kind of memory intensive ops.
+                                   Kernel Tuning                               The left problem of code generation is how to stitch different
+   Kernels'           IR             dimension &
+                                                                               operators into one kernel and what schedule each individual
+   Binary           Emitter        schedule tuning                             op applies.
+                                                             op grouping
+                                  latency-evaluator           & schedule          We first systematically investigate four kernel composi-
+                                                             enumeration       tion schemes (4.1) that covers common execution patterns
+                                                                               for memory intensive operations. With these composition
+              Figure 2: Overview of FusionStitching .                          schemes, we used an automatic generation solution based
+                                                                               on performance modeling (4.3) to find good schedules and
+                                                                               generate code for the fusion pattern (4.2).
+3.2 FusionStitching System
+We divide optimization process into two stages in Fusion-                      4.1    Kernel Composition Schemes
+Stitching : fusion exploration and code generation. The two                    We study about four kernel composition schemes, which indi-
+stages are conceptually independent but highly related.                        cate main behaviors of common memory intensive ops. Dif-
+   As shown in figure 2, FusionStitching consists of fusion                    ferent scheme indicates different data dependence and parallel
+explorer and code generator. Fusion explorer generates pos-                    behaviors of kernels to fuse, ranging from no dependence to
+sible fusion patterns that may enjoy data reuse. It then applies               complex cross-thread dependence, and from uniformed paral-
+beam search to form several candidate fusion plans with these                  lelism to non-homogeneous computations. Figure 3 illustrates
+
+
+                                                                           4
+                                                                      4.2    Kernel Generation
+ Op A
+                                                                      Code generation in FusionStitching is not as straightforward
+          gmem gmem                                                   as XLA, because of the trade-off of composition schemes we
+                                       register
+                           reg reg                   shmem            discussed above. We use a cost model based tuning approach
+                                       shuffle
+          gmem gmem
+                                                                      in FusionStitching , and ease the process by op grouping.
+ Op B                                                                    According to the four types of composition schemes, we
+                                                                      pre-define a set of schedules for each kind of operators (light
+             Kernel       Thread      Warp           Block
+                                                                      element-wise, expensive element-wise, and reduction ops).
+             Packing    Composition Composition    Composition
+                                                                      Specifically, we define a single template for light element-
+Figure 3: The four types of composition schemes when stitch-          wise ops representing kernel packing and thread composition.
+ing op A and B together. Gmem: global memory (different               Note that we find kernel packing and thread composition can
+square indicates different memory address). Reg: register.            be described with the same schedule. We define three sched-
+Shmem: shared memory.                                                 ules for expensive element-wise ops and reduction ops. The
+                                                                      first one represents kernel packing and thread composition.
+the four kind of composition schemes.                                 The second one stores intermediate result to the register of
+   Kernel Packing packs computations of ops with no data              the first lane in each warp, representing warp composition.
+dependence. This scheme is instrumental in reducing context           The third one stores intermediate result to shared memory,
+switch overhead of kernel launch and framework scheduling.            representing block composition.
+It also reduces loop control overheads in instruction level. To          FusionStitching enumerates all schedule combinations of
+reduce control flow overhead, we perform aggressive loop              ops. It estimates these combinations according to cost model
+fusion [5, 18] to merge as many element-wise ops as possible          (sec 4.3). To ease the enumeration process, we divide ops in
+into a single loop structure when these ops have the same             a fusion pattern into several groups. Each group applies one
+parallelism dimension.                                                schedule and different groups transfer intermediate data with
+   Thread Composition fuses dependent ops and transfer in-            warp/block level reuse.
+termediate results via registers within a local thread context.          We group ops according to op types. Given a fusion pattern,
+This is the fusion scheme XLA applies. This may introduce             we enumerate a small set of grouping strategies. We call sub-
+redundant computations between threads requiring the same             root as the output op of a group, and root as the output of the
+value.                                                                fusion. We first identify sub-roots and generate groups rooted
+   Warp Composition fuses dependent operators and apply               from sub-roots and root. Reduce ops are always regarded as
+intra-warp reuse. This scheme employs register shuffle to             sub-root. Expensive element-wise ops are enumerated to both
+communicate between threads within a warp. A typical case             sub-roots and non sub-roots. Other ops are neither sub-roots.
+is warp reduction and its consumers, which applies warp level         This leads to a set of groups rooted from reduction, expensive
+reduction and leverages registers to transfer intermediate re-        element-wise and root ops.
+sults to threads of its consumers.                                       The insight of the grouping approach is that, the schedule
+   Block Composition applies intra-block reuse and unlocks            of non sub-roots can be determined by the schedule of sub-
+the potential to enable composing non-homogeneous compu-              roots by tensor indices propagation. Thus we only need to
+tations into large fused kernels, as long as these computations       enumerate the schedule of sub-roots and root ops, and we can
+can communicate within block level. It makes use of shared            propagate to get schedules of all ops.
+memory to transfer intermediate results for data reuse.                  FusionStitching enumerates grouping strategies, and emu-
+   Warp composition and block composition are flexible                lates schedules of every sub-root/root op and launch dimen-
+schemes as they allow different ops to execute in independent         sion of the fused kernel. As data reuse requires correct data lo-
+schedules in the fused kernel. The only requirement is to keep        cality in the reuse scope, schedules do not match data locality
+warp/block locality between producers and consumers. These            requirement are discarded. After estimating the performance
+two schemes are essential to compose a broad range of op              of each enumeration with latency-evaluator, FusionStitch-
+kinds with various parallelism characteristics and dependence         ing selects code generation strategy with the best estimated
+relationships efficiently.                                            performance.
+   As far as we know, FusionStitching is the first work to
+thoroughly study about all above composition techniques
+                                                                      4.3    Kernel Evaluation: Latency-Evaluator
+for just-in-time compilation of memory intensive operations
+for machine learning workloads. XLA only realizes kernel              FusionStitching requires an accurate estimation for kernel
+packing and thread composition. We do not stitch ops that             performance for code generation strategy. Fortunately, as the
+involves inter-block communications as it results in global           searching space of code generation is not very large, we can
+memory level synchronization and introduces high overhead.            tolerate a relative slow cost model.
+
+
+                                                                  5
+   We build latency-evaluator as in equation 1, where L is the         Thread local redundant calculations mainly come from mem-
+estimated execution cycles of a fused kernel.                          ory access index calculations and thread local intermediate
+                                                                       values. It is because different parts in a fusion kernel may use
+                            L = Nwave × Lwarp                          different schedules, and index and some intermediate values
+                                       Nwarp                           are generated independently within each schedule, even in the
+                         Nwave =                             (1)
+                                   Occupancy                           same thread. Before generating the code, FusionStitching first
+                     Lwarp = Ninstruction ×CPI                         analyzes the overall index and intermediate value characteris-
+   Nwave means how many waves of warps that will be pro-               tics and then organizes the output code to reuse computations
+cessed by a GPU, noting that the warps for a large GPU kernel          and data as much as possible.
+will be spitted into several waves to be executed on a GPU
+where warps in the same wave executes concurrently. Lwarp              5     Fusion Exploration
+means the latency (cycles) a single warp spends in the fused
+kernel. The multiply of Nwave and Lwarp stands for the total           As noted before, rule-based approach in XLA is not adequate
+cycles to execute the fused kernel.                                    to handle complex fusion decisions. We use a cost-based
+   We estimate Nwave with the total number of warps to issue           searching approach to find good fusion plans. We propose an
+(Nwarp ) and the occupancy of the fused kernel (Occupancy).            approximate dynamic programming approach to search for a
+Nwarp is calculated with launch dimension and tensor shape.            set of promising fusion patterns(5.2) which may overlap with
+We calculate Occupancy with launch dimension, shared mem-              each other. The searching process is guided by a light-weight
+ory usage (Sec. 4.4) and estimated register usage. We estimate         domain-specific cost model(5.4). FusionStitching finally gen-
+the register usage by analyzing the life time of every interme-        erates the overall fusion plan by selecting fusion patterns(5.3).
+diate value and get the maximum register usage for a thread.
+Also, we estimate shared memory usage by life time ana-                5.1    Fusion Problem Definition
+lyzing. This approach is accurate enough for us to calculate
+Occupancy.                                                             We formulate fusion exploration as a subgraph searching
+   As for Lwarp , we use the reported CPI numbers for different        problem. For computation graph G = (V, E), where V and
+types of ops [21, 22] and multiply it with the total instruction       E are sets of vertices and edges respectively. We define a
+count (Ninstruction ) we estimated.                                    fusion pattern Pi = (Vi , Ei ) as a subgraph of G, with Vi ⊆ V ,
+                                                                       Ei ⊆ E. A fusion plan is a set of disjoint fusion patterns
+                                                                       S = {P0 , · · · , Pk−1 }. The score function of Pi is annotated as
+4.4    Shared Memory Optimization                                       f (Pi ). The higher the performance is, the larger f (Pi ) is. So
+It is essential to use shared memory moderately as large               the goal of computation fusion problem is to find fusion plan
+amount of shared memory usage hurts kernel parallelism,                S with maximal ∑ki=1 f (Pi ).
+especially for large granularity compositions. To use as much
+shared memory as possible while not hurting parallelism, we            5.2    Explore Fusion Patterns
+explore a dataflow based shared memory sharing technique.
+The insight is that, FusionStitching reuses previous allocated         A Brute-force way to enumerate all fusion patterns has a
+shared memory as much as possible to reduce unnecessary                complexity of up to O(2V ) without pruning. We proposed an
+shared memory allocation.                                              approximate dynamic programming approach with complex-
+   We use dominance tree algorithm [12] for shared memory              ity of O(V + E) to find good fusion patterns.
+dataflow analysis. The approach takes a computation graph                  The basic idea of fusion exploration is that, we generate
+and shared memory requests as input, and outputs an allo-              candidate-patterns starting from each vertex in post-order in
+cation map. To optimize shared space sharing, we traverse              the graph, and select and compose final fusion plan with these
+ops of the computation graph in topological order. When an             candidate patterns. The candidate-patterns starting from ver-
+op does not need shared space, previous allocation informa-            tex Vi is the set of fusion patterns whose producer node is
+tion will be propagated forward. If an op needs shared space,          Vi . We describe how we generate candidate-patterns for each
+we merge allocation information of all its operands, test the          vertex in this section and describe how to compose the final
+dominance relation to check if we can share any previously             fusion plan in section 5.3
+allocated space for current op, and reuse the space if possible.           Given a computation graph G, we get a topological sorting
+                                                                       list. We generate candidate-patterns for vertices in post-order,
+                                                                       from the last vertex to the first vertex. This is to guarantee
+4.5    Computation Reuse Optimizations                                 that each searching results in a fusion pattern with current
+Beside the reuse of intermediate result between producers              vertex as producer.
+and consumers with shared memory and register shuffles, Fu-                Equation 2 shows the approximate dynamic programming
+sionStitching also reduces thread local redundant calculations.        process. Ci is the set of all consumers of Vi . PatternReduc-
+
+
+                                                                   6
+                      1   top 3 candidate-patterns for                                                                 0
+      0                     V5: {5}, {5,2}, {5,2,1}
+                            V6: {6}, {6,3}, {6,3,1}                                                                    1
+                            V7: {7}, {7,4}, {7,4,1}
+      1               2 grouping of V8's consumers: {5,6}, {7}
+                                                                                                                   2       3    4
+                      3.1 candidate-patterns of V8 with group {5,6}:
+                                                                                                      h
+  2       3       4         {8}
+                            {8,5}, {8,5,2}, {8,5,2,1}                                                              5       6    7
+                            {8,6}, {8,6,3}, {8,6,3,1}
+  5       6       7         {8,5,6}, {8,5,6,3}, {8,5,6,3,1}
+                            {8,5,2,6}, {8,5,2,6,3}, {8,5,2,6,3,1}                                                      8
+                            {8,5,2,1,8}, {8,5,2,1,6,3}
+      8                    get top-3: {8,5,2,1,6,3}, {8,5,2,1}, {8,6,3,1}                                                  9
+                      3.2 candidate patterns of V8 with group {7}:                         Figure 5: Fusion merge of remote patterns.
+                            {8}, {8,7}, {8,7,4}, {8,7,4,1}
+              9            get top-3: {8,7,4,1}, {8,7,4}, {8,7}
+                      4 merge 3.1 and 3.2 and get overall top-3:                                A
+                            {8,5,2,1,6,3,7,4}, {8,5,2,1,7,4}, {8,6,3,1,7,4}
+                                                                                                      B                    AC       B
+
+                                                                                                C
+Figure 4: PatternReduction case to generate candidate-
+patterns for V8 .
+                                                                                  Figure 6: Cyclic Dependence: a cyclic dependence occurs
+tion is the approach to get candidate patterns of Vi according                    after fusing nodes A and C together
+to all its consumers’ candidate pattens.                                          sumers number of a vertex is very large. We first divide the
+                                                                                  consumers into two groups. To get candidate patterns of a
+                  Pi = PatternReduction(Ci )                 (2)                  group, we divide the group further until it is small enough.
+   We describe PatternReduction approach with an example                             A constraint of a fusion pattern is that, no cyclic depen-
+shown in Figure 4, where V0 is the root vertex who produces                       dence is allowed. Figure 6 shows an example that a cyclic
+the output of whole graph. Assume that candidate-patterns                         dependence occurs after fusion. FusionStitching discards pat-
+for vertices before V8 have already been generated. (We only                      terns with cyclic during the searching process. Meanwhile,
+explore top k patterns in candidate-patterns for each vertex                      FusionStitching only explores fusion patterns that the code
+according to score function f . We set k as 3 in this case.) We                   generator can process. It does not form fusion patterns with
+will generate candidate-patterns for V8 with its consumers’                       cross-block communication requirement.
+information. A naive approach is to append V8 to all possible                        Remote Fusion To further reduce the context switch over-
+combinations of patterns in its consumers’ candidate-patterns                     head between CPU and GPU, we try to merge fusion patterns
+sets, and select the top 3 patterns within the appended com-                      that are not adjacent in the graph after above procedures. As
+binations. However, the combinations will be huge when the                        is shown in Figure 5, we add a virtual vertex h as the producer
+consumer number and top k setting is large, noting that JIT                       for all vertices and apply PatternReduction. We finally get
+approach requires timely optimization. Instead, we design an                      the candidate-patterns of Vh , which includes the fusion of re-
+approximate divide-and-conquer process to find top 3 patterns                     mote patterns that are not adjacent. The remote pattern fusion
+with limited complexity as PatternReduction.                                      helps to reduce generated kernels and thus reduces the context
+   We first divide the consumers of V8 into several groups and                    switch overhead. Remote fusion results in kernel packing for
+find candidate-patterns for V8 considering these groups inde-                     code generation.
+pendently, and finally compose final candidate-patterns by
+reducing the above results of all groups. We assume the group
+number in this case is 2 (group {V5 , V6 } and group {V7 }).                      5.3    Generate Overall Fusion Plan
+For group {V5 ,V6 }, we enumerate all possible combinations                       All candidate-patterns of all vertices, which may overlap with
+of patterns in candidate-patterns of V5 and V6 . Specifically,                    each other, form a new set E. The insight of forming good
+there are 15 possible combinations between V5 and V6 , includ-                    fusion plan is to select non-overlapped patterns from E with
+ing empty set. We append V8 to each of the 15 combinations                        high score of f . Note f means how much cost the pattern
+and select the top 3 patterns as the temporary candidates                         saves (sec 5.4).
+associated to group {V5 ,V6 }. We get another top 3 patterns                         FusionStitching uses beam search [17] to generate top-3
+considering group {7} as temporary candidates. We finally                         (width of the beam) candidate fusion plans, and finally selects
+select the final top 3 patterns as candidate-patterns for V8                      the best plan within the 3 candidates with latency-evaluator
+from all above 6 temporary candidates. Note we validate top                       (sec 4.3).
+patterns according to score function f .                                             Specifically, FusionStitching maintains 3 buffer sets to store
+   The PatternReduction process above is recursive if con-                        candidate fusion plans. It traverses from the producer vertex
+
+
+                                                                              7
+to the consumer vertex in op graph G, and try to append each           6     Implementation
+candidate pattern of each vertex to each buffer set in turn
+if it introduces no overlapping. It may result in more than 3          The fusion exploration and code generation techniques we
+temporal sets after appending in each iteration, and will select       studied requires heavy implementation efforts and will be
+top-3 with highest accumulated f as new buffer sets.                   a burden if left to users. Meanwhile, TensorFlow evolves
+                                                                       fast and porting the realization of FusionStitching from one
+   After traversing all vertices, each buffer set forms a candi-       TensorFlow version to another one is heavy.
+date fusion plan. FusionStitching will use the more accurate              To ease the using of FusionStitching and make it portable
+cost model latency-evaluator to estimate which candidate               to any version of TensorFlow, we build FusionStitching as
+plan performs the best. The best one is the final fusion plan.         a stand alone add-on. Users can make use of all the tech-
+                                                                       niques without changing any model script, but only need to
+                                                                       specify FusionStitching path and setup environment to enable
+                                                                       FusionStitching beyond TensorFlow XLA.
+5.4    Fusion Evaluation: Delta-Evaluator                                 Specifically, we add FusionStitching as an extra pass upon
+                                                                       XLA framework. After XLA finishes all its optimizations,
+FusionStitching applies delta-evaluator to form the score              including its basic fusion pass, we feed the fusion results of
+function f . One insight is that, we only need to estimate the         XLA into fusion explorer to get larger scope fusions. We do
+performance gain or loss when forming a fusion pattern, but            not disable the basic XLA fusion pass as there is no conflict to
+do not require accurate estimation of the overall execution            apply FusionStitching based on the naive fusions and a basic
+time. With this insight, the score function f represents the           fusion reduces optimization time of FusionStitching .
+performance gain or loss of a fusion pattern only.                        We realize a GPU IR emitter module with the techniques of
+  There are three main factors in delta-evaluator: reduced             code generator in FusionStitching . The fusion plan generated
+memory access latency, reduced CPU-GPU context switch                  by fusion explorer goes through this IR emitter. The IR emitter
+overhead, and performance penalty of kernel fusion. The score          will compile fusion patterns into llvm IR, GPU ptx IR, and
+function f is the summary of these three parts, shown in               finally GPU binary sequentially.
+equation 3.                                                               Note that the input of FusionStitching is the basic fusion
+                                                                       results of XLA, and not every basic fusion will be merged
+          f = Treduced_mem + Treduced_calls − Tpenalty      (3)        into a FusionStitching fusion pattern as a result. The basic
+                                                                       fusions not merged into larger fusions by FusionStitching will
+   We estimate reduced memory access latency (Treduced_mem )           finally go through basic compilation pass of XLA.
+with two factors. The first is the amount of memory traffics
+                                                                          All the above implementations are realized as a hook of
+between operators to be fused, which can be calculated ac-
+                                                                       TensorFlow, and will be called if FusionStitching is loaded
+cording to the shape and type of input and output tensors. And
+                                                                       and environment is set.
+the second is the change of memory type to store the interme-
+                                                                          To hide the optimization tuning time, we develop async-
+diate values between operations. We build a regression model
+                                                                       compilation mode in FusionStitching library. As for training,
+to predict the reduced memory access latency when changing
+                                                                       if users set environment as async-optimization, the first sev-
+the memory type from global memory to register or shared
+                                                                       eral iterations will not execute binaries generated by Fusion-
+memory, when given memory traffic amount. The regression
+                                                                       Stitching while FusionStitching is still running in background
+model is based on latency data we collected offline on various
+                                                                       asynchronously. After FusionStitching generates optimized
+GPU vendors with various amount of data traffic.
+                                                                       kernels for the model, the non-optimized ops will be replaced
+  Treduced_calls can be easily estimated by multiplying the            with that of FusionStitching in latter iterations.
+number of fused kernels with a fixed value representing aver-
+age CPU-GPU context switch time we collected.
+   The performance penalty (Tpenalty ) is estimated by a sim-          7     Evaluation
+plified version of latency-evaluator (sec 4.3). As fusion plan
+                                                                       7.1    Experimental Setup
+exploration faces a very large searching space, using latency-
+evaluator directly takes too long time for JIT optimization.           In this section, we evaluate FusionStitching using a variety of
+The most time consuming part of latency-evaluator is the               machine learning applications with different characteristics
+estimation of Occupancy. To estimate Occupancy fast, we                in different fields. Table 1 summarizes the various fields of
+use a fixed number (16) as registers number, and use the max-          the evaluated applications and the characteristics of these
+imal shared memory usage in and between any ops within                 applications. These applications range from images (CRNN
+a fusion pattern as the overall shared memory usage. Life              [37]), speech (ASR [52]), NLP (Transformer [47], BERT [15]),
+time analyzing of registers and shared memory is discarded             to internet scale E-commerce search and recommendation
+in delta-evaluator.                                                    systems (DIEN [57]). The building blocks of these workloads
+
+
+                                                                   8
+                          Table 1: Workloads for evaluation.                                  be enabled default as it suffers from negative optimizations
+                                                                                              for many cases.
+             Model                      Field                   Mode         Batch Size
+                                                                                                 Overall, the performance benefit of FusionStitching comes
+      BERT                           NLP                        Both               32         from both reduced CPU-GPU context switch and off-chip
+      DIEN                     Recommendation                   Both              256
+   Transformer                       NLP                       Training          4096         memory access. FusionStitching gives a good solution to
+      ASR                     Speech Recognition              Inference            8          the problems we found (sec 2.2). We provide performance
+     CRNN                           OCR                       Inference             8         breakdown information in the following section.
+
+
+            3                                                                                 7.3    Performance Breakdown
+           2.5
+            2
+                                                                                              Table 2 shows the kernel breakdown information, including
+ Speedup
+
+
+
+
+           1.5                                                                                execution time (T) of memory intensive ops (Mem), compute
+            1                                                                                 intensive ops (Math), CPU time (CPU, kernel launch and
+           0.5                                                                                framework scheduling), CUDA memcpy/memset activities
+            0                                                                                 (Cpy) and kernel call times (#). Note that the breakdown
+                 BERT-train BERT-infer DIEN-train DIEN-infer Transformer   ASR    CRNN
+                                      TF    XLA     FusionStitching                           profiling process is different with the process to measure the
+                                                                                              end-to-end performance. This is because profiling introduces
+            Figure 7: Performance speedup of FusionStitching .                                some overhead and makes the end-to-end time not accurate.
+                                                                                              We profile Mem, Math, Cpy time directly, and get CPU time
+include perceptron, attention, convolution, RNN and a broad                                   by dividing other time from end-to-end time.
+range of memory intensive operators.                                                             Before we analyze the effect of our technique, we need to
+   To demonstrate the benefits of FusionStitching over previ-                                 point out that XLA affects the behavior of Matrix operations
+ous work, we compare it with the default TensorFlow imple-                                    (GEMM and GEMV). It tends to fuse GEMVs into GEMM,
+mentation and XLA (up-to-date with community functions).                                      and GEMMs to larger GEMM when there are Matrices shar-
+All evaluation results are collected on NVIDIA V100 GPU                                       ing common input. Some other algebra transformation and
+with 16 GB device memory. The server runs Red Hat Enter-                                      loop-invariant code motion also reduces GEMM count. The
+prise Linux 7.2 with CUDA toolkit 10.2 and cuDNN 7.6.                                         difference in GEMM count in table 2 is caused by such rea-
+                                                                                              sons. Meanwhile, XLA affects the runtime behavior of Ten-
+                                                                                              sorFlow and leads to more or less CUDA memcpy/memset
+7.2              Overview                                                                     activities. FusionStitching is built upon XLA and exhibits the
+We evaluate the speedup of FusionStitching by comparing                                       same behavior.
+inference cost or the training time of one iteration for TF, XLA                                 According to Table 2, we have the following observations.
+and FusionStitching with the same batch-size. During our test,                                   Reduced context switch overhead. FusionStitching effec-
+the accuracy in each iteration of training and the result of                                  tively reduces the memory intensive kernel calls of all work-
+inference are the same with TF and XLA. We repeat 10 times                                    loads, which results in reduced kernel launch and framework
+and use the average performance to validate speedup. As for                                   scheduling overhead. As is shown in Table 2, the number of
+training workloads, we collect the execution time from the                                    memory intensive kernel calls with FusionStitching is 38.0%
+11th iteration to the 20th (guaranteed to be stable), to avoid                                of that with XLA in average, ranging from 27.8% to 48.4%.
+the initialization overhead of the early training iterations.                                 Meanwhile, FusionStitching reduces CUDA memcpy/memset
+   We show the speedup of FusionStitching in figure 7, where                                  activities (Cpy time) than XLA, with 34.3% decrease in av-
+the execution time of TensorFlow is normalized to 1. Com-                                     erage. This is because we fuse more ops together into larger
+pared to TensorFlow, our approach achieves up to 2.42×                                        kernels than XLA and many CUDA memcpy/memset are
+speedup, with 1.66× on average. Compared to XLA, our                                          combined together. The CPU time difference in table 2 indi-
+approach achieves up to 2.21× speedup, with 1.45× on av-                                      cates the reduced time due to the decrease of kernel calls and
+erage. Note XLA shows performance degradation for DIEN                                        CUDA memcpy/memset activities. FusionStitching achieves
+(both training and inference), while FusionStitching does not                                 up to 61.0% saving of the CPU time comparing with XLA,
+show negative optimization in any of these cases.                                             41.0% in average.
+   We also test the inference workloads on NVIDIA T4 GPU                                         Take DIEN-train as an example, the kernel call number for
+and get the similar speedup.                                                                  memory intensive ops is 2109 with FusionStitching , and 6842
+   We apply FusionStitching in production and measure the                                     with XLA. Meanwhile, the CUDA memcpy/memset activities
+performance benefits. It shows that FusionStitching saves                                     is reduced to 1395, comparing to 1996 with XLA. The final
+about 7,000 GPU hours for about 30,0000 tasks in a month.                                     CPU time with FusionStitching is significantly less than both
+The performance result on the cluster shows FusionStitching                                   TF and XLA, thanks for the reduced kernel calls. Note that
+is robust. Note that XLA, as state-of-the-art JIT engine, cannot                              XLA increases CUDA memcpy/memset activities and results
+
+
+                                                                                          9
+Table 2: Kernel execution breakdown. TF: naive TensorFlow.           Stitching reduces the total execution time for memory-
+FS: FusionStitching . CPU: the scheduling and pre-/post-             intensive operations. The speedup of memory-intensive ops
+processing metrics on CPU. Math: compute-intensive kernels.          for all workloads is 1.39× in average comparing with XLA,
+Mem: memory-intensive kernels. Cpy: CUDA memcpy and                  and up to 1.74×. The performance speedup mainly comes
+memset calls. E2E: the end-to-end time of one iteration (in          from reduced global memory access. By fusing memory-
+milliseconds). T: execution time. #: kernel calls number.            intensive operations aggressively, the intermediate values can
+                                                                     be cached in registers and shared memory.
+   Model Tech T/#      CPU     Math    Mem     Cpy     E2E
+                                                                        Take CRNN as an example, it reads 667.6 MB global mem-
+                  T    1.55    41.69   28.45 0.15     71.84          ory with XLA, while FusionStitching reduces the traffic to
+            TF
+                  #      -      98      561 102        761
+   BERT           T     2.3    41.89    9.56 0.15      53.9          225.8 MB. About 66% global memory access has been re-
+          XLA                                                        duced for memory intensive ops. The execution time of all
+   -train         #      -      98      200   97       395
+                  T     2.8    42.11    7.02 0.03     51.96          memory intensive computations thus achieves 1.48× speedup
+            FS
+                  #      -      98       98   20       216           than XLA.
+                  T    3.24    1.65    0.83    0.14    5.86             Overall speaking, FusionStitching supports more complex
+            TF
+                  #      -      70     365     106     541           fusion patterns than XLA with effective kernel generation,
+   BERT           T    0.78    2.50    0.60    0.13    4.02
+          XLA                                                        which relaxes the fusion conditions and thus reduces the final
+   -infer         #      -      98     277      94     469
+                  T    0.59    2.46    0.40    0.04    3.49          kernel numbers and intermediate global memory transactions.
+            FS
+                  #      -      98      77      30     205           These two factors are essential for the performance of mem-
+                  T   90.13    7.77    32.54   7.12   137.56         ory intensive ops (sec 2.2). Meanwhile, with well controlled
+            TF
+                  #      -     1218    10406   1391   13015          performance estimation and reduced runtime memcpy activi-
+    DIEN          T   124.04   9.06    37.50   6.56   177.16         ties than XLA, FusionStitching is less likely to result in bad
+           XLA
+    -train        #      -     1215     6842   1996   10053
+                  T    48.42   7.91    35.84   5.55    97.72         case about optimization.
+            FS
+                  #      -     1215     2109   1395    4719
+                  T   27.36    2.58    7.55    1.99   39.48
+            TF                                                       7.4    Fusion Pattern Analysis
+                  #     -      406     3680    225    4311
+    DIEN          T   44.21    2.24    6.12    0.94   53.51
+           XLA                                                       We take the Layer Normalization case in Figure 1 again to
+    -infer        #     -      405     2585    627    3617
+                  T   17.54    2.45    3.51     0.7   24.20          analyze the fusion result of XLA and FusionStitching . Note
+            FS
+                  #     -      405      815    422    1642           Layer Normalization is a very common component in deep
+            TF
+                  T   5.92 107.04 81.03 1.14 195.37                  learning models.
+                  #      -   399   2497 522 3418
+    Trans
+                                                                        XLA forms four different fusion kernels. While Fusion-
+                  T   11.59 106.58 38.33 1.20 157.70
+          XLA                                                        Stitching is able to fuse them all and generate a more efficient
+   former         #      -   405    903 577 1885
+                  T    7.43 107.16 30.26 0.80 145.65                 kernel. We collect the performance of all kernels of the two
+            FS
+                  #      -   400    423 369 1212                     version. The single kernel with FusionStitching achieves a
+                  T    9.36    2.84    3.06    0.63   15.89          speedup of 1.23× comparing with the sum of all 4 kernels
+            TF
+                  #      -      76     1359    439    1942           with XLA. For this test, we do not count the context switch
+                  T    6.61    0.09    4.00    0.40   11.10          overhead for the 4 kernels in XLA version, which further
+    ASR    XLA
+                  #      -       4      386    257     647
+                  T    5.51    0.11    3.10    0.45    9.18          hurts the performance of XLA.
+            FS
+                  #      -       4      187    284     475              There are two factors that prevents XLA to fuse operators
+                  T   23.31    6.05    6.14 1.60      37.10          with a larger granularity in this case. The first reason is reduce
+            TF                                                       op in xla-fusion.7 and xla-fusion.3. As we discussed before,
+                  #      -     256     3674 890       4820
+                  T   12.17    0.30    11.37 1.04     24.88          XLA does not explore reuse of intermediate results of pro-
+   CRNN XLA
+                  #      -       7      993 406       1406           ducer op. Fusing reduce op in the middle of a kernel results
+                  T    6.35    0.31     7.69 1.01     15.36
+            FS                                                       redundant computation of the same value in different threads,
+                  #      -       8      311 388        707
+                                                                     thus hurts the performance. The second reason is expensive
+                                                                     element-wise ops with small tensor shape (xla-fusion.2). XLA
+                                                                     does not tend to fuse expensive ops processing small tensors
+in severe performance drop here. FusionStitching avoids the          in the middle of a kernel as the fusion will introduce redundant
+increased memcpy/memset calls due to larger kernel granular-         computations of expensive instructions.
+ity and do not suffer from the drawback. DIEN-infer has the             Instead, FusionStitching finds notable potential for larger
+similar behavior. Optimizing kernel fusions while considering        granularity fusion in this case and fuses all operators into one
+runtime behaviors (like memcpy activities) could be a future         kernel. It applies data reuse to prevent redundant computation.
+research topic.                                                      In this way, the intermediate global memory transaction and
+   Reduced memory intensive op execution time. Fusion-               CPU-GPU context switch is avoided.
+
+
+                                                                10
+7.5    Overhead Analysis                                                 tion have fusion ability with simple rules for simple patterns.
+Similar with XLA, FusionStitching is designed for tune-once-             These two works usually requires a long time tuning process
+run-many-times scenarios, which is a basic characteristic of             given a static computation description, but are not designed
+deep learning workloads. For the training that could take up             to handle varied combinations of ops timely. Tiramisu [9]
+to several days, FusionStitching only needs to run in the first          applies a similar fusion approach with TVM. Tensor Com-
+training iteration. For an inference task, the executable kernels        prehensions [46] provides a polyhedral based JIT compiler
+can be prepared once and run many times in the future.                   capable of fusing ops together. It focuses on the trade-off
+                                                                         of parallelism and data locality. Glow [35] and Latte [45]
+   We measure the one-time overhead introduced by Fusion-
+                                                                         supports basic fusion and does not explore complex com-
+Stitching compared to XLA for training. The value is the JIT
+                                                                         bination scenarios. Astra [40] and Ashari et al.’s work [8]
+compilation time of FusionStitching minus that with XLA.
+                                                                         support GEMM and basic element-wise op fusion. None of
+Results show that the extra overhead is less than 30 minutes
+                                                                         these works reveal the fusion chance with intermediate data
+for the workloads we evaluated in this paper, which is far less
+                                                                         reuse between to-be-fused ops through shared memory and
+than the overall training time.
+                                                                         register shuffle just-in-time. They also lacks of a thoroughly
+   As for cost models, we tried to use complete latency-
+                                                                         study about just-in-time fusion strategy exploration.
+evaluator to estimate Tpenalty in delta-evaluator. The results
+show a much longer tuning time, but do not show better per-                 Fusion approach has also been applied to a wide range of
+formance of tuning results. It demonstrates the simplified cost          domains given a static computation description, like HPC [48],
+model works good for fusion exploration.                                 database [50], image processing [32, 33]. They meet different
+   A problem of both FusionStitching and XLA is that, they               challenges comparing with just-in-time compilation of AI
+cannot handle dynamic shapes, appears in some deep learning              workloads. Specifically, they do not fuse kernels that are not
+workloads, with low tuning overhead. The reason is that the              known ahead and do not face the choice of fusing which ops
+design of XLA service framework is not friendly to dynamic               together in a huge searching space.
+shape, while FusionStitching is implemented based on XLA                    CUDA Graph [19] reduces kernel launch overhead but
+service framework. This implementation problem does not                  suffers from severer initialization overhead and large extra
+affect the insight that FusionStitching shows.                           GPU memory usage due to graph creation [31]. It does not
+                                                                         reduce off-chip memory traffic.
+                                                                            Performance models for GPU and other accelerators is
+8     Related Work                                                       another related research topic [14, 23, 28, 51, 53, 54]. Yet we
+Many current AI compilation optimization works mainly fo-                design a domain specific cost model system for fusion and
+cus on compute intensive ops [11,13,24,29,30,34,45], but do              code generation requirements.
+not pay attention to memory intensive ops. XLA [26] is one
+work optimizing memory intensive ops in depth. It provides
+                                                                         9   Conclusion
+an just-in-time fusion engine to reduce context switch and
+off-chip memory access overhead. However, XLA lacks to                   This work tackles the problem of optimizing memory inten-
+explore data reuse of intermediate value and limits the fusion           sive operators in machine learning workloads. We show that
+exploration space. Besides, it uses simple rules to explore fu-          memory intensive ops are vital to end-to-end performance of
+sion strategy, which is not adaptive to varied combinations of           various deep learning models. We propose FusionStitching
+ops and tensor shapes. FusionStitching reveals the data reuse            that supports to fuse operators, with complex dependence and
+opportunity for JIT fusion and proposes cost-based approach              non-homogeneous parallelism, to reduce memory access and
+for fusion searching and code generation tuning.                         context switch overhead just-in-time. FusionStitching broad-
+   Some works study about fusion optimization of machine                 ens the fusion possibility beyond state-of-the-art JIT tech-
+learning workloads for static patterns. Li et al. [27] explores          niques by introducing reuse scheme. FusionStitching consists
+horizontal fusion for GPU Kernels to increase thread-level               of fusion explorer and code generator. The fusion explorer se-
+parallelism. Appleyard et al. [7], Diamos et al. [16] study              lects candidate fusion patterns from the large searching space
+about kernel fusion technique to speedup RNN workloads.                  with appropriate computing complexity, and produces a fu-
+These works do not study about just-in-time fusion problem               sion plan with promising performance expected. We provide
+that processes fusion patterns unknown ahead. Neither do                 a set of kernel composition schemes, with which code gen-
+they explore op combination strategy. Abdolrashidi et al. [3]            erator stitches operators and reuses intermediate values with
+explores op combination strategies with Proximal Policy Op-              on-chip memory as much as possible, and tunes the schedules
+timization [36] algorithm. This is an ahead-of-time tuning               to emit high performance GPU code for a given fusion pattern.
+approach that searches in simple fusion rules similar with               A two-layer cost model helps the searching and tuning pro-
+XLA, and does not explore fusion of complex patterns.                    cess of FusionStitching . Results show that FusionStitching
+   Some works focusing on compute intensive ops have ability             outperforms state-of-the-art JIT techniques with up to 2.21×
+of op fusion. Recent TVM [11] and Ansor [55] implementa-                 speedup, 1.45× on average.
+
+
+                                                                    11
+References                                                            [12] Keith D Cooper, Timothy J Harvey, and Ken Kennedy.
+                                                                           A simple, fast dominance algorithm, 2001.
+ [1] Torch nn, 2015.
+                                                                      [13] Meghan Cowan, Thierry Moreau, Tianqi Chen, James
+ [2] Martín Abadi, Ashish Agarwal, Paul Barham, Eugene                     Bornholt, and Luis Ceze. Automatic generation of high-
+     Brevdo, Zhifeng Chen, Craig Citro, Greg S Corrado,                    performance quantized machine learning kernels. In
+     Andy Davis, Jeffrey Dean, Matthieu Devin, et al. Ten-                 Proceedings of the 18th ACM/IEEE International Sym-
+     sorflow: Large-scale machine learning on heterogeneous                posium on Code Generation and Optimization, pages
+     distributed systems, 2016.                                            305–316, 2020.
+ [3] Amirali Abdolrashidi, Qiumin Xu, Shibo Wang, Sudip               [14] Zheng Cui, Yun Liang, Kyle Rupnow, and Deming Chen.
+     Roy, and Yanqi Zhou. Learning to fuse. NeurIPS, 2019.                 An accurate gpu performance model for effective con-
+                                                                           trol flow divergence optimization. In 2012 IEEE 26th
+ [4] Asif M Adnan, Sridhar Radhakrishnan, and Suleyman                     International Parallel and Distributed Processing Sym-
+     Karabuk. Efficient kernel fusion techniques for massive               posium, pages 83–94. IEEE, 2012.
+     video data analysis on gpgpus, 2015.
+                                                                      [15] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and
+ [5] Randy Allen and Ken Kennedy. Optimizing compil-                       Kristina Toutanova. Bert: Pre-training of deep bidirec-
+     ers for modern architectures: a dependence-based ap-                  tional transformers for language understanding. arXiv
+     proach. Taylor & Francis US, 2002.                                    preprint arXiv:1810.04805, 2018.
+ [6] Andrew Anderson and David Gregg. Optimal dnn                     [16] Greg Diamos, Shubho Sengupta, Bryan Catanzaro, Mike
+     primitive selection with partitioned boolean quadratic                Chrzanowski, Adam Coates, Erich Elsen, Jesse Engel,
+     programming. In Proceedings of the 2018 Interna-                      Awni Hannun, and Sanjeev Satheesh. Persistent rnns:
+     tional Symposium on Code Generation and Optimiza-                     Stashing recurrent weights on-chip. In International
+     tion, pages 340–351, 2018.                                            Conference on Machine Learning, pages 2024–2033,
+ [7] Jeremy Appleyard, Tomas Kocisky, and Phil Blunsom.                    2016.
+     Optimizing performance of recurrent neural networks
+                                                                      [17] David Furcy and Sven Koenig. Limited discrepancy
+     on gpus. arXiv preprint arXiv:1604.01946, 2016.
+                                                                           beam search. In IJCAI, 2005.
+ [8] Arash Ashari, Shirish Tatikonda, Matthias Boehm,
+                                                                      [18] G Gao, Russ Olsen, Vivek Sarkar, and Radhika
+     Berthold Reinwald, Keith Campbell, John Keenleyside,
+                                                                           Thekkath. Collective loop fusion for array contraction.
+     and P Sadayappan. On optimizing machine learning
+                                                                           In International Workshop on Languages and Compilers
+     workloads via kernel fusion. volume 50, pages 173–182.
+                                                                           for Parallel Computing, pages 281–295. Springer, 1992.
+     ACM New York, NY, USA, 2015.
+                                                                      [19] A Gray. Getting started with cuda graphs. URL:
+ [9] Riyadh Baghdadi, Jessica Ray, Malek Ben Romdhane,
+                                                                           https://devblogs. nvidia. com/cudagraphs, 2019.
+     Emanuele Del Sozzo, Patricia Suriana, Abdurrahman
+     Akkas, Shoaib Kamil, Yunming Zhang, and Saman Ama-               [20] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian
+     rasinghe. Tiramisu: A polyhedral compiler with a                      Sun. Deep residual learning for image recognition.
+     scheduling language for targeting high performance sys-               pages 770–778, 2016.
+     tems.
+                                                                      [21] Zhe Jia, Marco Maggioni, Jeffrey Smith, and
+[10] Tianqi Chen, Mu Li, Yutian Li, Min Lin, Naiyan Wang,                  Daniele Paolo Scarpazza.     Dissecting the nvidia
+     Minjie Wang, Tianjun Xiao, Bing Xu, Chiyuan Zhang,                    turing t4 gpu via microbenchmarking. arXiv preprint
+     and Zheng Zhang. Mxnet: A flexible and efficient ma-                  arXiv:1903.07486, 2019.
+     chine learning library for heterogeneous distributed sys-
+     tems. CoRR, abs/1512.01274, 2015.                                [22] Zhe Jia, Marco Maggioni, Benjamin Staiger, and
+                                                                           Daniele P Scarpazza. Dissecting the nvidia volta gpu
+[11] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin                    architecture via microbenchmarking. arXiv preprint
+     Zheng, Eddie Yan, Haichen Shen, Meghan Cowan,                         arXiv:1804.06826, 2018.
+     Leyuan Wang, Yuwei Hu, Luis Ceze, et al. {TVM}:
+     An automated end-to-end optimizing compiler for deep             [23] Samuel J Kaufman, Phitchaya Mangpo Phothilimthana,
+     learning. In 13th {USENIX} Symposium on Operat-                       Yanqi Zhou, and Mike Burrows. A learned performance
+     ing Systems Design and Implementation ({OSDI} 18),                    model for the tensor processing unit. arXiv preprint
+     pages 578–594, 2018.                                                  arXiv:2008.01040, 2020.
+
+
+                                                                 12
+[24] Jinsung Kim, Aravind Sukumaran-Rajam, Vineeth                     [34] Jonathan Ragan-Kelley, Andrew Adams, Dillon Sharlet,
+     Thumma, Sriram Krishnamoorthy, Ajay Panyala, Louis-                    Connelly Barnes, Sylvain Paris, Marc Levoy, Saman
+     Noël Pouchet, Atanas Rountev, and Ponnuswamy Sa-                       Amarasinghe, and Frédo Durand. Halide: decoupling
+     dayappan. A code generator for high-performance ten-                   algorithms from schedules for high-performance image
+     sor contractions on gpus. In 2019 IEEE/ACM Interna-                    processing. Communications of the ACM, 61(1):106–
+     tional Symposium on Code Generation and Optimiza-                      115, 2017.
+     tion (CGO), pages 85–95. IEEE, 2019.
+                                                                       [35] Nadav Rotem, Jordan Fix, Saleem Abdulrasool, Garret
+[25] Matthias Korch and Tim Werner. Accelerating explicit                   Catron, Summer Deng, Roman Dzhabarov, Nick Gibson,
+     ode methods on gpus by kernel fusion. Concurrency and                  James Hegeman, Meghan Lele, Roman Levenstein, et al.
+     Computation: Practice and Experience, 30(18):e4470,                    Glow: Graph lowering compiler techniques for neural
+     2018.                                                                  networks. arXiv preprint arXiv:1805.00907, 2018.
+[26] Chris Leary and Todd Wang. Xla: Tensorflow, compiled,             [36] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec
+     2017.                                                                  Radford, and Oleg Klimov. Proximal policy optimiza-
+                                                                            tion algorithms. arXiv preprint arXiv:1707.06347, 2017.
+[27] Ao Li, Bojian Zheng, Gennady Pekhimenko, and Fan
+     Long. Automatic horizontal fusion for gpu kernels.                [37] Baoguang Shi, Xiang Bai, and Cong Yao. An end-to-
+     arXiv preprint arXiv:2007.01277, 2020.                                 end trainable neural network for image-based sequence
+                                                                            recognition and its application to scene text recognition.
+[28] Sangkug Lym, Donghyuk Lee, Mike O’Connor, Niladr-                      IEEE transactions on pattern analysis and machine in-
+     ish Chatterjee, and Mattan Erez. Delta: Gpu perfor-                    telligence, 39(11):2298–2304, 2016.
+     mance model for deep learning applications with in-
+     depth memory system traffic analysis. In 2019 IEEE                [38] Karen Simonyan and Andrew Zisserman. Very deep con-
+     International Symposium on Performance Analysis of                     volutional networks for large-scale image recognition.
+     Systems and Software (ISPASS), pages 293–303. IEEE,                    arXiv preprint arXiv:1409.1556, 2014.
+     2019.
+                                                                       [39] Muthian Sivathanu, Tapan Chugh, Sanjay S Singapuram,
+[29] Lingxiao Ma, Zhiqiang Xie, Zhi Yang, Jilong Xue,                       and Lidong Zhou. Astra: Exploiting predictability to
+     Youshan Miao, Wei Cui, Wenxiang Hu, Fan Yang, Lintao                   optimize deep learning. In Proceedings of the Twenty-
+     Zhang, and Lidong Zhou. Rammer: Enabling holistic                      Fourth International Conference on Architectural Sup-
+     deep learning compiler optimizations with rtasks. In                   port for Programming Languages and Operating Sys-
+     14th {USENIX} Symposium on Operating Systems De-                       tems, pages 909–923, 2019.
+     sign and Implementation ({OSDI} 20), pages 881–897,
+                                                                       [40] Muthian Sivathanu, Tapan Chugh, Sanjay S Singapuram,
+     2020.
+                                                                            and Lidong Zhou. Astra: Exploiting predictability to
+[30] Matthew W Moskewicz, Ali Jannesari, and Kurt Keutzer.                  optimize deep learning. In Proceedings of the Twenty-
+     Boda: A holistic approach for implementing neural net-                 Fourth International Conference on Architectural Sup-
+     work computations. In Proceedings of the Computing                     port for Programming Languages and Operating Sys-
+     Frontiers Conference, pages 53–62, 2017.                               tems, pages 909–923, 2019.
+
+[31] Alberto Parravicini, Arnaud Delamare, Marco Arn-                  [41] Christian Szegedy, Vincent Vanhoucke, Sergey Ioffe, Jon
+     aboldi, and Marco D Santambrogio. Dag-based schedul-                   Shlens, and Zbigniew Wojna. Rethinking the inception
+     ing with resource sharing for multi-task applications in a             architecture for computer vision. pages 2818–2826,
+     polyglot gpu runtime. arXiv preprint arXiv:2012.09646,                 2016.
+     2020.
+                                                                       [42] TensorFlow team. tf.math.multiply.
+[32] Bo Qiao, Oliver Reiche, Frank Hannig, and Jïrgen Teich.
+                                                                       [43] TensorFlow XLA team. Hlo reduce operation.
+     From loop fusion to kernel fusion: a domain-specific
+     approach to locality optimization. In 2019 IEEE/ACM               [44] TensorFlow XLA team. Hlo transpose operation.
+     International Symposium on Code Generation and Opti-
+     mization (CGO), pages 242–253. IEEE, 2019.                        [45] Leonard Truong, Rajkishore Barik, Ehsan Totoni, Hai
+                                                                            Liu, Chick Markley, Armando Fox, and Tatiana Shpeis-
+[33] Bo Qiao, Oliver Reiche, Frank Hannig, and Jürgen Te-                   man. Latte: a language, compiler, and runtime for ele-
+     ich. Automatic kernel fusion for image processing dsls.                gant and efficient deep neural networks. In Proceedings
+     In Proceedings of the 21st International Workshop on                   of the 37th ACM SIGPLAN Conference on Programming
+     Software and Compilers for Embedded Systems, pages                     Language Design and Implementation, pages 209–223,
+     76–85, 2018.                                                           2016.
+
+
+                                                                  13
+[46] Nicolas Vasilache, Oleksandr Zinenko, Theodoros                  [56] Zhen Zheng, Chanyoung Oh, Jidong Zhai, Xipeng Shen,
+     Theodoridis, Priya Goyal, Zachary DeVito, William S                   Youngmin Yi, and Wenguang Chen. Versapipe: a versa-
+     Moses, Sven Verdoolaege, Andrew Adams, and Albert                     tile programming framework for pipelined computing
+     Cohen. Tensor comprehensions: Framework-agnostic                      on gpu. In 2017 50th Annual IEEE/ACM International
+     high-performance machine learning abstractions, 2018.                 Symposium on Microarchitecture (MICRO), pages 587–
+                                                                           599. IEEE, 2017.
+[47] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob
+     Uszkoreit, Llion Jones, Aidan N Gomez, Łukasz Kaiser,            [57] Guorui Zhou, Na Mou, Ying Fan, Qi Pi, Weijie Bian,
+     and Illia Polosukhin. Attention is all you need. In Ad-               Chang Zhou, Xiaoqiang Zhu, and Kun Gai. Deep inter-
+     vances in neural information processing systems, pages                est evolution network for click-through rate prediction.
+     5998–6008, 2017.                                                      In Proceedings of the AAAI conference on artificial in-
+                                                                           telligence, volume 33, pages 5941–5948, 2019.
+[48] Mohamed Wahib and Naoya Maruyama. Scalable kernel
+     fusion for memory-bound gpu applications. In SC’14:
+     Proceedings of the International Conference for High
+     Performance Computing, Networking, Storage and Anal-
+     ysis, pages 191–202. IEEE, 2014.
+[49] Jizhe Wang, Pipei Huang, Huan Zhao, Zhibo Zhang, Bin-
+     qiang Zhao, and Dik Lun Lee. Billion-scale commodity
+     embedding for e-commerce recommendation in alibaba.
+     In Proceedings of the 24th ACM SIGKDD International
+     Conference on Knowledge Discovery & Data Mining,
+     pages 839–848, 2018.
+[50] Haicheng Wu, Gregory Diamos, Srihari Cadambi, and
+     Sudhakar Yalamanchili. Kernel weaver: Automatically
+     fusing database primitives for efficient gpu computation.
+     In 2012 45th Annual IEEE/ACM International Sympo-
+     sium on Microarchitecture, pages 107–118. IEEE, 2012.
+[51] Xuan Yang, Zhengrui Zhang, Guoliang Chen, Rui Mao,
+     et al. A performance model for gpu architectures that
+     considers on-chip resources: application to medical im-
+     age registration. IEEE Transactions on Parallel and
+     Distributed Systems, 30(9):1947–1961, 2019.
+[52] Dong Yu and Li Deng. AUTOMATIC SPEECH RECOG-
+     NITION. Springer, 2016.
+[53] Xiuxia Zhang, Guangming Tan, Shuangbai Xue, Jia-
+     jia Li, Keren Zhou, and Mingyu Chen. Understanding
+     the gpu microarchitecture to achieve bare-metal perfor-
+     mance tuning. In Proceedings of the 22nd ACM SIG-
+     PLAN Symposium on Principles and Practice of Parallel
+     Programming, pages 31–43, 2017.
+[54] Yao Zhang and John D Owens. A quantitative perfor-
+     mance analysis model for gpu architectures. In 2011
+     IEEE 17th international symposium on high perfor-
+     mance computer architecture, pages 382–393. IEEE,
+     2011.
+[55] Lianmin Zheng, Chengfan Jia, Minmin Sun, Zhao Wu,
+     Cody Hao Yu, Ameer Haj-Ali, Yida Wang, Jun Yang,
+     Danyang Zhuo, Koushik Sen, et al. Ansor: Generating
+     high-performance tensor programs for deep learning.
+     arXiv preprint arXiv:2006.06762, 2020.
+
+
+                                                                 14
+

@@ -1,0 +1,468 @@
+                                                   DISC : A Dynamic Shape Compiler for Machine
+                                                               Learning Workloads
+                                                            Kai Zhu, Wenyi Zhao, Zhen Zheng, Tianyou Guo, Pengzhan Zhao, Feiwen Zhu
+                                                                     Junjie Bai, Jun Yang, Xiaoyong Liu, Lansong Diao, Wei Lin
+                                                                                                          Alibaba Group
+                                                                           {tashuang.zk, kevin.zwy, james.zz, tianyou.gty, pengzhan.zpz, feiwen.zfw
+                                                                             j.bai, muzhuo.yj, xiaoyong.liu, lansong.dls, weilin.lw}@alibaba-inc.com
+
+                                         Abstract                                                                          is non-trivial and there is still a performance gap, especially
+arXiv:2103.05288v2 [cs.DC] 23 Nov 2021
+
+
+
+
+                                         Many recent machine learning models show dynamic shape                            for new models and scenarios.
+                                         characteristics. However, existing AI compiler optimization                          The recent developed models expose dynamic shape prob-
+                                         systems suffer a lot from problems brought by dynamic shape                       lem, which is less optimized with current techniques. The
+                                         models, including compilation overhead, memory usage, op-                         operations suffering most from dynamic shape problems are
+                                         timization pipeline and deployment complexity. This paper                         those with small sized computations, like element-wise and
+                                         provides a compiler system to natively support optimization                       reduction operations. Traditional techniques, like XLA[5],
+                                         for dynamic shape workloads, named DISC . DISC enriches                           usually apply fusion approach to reduce the off-chip memory
+                                         a set of IR to form a fully dynamic shape representation.                         access and frequent kernel launch overhead for such oper-
+                                         It generates the runtime flow at compile time to support                          ations. However, the existing kernel fusion engines could
+                                         processing dynamic shape based logic, which avoids the                            only generate kernels with static shape information inferred
+                                         interpretation overhead at runtime and enlarges the oppor-                        during compilation time. This results in a problem that, these
+                                         tunity of host-device co-optimization. It addresses the kernel                    fusion engines will compile and generate kernel for every
+                                         fusion problem of dynamic shapes with shape propagation                           emerging shape, even though some of them share the same
+                                         and constraints collecting methods. This is the first work to                     computation pattern. It leads to severe compilation overhead
+                                         demonstrate how to build an end-to-end dynamic shape com-                         when the number of shapes is large. Due to this reason, XLA
+                                         piler based on MLIR infrastructure. Experiments show that                         is usually closed for dynamic shape workloads to prevent
+                                         DISC achieves up to 3.3× speedup than TensorFlow/PyTorch,                         negative optimization.
+                                         and 1.8× than Nimble.                                                                Note that large ops, like GEMM/Conv, do not suffer much
+                                                                                                                           from dynamic shapes as they usually go through library
+                                         Keywords: machine learning, AI compiler, dynamic shape                            calls (cuDNN, cuBLAS, oneDNN) rather than compilation
+                                                                                                                           optimizations. We focus on small sized ops optimization
+                                                                                                                           targets in this paper.
+                                         1     Introduction
+                                                                                                                              There are some workaround solutions for dynamic shape
+                                         Machine learning technique evolves fast in recent years. It is                    problem based on XLA. Developers can only cluster ops
+                                         applied in a wide range of areas, such as image/speech recog-                     that have static shape for XLA to optimize, and leave ops
+                                         nition, translation, recommendation to serve people’s life.                       with dynamic shape features run without fusion. This loses
+                                         One reason of the boost of machine learning is the growth of                      optimization opportunities to a extent. Furthermore, some
+                                         computing power. With the help of machine learning frame-                         workloads only have dynamic shaped ops in practice. An-
+                                         works (TensorFlow[8], PyTorch[13], MXNet[10]), machine                            other workaround is to form tensors into a specific shape
+                                         learning algorithm representation can be mapped to power-                         with padding and slicing, which introduces redundant com-
+                                         ful devices for convenient execution. However, this mapping                       putations and may lead to negative optimizations. None of
+                                                                                                                           the workarounds solves this problem fundamentally.
+                                         Permission to make digital or hard copies of all or part of this work for            MLIR[12] provides the infrastructure towards a new ma-
+                                         personal or classroom use is granted without fee provided that copies are not     chine learning compiler. It brings high extensibility to new
+                                         made or distributed for profit or commercial advantage and that copies bear
+                                         this notice and the full citation on the first page. Copyrights for components
+                                                                                                                           functions and compatibility to existing optimization build-
+                                         of this work owned by others than ACM must be honored. Abstracting with           ings. Meanwhile, it naturally supports dynamic shape op-
+                                         credit is permitted. To copy otherwise, or republish, to post on servers or to    timization with its design philosophy. However, what it
+                                         redistribute to lists, requires prior specific permission and/or a fee. Request   brings is the infrastructure, but not the solution to dynamic
+                                         permissions from permissions@acm.org.                                             shape problem itself. Nimble[15] is a compiling framework
+                                         EuroMLSys ’21, April 26, 2021, Online, United Kingdom
+                                                                                                                           based on TVM to address dynamic shape problem, which
+                                         © 2021 Association for Computing Machinery.
+                                         ACM ISBN 978-1-4503-8298-4/21/04. . . $15.00
+                                                                                                                           is a concurrent work with DISC and DISC has an earlier
+                                         https://doi.org/10.1145/3437984.3458838                                           RFC release[7]. It provides a compiler framework capable
+EuroMLSys ’21,
+          Kai Zhu,
+               April Wenyi
+                     26, 2021,
+                            Zhao,
+                               Online,
+                                  Zhen United
+                                        Zheng,Kingdom
+                                                Tianyou Guo, Pengzhan Zhao, Feiwen Zhu and Junjie Bai, Jun Yang, Xiaoyong Liu, Lansong Diao, Wei Lin
+
+
+of adapting to dynamic shaped ops at runtime. The runtime                         • It supports multiple machine learning frameworks and
+control logic is pre-built as a VM component. A problem of                          the mix of static/dynamic optimization.
+Nimble is that, it pre-builds runtime control as VM, which
+loses the opportunity to explore host-device co-optimization.
+Meanwhile, the VM approach brings interpretation over-                       2    Background
+head.                                                                        The computation graphs of modern machine learning models
+   We propose DISC , a dynamic shape compiler for machine                    consist of both compute and memory intensive ops. In this
+learning workloads. We build DISC based on MLIR infrastruc-                  paper, we refer to GEMM and Conv as compute intensive op
+ture to leverage its native support of dynamic shape from                    and other ones as memory intensive op. Compute intensive
+high level design perspective. DISC tackles several main                     ops are usually called with pre-built libraries, like cuDNN and
+problems of dynamic shape optimization.                                      cuBLAS, in popular machine learning frameworks. While
+   The first is the lack of a complete representation of dy-                 memory intensive ops are optimized with AI compilers with
+namic shape computations with existing IR. Note that MLIR                    kernel fusion and code generation techniques. Note that
+does not provide dynamic shape IR expression directly. We                    a single memory intensive op, like an Add op, is too light
+do not build a set of new IR from scratch, but introduce                     weighted to build a library for it. Meanwhile, the combination
+DHLO based on HLO dialect, the IR already used in XLA.                       of memory intensive ops varies in different workloads and
+This approach enables us to reuse some existing building                     it is infeasible to pre-build fused kernels for such ops.
+blocks of XLA and MLIR-HLO dialect.                                              Static Shape Oriented Compiler. We take XLA[5], state-
+   The second is to build efficient runtime flow to support                  of-the-art compiler optimization engine for memory inten-
+dynamic shape logic. Instead of building a VM to interpret                   sive ops, to explain how a static shape compiler works. Given
+dynamic shaped flow at runtime, we generate the code of                      a computation graph, XLA firstly translates it into HLO IR.
+runtime flow just-in-time at compile time. This avoids the                   It then finds ops that can be fused together and generates
+interpretation overhead of a VM. Meanwhile, this approach                    fusion kernels, which will be cached according to fusion
+enlarges the opportunities of host-device co-optimization as                 pattern. The fusion pattern contains op sequence with full
+DISC compiles the device computation and host-side logic                     shape information. When XLA meets a fusion pattern, it will
+all together.                                                                first check whether this pattern is already cached. It will use
+   The third is to generate efficient fusion kernels without                 the binary directly if hit, otherwise it will compile for the
+knowing full shape information. We check the shape com-                      new pattern and cache the compiled result.
+patibility of two ops with two collected characteristics. We                     Lack of Attention for Dynamic Shape. The process of
+first make use of shape propagation property between pro-                    XLA works well for static shape scenario, but is less efficient
+ducers and consumers to fuse adjacent ops. Furthermore, we                   for dynamic shape workload. A typical case is Seq2seq mod-
+collect shape constraints when lowering computation graph                    els with varying input/output sequence length. Although
+to DHLO. The extra shape constraints information allows                      the computation graph does not change, XLA needs to re-
+us to form larger scope of fusion to further reduce off-chip                 compile for the fused kernels for samples with different
+memory access and kernel launch overhead.                                    length. When the number of shapes is large, the overhead
+   Finally, DISC supports multiple machine learning frame-                   of compilation time and host/device memory usage to cache
+works (TensorFlow and PyTorch) with the hub of DHLO.                         makes static shape oriented compilation not usable. Other
+Meanwhile, DISC supports the mix of static and dynamic op-                   typical workloads suffering from dynamic shape issues in-
+timization. When DISC finds a sub-graph with static shape,                   cludes CV workloads processing different image sizes (like
+it will fallback to static optimization for better performance.              object detection), and sparse workloads with Unique[4] ops
+   Experiment results show that DISC outperforms Tensor-                     generating output tensors with varying shapes.
+Flow/PyTorch with 2.27× speedup in average for 6 popular                         DISC generates fused kernels adaptive to any coming
+models, and Nimble with 1.8× speedup for transformer.                        shapes and avoids re-compilation. The basic insight is that we
+   This paper has the following main contributions.                          do not need to consider shape information to check whether
+                                                                             two fusion patterns are the same for code generation. Note
+    • It is the first work to demonstrate how to build a com-                that DISC only targets dynamic shapes with static rank, as
+      piler supporting dynamic shape efficiently with MLIR                   we do not find dynamic rank a popular behavior.
+      infrastructure.                                                            MLIR Infrastructure We build DISC based on MLIR
+    • It proposes an approach to support dynamic shape                       infrastructure[12], which aims to help building reusable and
+      processing with the design of fully dynamic IR and                     extensible compiler infrastructure. We choose MLIR as it is
+      compile-time generated runtime flow.                                   open for extension and could accommodate existing opti-
+    • It addresses the fusion problem without full shape in-                 mizations based on other IRs with dialect conversion. Specifi-
+      formation, specifically with the additional shape con-                 cally, it allows to reuse the existing optimization components
+      straints collecting method.                                            of XLA by lowering MLIR-HLO dialect to HLO.
+DISC : A Dynamic Shape Compiler for Machine Learning Workloads                     EuroMLSys ’21, April 26, 2021, Online, United Kingdom
+
+
+                    Versatile AI Framework Host                     hosts. Similar with other runtime logic, host-side control is
+                                                                    also generated at compile time. This design is to prevent the
+                                                                    interpretation overhead of previous works (section 4.2) and
+                    Computation Graph Bridging
+                                                                    enrich the opportunity of host-device co-optimization.
+                    DHLO (IR Supplementation)                          Fusion decision relies on op schedule compatibility ana-
+                                                                    lyzing. DISC decides to fuse ops according to shape hints,
+                     Shape Calculation & Placer                     which comes from shape propagation and shape constraints
+                 Buffer Management & Optimization
+                                                                    analysis.
+                                                                       The host-side codegen and device-side codegen component
+                       Host-side Control Flow                       generates binary for host side and CUDA cubin for GPU side.
+                                                                       Finally, DISC plugins the compiled and optimized compu-
+                          Fusion Decision
+                                                                    tation graph into AI frameworks. It adapts to the runtime
+           Host-side Codegen        Device-side Codegen
+                                                                    implementations of versatile AI frameworks, with a small set
+                                                                    of interface APIs to handle compiler-framework interactions.
+                 Binary                     Cubin
+
+
+                  Versatile AI Framework Runtime                    4     System Design
+                                                                    The first problem of a dynamic shape compiler is that, it lacks
+            Figure 1. DISC framework overview.                      an IR expression. We extend HLO and introduce DHLO as the
+                                                                    IR to support full dynamic shape features (4.1). With DHLO
+                                                                    as the hub IR, DISC could support multiple front ends and
+   However, what MLIR itself offers is a flexible infrastruc-       backends (4.4). To meet the runtime requirement of dynamic
+ture, rather than a solution to problems such as the opti-          shape supporting, DISC generates the runtime flow (4.2) to
+mization of dynamic shape ops. DISC shows a way to build            avoid the interpretation overhead. Finally, DISC analyzes the
+a complete optimization system that targets dynamic shape           shape hints to support fusion optimization (4.3).
+workloads with MLIR.
+
+3    Overview of DISC                                               4.1   DHLO: IR Supplementation
+Figure 1 describes the overview of DISC framework.                  MLIR infrastructure is flexible and easy to extend to support
+   The first component of DISC is computation graph bridging,       versatile features. However, it only provides the infrastruc-
+which lowers the computation graph described with versatile         ture but not specific IR design to support dynamic shape
+AI frameworks into the hub IR used in DISC (section 4.1).           directly. We choose HLO IR to build MLIR dialet for dy-
+DISC also collects shape constraint information in this layer       namic shape problem, because HLO already supports many
+to help with fusion optimization (section 4.2.1).                   op descriptions and different frameworks. However, HLO is
+   The hub IR, DHLO, is extended from HLO dialect to sup-           designed for static shape compiler optimization and lacks
+port fully dynamic shape.                                           expressing ability for dynamic shape in some cases. As a
+   The basic execution flow for dynamic shape workload is to        solution, we extend HLO with a set of IR supplementation
+compile without full shape information and get shape infor-         and introduce DHLO.
+mation at runtime. DISC separates shape computation and                The insight of IR supplementation is to replace compile
+data processing during compilation. It complies and code-           time constant folding to runtime tensor dataflow. Specifically,
+gen the shape calculation logic. The placer component places        the target ops for which to extend IR representation is those
+shape calculation logic on host side and tensor computation         with attributes being constant folded in HLO, like slice, pad,
+kernels on device side. The generated shape inference func-         broadcast, et al. In DHLO, we replace the constant attributes
+tion will be processed on host side when executing models.          with tensor arguments to support dynamic shape behavior.
+   The buffer management component manages buffer life-             Take slice[6] as an example, as is shown in figure 2. A slice
+time of tensors in computation graph. DISC generates the            op extracts a sub-tensor from the input tensor given indices
+code about buffer allocation, reuse and free logic at compile       of the bounding box. The indices of the bounding box are
+time, and executes the compiled flow at runtime. The basic          constants at compile time in HLO (start_indices, limit_indices,
+optimization rule is to free buffer as soon as it has no users,     and strides shown in figure 2). However, these indices vary
+and reuse buffers as much as possible according to "shape           in shapes for dynamic shape workloads and constant folded
+compatibility".                                                     expression is infeasible. Instead, we define the indices of the
+   The host-side control is responsible for external library low-   bounding box as tensor arguments of slice. Such extension
+ering, kernel launch management, device management, and             works well for dynamic shape scenarios as tensor value are
+the interaction between compiler engine and AI framework            generated at runtime.
+EuroMLSys ’21,
+          Kai Zhu,
+               April Wenyi
+                     26, 2021,
+                            Zhao,
+                               Online,
+                                  Zhen United
+                                        Zheng,Kingdom
+                                                Tianyou Guo, Pengzhan Zhao, Feiwen Zhu and Junjie Bai, Jun Yang, Xiaoyong Liu, Lansong Diao, Wei Lin
+
+
+ def HLO_SliceOp:                       def HLO_DSliceOp:                    have the same number of elements. Such shape constraints
+   ……                                     ……                                 can be useful in both IR optimization and code generation
+   let arguments = (ins                   let arguments = (ins
+      Hlo_Tensor:$operand,                   Hlo_Tensor:$operand,            stage. An optimization case in IR optimization stage is that
+      I64ElementsAttr:$start_indices,        HLO_Tensor:$start_indices,      when we know that two ops manipulate tensors with the
+      I64ElementsAttr:$limit_indices,        HLO_Tensor:$limit_indices,      same or compatible shape, we can make decision to fuse
+      I64ElementsAttr:$strides               HLO_Tensor:$strides
+   );                                     );                                 them together. In code generation stage, these constraints
+                                                                             enables more aggressive index calculation simplification.
+Figure 2. Static slice op (left) and dynamic slice op (right).                  DISC collects shape constraints from two sources. In the
+                                                                             first case, we infer shape constraints captured by the DHLO
+                                                                             op semantic. For example, the input tensor and output tensor
+   Note that DHLO is only an extension but not to replace the                of a TransposeOp should have the same tensor size. Simi-
+whole HLO. Since for many ops, like elementwise Add/Mul                      larly, the input tensor and output tensor of a AddOp should
+etc, their definition in HLO has enough expressiveness to                    have the same shape according to op definition. In the sec-
+support dynamic shape and we leave them as they are.                         ond case, we collect shape constraints captured by the high
+                                                                             level ops from frameworks and inject such information into
+4.2   Generated Runtime Flow                                                 DHLO in computation graph bridging. Take SplitOp in Ten-
+One challenge of dynamic shape compiler is that, compiling                   sorflow as an example. It divides a tensor along a dimension
+is a static action, while we aim to handle dynamic behavior.                 evenly, which implies that all outputs of this op have the
+Current state-of-the-art compiler optimization engines, like                 same shape. A TF.SplitOp will be lowered to multiple inde-
+XLA[5], require to know all shape information before com-                    pendent DHLO.SliceOp, which actually have the same shapes.
+piling. XLA generates code and builds buffer management                      However such kind of information is lost after being lowered
+and kernel launch sequence statically at compile time. This                  to DHLO without explicit shape constraint.
+compiling process does not work without shape information                       Shape calculation. Different from static shape compilers
+known ahead.                                                                 that only needs to generate code for computations them-
+   A dynamic shape compiler needs to generate code that                      selves with constant folded shape information, DISC gen-
+is adaptive to handle any shapes encountered at runtime.                     erates the code of shape inference and kernel computation
+Nimble[15] designs a VM to interpret runtime flow of graph                   sub-graphs separately. Shape calculation computation is light
+computation with dynamic shape. It interprets tensor shapes                  weight and DISC place it on host side (CPU), while the sub-
+and organizes runtime logic adaptively. Rather than using a                  graph manipulating tensors are placed on device side (GPU).
+interpreter, DISC compiles and generates the code of com-                    The placement logic is similar with Nimble[15]. The differ-
+putations on both host and device side, and also runtime                     ence is that, DISC applies compiling approach to generate
+flows (buffer management, kernel launch, et.al.). The com-                   the code of computation, shape inference and placement
+piler approach of runtime flow reduces the overhead of VM                    logic all together, rather than using a pre-built VM inter-
+interpretation in Nimble.                                                    preter for runtime control like in Nimble. This avoids extra
+                                                                             interpretation overhead. Meanwhile, this approach brings
+4.2.1 Adaptive Shape Inference. The shape inference                          opportunities of joint optimizations between host and device
+component in DISC has two stages. The first is to identify the               sides.
+shape constraints at compile time without knowing specific
+shape value. The second is to emit runtime codes to calculate                4.2.2 Dynamic Buffer Management. With emitted codes
+specific shape values given input tensor. The former serves                  calculating shapes of each buffer at runtime, DISC is able to
+for code generation optimization and the latter serves for                   manage the buffer dynamically by emitting alloc and dealloc
+correct execution.                                                           instructions. For the considerations of buffer optimization
+   Shape constraints. Without concrete shape value when                      which aims at reducing the buffer allocation overhead, we
+compiling, we lose some optimization opportunities. This is                  apply two approaches: 1) Based on shape constraint in the
+a common problem of current dynamic shape related com-                       IR, performing buffer liveness analysis and optimization; 2)
+piler techniques. DISC reveals that, we can still obtain some                Lowering the alloc and dealloc with a cached allocator, which
+additional shape constraint information to help generating                   is the allocator provided by TensorFlow/PyTorch in our case.
+efficient kernels.
+   DISC explores two kinds of shape constraints. The first                   4.2.3 Host-side Control. Host-side codes are emitted in
+one is called dimension size equality constraint. This kind                  a unified compiler flow, making it possible for a joint opti-
+of constraint reveals whether one dimension size of a tensor                 mization in the consequent passes. Besides shape calculation,
+is equal to another dimension of the same tensor or any                      it also includes launch dimension calculation, kernel launch,
+dimension of another tensor. The second one is called tensor                 vendor library calls and device management instructions
+size equality constraint, which reveals whether two tensors                  such as initialization, synchronization, cubin loading etc.
+DISC : A Dynamic Shape Compiler for Machine Learning Workloads                     EuroMLSys ’21, April 26, 2021, Online, United Kingdom
+
+
+4.3   Fusion and Code Generation                                                 Table 1. Workloads for evaluation.
+Kernel fusion of memory-bound ops is one of the main opti-
+mizations of current AI compilers. A common fusion strategy                        Model       Framework       Batch Size
+                                                                                               TensorFlow           1
+is to allow memory bound ops with the same number of ele-                           ASR        PyTorch              1
+ments to be fused together. However, the tensor shapes to                         Seq2seq      PyTorch             64
+process are not known at compile time for dynamic shape                             TTS        TensorFlow          1
+                                                                                   BERT        PyTorch              1
+scenarios. It is non-trivial to determine which ops could be                    Ad Ranking     TensorFlow         512
+fused together to get performance benefit.                                      Transformer    TensorFlow          1
+   Shape hints collection. We determine whether two ops
+have the same shape with two hints. The first is shape prop-
+agation. Such as the operands of an Add op must have the             shapes. The library contains both vendor libraries such as
+same tensor shape with Add’s consumer. DISC maintains a              cuBLAS/cuDNN, and pre-generated kernels that has been
+table to indicate the propagation property of each op. Specif-       hand-tuned for each shape.
+ically, some ops may have the same shape propagation prop-
+erty, like Add and Sub. We classify ops according to their           5     Evaluation
+shape propagation properties in the table to avoid repeated
+enumeration. The second is shape constraints DISC col-               In this section, we evaluate DISC using a variety of machine
+lects, as described in Sec. 4.2.1.                                   learning applications with different characteristics. These
+   Shape-adaptive fusion configuration. For fusion code              workloads are realized with different frameworks on GPU, as
+generation of memory bound patterns, we tend to choose               is shown in table 1. While DISC is also applicable to devices
+templates that are friendly to a wide range of shapes, like the      other than GPU.
+classical loop fusion and input fusion with reduce operation            To demonstrate the benefits of DISC , we do comparison
+as the root. However, there are still aspects to react differently   with TensorFlow/PyTorch and Nimble. Note we do not com-
+with variant runtime shapes for better performance, like             pare with XLA, as which brings severe compilation overhead
+the selection of launch dimensions, the decision of whether          for these dynamic shape workloads and shows performance
+to do loop vectorized load/store, and whether an implicit            degradation. We collect data on NVIDIA T4 GPU, with CUDA
+broadcast is necessary etc. For these aspects, we generate           toolkit 10.0.
+different versions of kernels, and generate selection logic
+                                                                     5.1   Comparing with TensorFlow/PyTorch
+from host-side to launch a proper kernel at runtime for each
+incoming shape.                                                      As is shown in figure 3, DISC achieves up to 3.35× speedup
+                                                                     comparing with TensorFlow/PyTorch, 2.27× in average. The
+4.4   Multiple Framework Support                                     benefit mainly comes from kernel fusion of memory inten-
+                                                                     sive ops, which reduces off chip memory access and kernel
+DISC is able to serve multiple AI frameworks, like Tensor-           launch overhead. We analyze the benefit with several case
+Flow[8], PyTorch[13] et.al. Meanwhile, it could be lowered           studies.
+with both static and dynamic shape compiler. We use DHLO                Transformer We collect the breakdown information of
+as the hub IR to connect different parts together. This inter-       transformer. We find the compute intensive ops show similar
+mediate layer simplifies the adaptation.                             execution time for TensorFlow and DISC version, while the
+   Specifically, DISC does not lower all computation graphs          memory intensive ops show much better performance with
+to dynamic shape compiler. Instead, it will lower computa-           DISC . It spends 21.52ms with DISC for memory intensive
+tion graphs to static shape compiler when shapes are known           ops, while spending 66.06 with original TensorFlow.
+at compile time or the number of shapes is acceptable. This is          One benefit comes from the reduced off-chip memory
+because static shape compiler engine could usually achieve           access by kernel fusion. The other benefit is the reduced
+better performance with the enriched information than dy-            kernel calls. TensorFlow results in 42884 kernel calls for
+namic shape compiler.                                                memory intensive ops, while DISC only has 6186 kernel
+                                                                     calls.
+4.5   Static Shape Library Support                                      BERT The performance speedup of BERT also mainly
+For compute intensive ops, different shapes may require dif-         comes from the optimization of memory intensive ops with
+ferent optimization to achieve the best performance. Nimble[15]      fusion. The execution time of memory intensive ops is re-
+choose to tune the kernel under a set of fixed shapes. The           duced from 5.96ms in PyTorch to 3.33ms in DISC , and the
+kernel is guaranteed to work on other shapes but the perfor-         kernel calls reduce from 198 to 97 times.
+mance may not be the best. In order to balance the dynamism             We compare DISC with TensorRT[16] realization for BERT
+and performance, we implement an interface to choose the             based on onnx-tensorrt[3] workflow, and find DISC achieves
+best kernel from a library according to different runtime            1.3× end-to-end speedup. The time memory intensive ops
+EuroMLSys ’21,
+          Kai Zhu,
+               April Wenyi
+                     26, 2021,
+                            Zhao,
+                               Online,
+                                  Zhen United
+                                        Zheng,Kingdom
+                                                Tianyou Guo, Pengzhan Zhao, Feiwen Zhu and Junjie Bai, Jun Yang, Xiaoyong Liu, Lansong Diao, Wei Lin
+
+
+                                                                                                       1
+            3                                                                                        0.8
+
+
+
+
+                                                                                           Speedup
+                                                                                                     0.6
+ Speedup
+
+
+
+
+            2
+                                                                                                     0.4
+            1                                                                                        0.2
+                                                                                                       0
+            0                                                                                              ASR TF   Seq2seq   Bert   Average
+                 ASR TF   ASR PT   Seq2seq    TTS    Bert   Ad RankingTransformer
+
+
+
+ Figure 3. Speedup comparing with TensorFlow/PyTorch.                                     Figure 4. Performance gap to static optimization.
+
+
+            Table 2. Performance breakdown for Transformer.
+                                                                                    5.3   Gap to Static Optimization
+           Backend        Comp. bound        Mem. bound     CPU      E2E
+           Nimble            66.58             56.09        65.83   188.5           DISC can fall back to static compiler automatically for better
+            DISC             59.68             21.52        24.08   105.28          performance. To evaluate the performance of dynamic com-
+                                                                                    piler with static compiler, we disable the fall back function
+                                                                                    and compare the performance between static and dynamic
+           Table 3. Kernel number breakdown for Transformer.                        compilers with static input for 3 typical workloads.
+                                                                                       It shows that DISC achieves 85% performance in average
+                 Backend     Comp. bound        Mem. bound      Total               comparing with static optimization, ranging from 74.5% to
+                 Nimble         5232              8632          13924               91.4%. One reason of the gap is that it lacks some fusion op-
+                  DISC          4476              6186          10734               timization opportunity(such as more aggressive graph opti-
+                                                                                    mization, fusion decision, and codegen strategy, etc) without
+                                                                                    shape information, even though we have already collected
+                                                                                    shape hints with DISC .
+spent drops from 4.99ms with TensorRT to 3.33ms with DISC
+.
+   We collect breakdown for other workloads and observe                             6     Related Work
+similar behavior with Transformer and BERT. All these work-                         There are many works that apply kernel fusion optimiza-
+loads benefit mainly from kernel fusion optimization of mem-                        tion for small sized kernels in machine learning workloads.
+ory intensive ops,                                                                  XLA[5] fuses kernels just-in-time with a set of rules for ops
+                                                                                    including element-wise and reductions. FusionStitching[19]
+5.2             Comparing with Nimble                                               expands the scope that JIT fusion can target with intermedi-
+We compare with Nimble for transformer, which is one of                             ate value reusing between ops. Some works[9, 11, 17, 18] that
+the most important structure in modern machine learning                             mainly targets large compute intensive ops also have ability
+models. Table 2 shows the performance breakdown of com-                             of fusion for small kernels. These techniques are served for
+pute intensive ops, memory intensive ops and CPU time.                              static shape scenarios, and suffer from severer compilation
+Note that we use library call of cuDNN/cuBLAS for compute                           overhead for dynamic shape workloads.
+intensive ops in Nimble implementation instead of kernel                                Lazy compilation[2, 14] can be applied to reduce compi-
+tuning, as we do not find open sourced code of the schedules                        lation overhead if unknown shapes are limited. However, it
+for compute intensive ops described in Nimble report.                               loses partial opportunity of kernel fusion optimization, and
+   It shows that DISC achieves 2.61× speedup for memory                             is infeasible to be applied when there are too many unknown
+intensive ops only, which is one of the main reason of the                          shapes.
+overall speedup. The advantage of DISC is that, it collects                             Nimble[15] addresses the dynamic shape problem by build-
+shape hints from both shape propagation and shape con-                              ing a compiler system based on TVM. It proposes a VM
+straints to help with efficient fusions. The shape-adaptive                         approach to interpret dynamic shape processing flow at run-
+fusion configuration strategy further contributes to the over-                      time. Instead, DISC generates runtime flow at compile time
+all performance.                                                                    to avoid interpretation overhead, and exposes more opportu-
+   Another advantage of DISC is low-overhead runtime flow.                          nity of host-device co-optimization. Meanwhile, DISC pays
+Table 2 shows that the CPU time with DISC is only 36.6% of                          more attention to memory intensive fusion comparing with
+that with Nimble. A small portion of the CPU time reduc-                            Nimble.
+tion comes from reduced kernel launches, as DISC shows a                                IREE[1] is an open source MLIR-based end-to-end com-
+slight reduce of total kernels (table 3). While the main reason                     piler that lowers ML models to a unified IR optimized for real-
+comes from that, DISC generated runtime flow works more                             time mobile/edge inference against heterogeneous hardware
+efficiently with co-optimization of host and device control                         accelerators. IREE provides flexible deployment solutions for
+flow.                                                                               the compiled ML models while it is still in its early phase.
+DISC : A Dynamic Shape Compiler for Machine Learning Workloads                                   EuroMLSys ’21, April 26, 2021, Online, United Kingdom
+
+
+7    Conclusion                                                                 [15] Haichen Shen, Jared Roesch, Zhi Chen, Wei Chen, Yong Wu, Mu Li,
+                                                                                     Vin Sharma, Zachary Tatlock, and Yida Wang. 2020. Nimble: Effi-
+DISC addresses the dynamic shape optimization problem. It                            ciently compiling dynamic neural networks for model inference. arXiv
+demonstrates how to build a compiler system based on MLIR                            preprint arXiv:2006.03031 (2020).
+infrastructure. DISC supplements HLO and forms DHLO,                            [16] Han Vanholder. 2016. Efficient inference with tensorrt.
+which is a fully dynamic shape representation. DHLO is                          [17] Nicolas Vasilache, Oleksandr Zinenko, Theodoros Theodoridis, Priya
+served as a hub IR that supports versatile machine learning                          Goyal, Zachary DeVito, William S Moses, Sven Verdoolaege, Andrew
+                                                                                     Adams, and Albert Cohen. 2018. Tensor comprehensions: Framework-
+frameworks. The runtime flow, including shape inference,
+                                                                                     agnostic high-performance machine learning abstractions. arXiv
+buffer management and host-side control, is generated by the                         preprint arXiv:1802.04730 (2018).
+compiler. This is a new attempt that aims to reduce interpre-                   [18] Lianmin Zheng, Chengfan Jia, Minmin Sun, Zhao Wu, Cody Hao Yu,
+tation overhead and enrich host-device-joint optimization                            Ameer Haj-Ali, Yida Wang, Jun Yang, Danyang Zhuo, Koushik Sen,
+opportunity. With shape propagation and shape constraints                            et al. 2020. Ansor: Generating high-performance tensor programs for
+                                                                                     deep learning. In 14th {USENIX} Symposium on Operating Systems
+collecting, DISC applies efficient kernel fusion optimization
+                                                                                     Design and Implementation ({OSDI} 20). 863–879.
+without full shape information. Experiments show that DISC                      [19] Zhen Zheng, Pengzhan Zhao, Guoping Long, Feiwen Zhu, Kai Zhu,
+outperforms state-of-the-art solutions with 1.8× speedup.                            Wenyi Zhao, Lansong Diao, Jun Yang, and Wei Lin. 2020. Fusion-
+                                                                                     stitching: boosting memory intensive computations for deep learning
+References                                                                           workloads. arXiv preprint arXiv:2009.10924 (2020).
+ [1] Cited February 2021. IREE. https://github.com/google/iree.
+ [2] Cited February 2021.             NVIDIA TensorFlow User Guide.
+     https://docs.nvidia.com/deeplearning/frameworks/tensorflow-
+     user-guide/index.html.
+ [3] Cited February 2021. onnx2trt. https://github.com/onnx/onnx-
+     tensorrt.
+ [4] Cited February 2021. TensorFlow Unique Op. https://www.tensorflow.
+     org/api_docs/python/tf/unique.
+ [5] Cited February 2021. TensorFlow XLA. https://www.tensorflow.org/
+     xla.
+ [6] Cited February 2021. XLA slice op. https://www.tensorflow.org/xla/
+     operation_semantics#slice.
+ [7] January 2020. DISC RFC. https://groups.google.com/a/tensorflow.org/
+     g/mlir/c/_X48poNcbDI/m/jCC8BWIICQAJ.
+ [8] Martín Abadi, Paul Barham, Jianmin Chen, Zhifeng Chen, Andy Davis,
+     Jeffrey Dean, Matthieu Devin, Sanjay Ghemawat, Geoffrey Irving,
+     Michael Isard, et al. 2016. Tensorflow: A system for large-scale machine
+     learning. In 12th {USENIX} symposium on operating systems design
+     and implementation ({OSDI} 16). 265–283.
+ [9] Riyadh Baghdadi, Jessica Ray, Malek Ben Romdhane, Emanuele
+     Del Sozzo, Abdurrahman Akkas, Yunming Zhang, Patricia Suriana,
+     Shoaib Kamil, and Saman Amarasinghe. 2019. Tiramisu: A polyhedral
+     compiler for expressing fast and portable code. In 2019 IEEE/ACM
+     International Symposium on Code Generation and Optimization (CGO).
+     IEEE, 193–205.
+[10] Tianqi Chen, Mu Li, Yutian Li, Min Lin, Naiyan Wang, Minjie Wang,
+     Tianjun Xiao, Bing Xu, Chiyuan Zhang, and Zheng Zhang. 2015. Mxnet:
+     A flexible and efficient machine learning library for heterogeneous
+     distributed systems. arXiv preprint arXiv:1512.01274 (2015).
+[11] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin Zheng, Eddie Yan,
+     Haichen Shen, Meghan Cowan, Leyuan Wang, Yuwei Hu, Luis Ceze,
+     et al. 2018. {TVM}: An automated end-to-end optimizing compiler
+     for deep learning. In 13th {USENIX} Symposium on Operating Systems
+     Design and Implementation ({OSDI} 18). 578–594.
+[12] Chris Lattner, Jacques Pienaar, Mehdi Amini, Uday Bondhugula, River
+     Riddle, Albert Cohen, Tatiana Shpeisman, Andy Davis, Nicolas Vasi-
+     lache, and Oleksandr Zinenko. 2020. MLIR: A compiler infrastructure
+     for the end of Moore’s law. arXiv preprint arXiv:2002.11054 (2020).
+[13] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James Brad-
+     bury, Gregory Chanan, Trevor Killeen, Zeming Lin, Natalia Gimelshein,
+     Luca Antiga, et al. 2019. Pytorch: An imperative style, high-
+     performance deep learning library. arXiv preprint arXiv:1912.01703
+     (2019).
+[14] Jonathan Raiman. [n.d.]. Dali: Lazy Compilation of Dynamic Compu-
+     tation Graphs. ([n. d.]).
+

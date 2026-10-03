@@ -1,0 +1,1227 @@
+                                                  MPK: A Compiler and Runtime for Mega-Kernelizing Tensor Programs
+
+                                             Xinhao Cheng1,∗ Zhihao Zhang1,∗ Yu Zhou1,∗ Jianan Ji1,∗ Jinchen Jiang2 Zepeng Zhao1
+                                                 Ziruo Xiao1 Zihao Ye3 Yingyi Huang3 Ruihang Lai1 Hongyi Jin1 Bohan Hou1
+                                              Mengdi Wu1 Yixin Dong1 Anthony Yip1 Zihao Ye4 Songting Wang1 Wenqin Yang5
+                                                                   Xupeng Miao6 Tianqi Chen1,3 Zhihao Jia1
+
+                                                                      Carnegie Mellon University1 Tsinghua University2 NVIDIA3
+                                                                  University of Michigan4 Independent Researcher5 Peking University6
+arXiv:2512.22219v2 [cs.DC] 10 Jun 2026
+
+
+
+
+                                                                       Abstract                                ers [15, 36, 41]. However, this kernel-per-operator execution
+                                         We introduce Mirage Persistent Kernel (MPK), the first com-           model limits several key cross-operator GPU optimizations.
+                                         piler and runtime system that automatically transforms multi-            First, modern GPUs impose an implicit kernel barrier be-
+                                         GPU model inference into a single high-performance mega-              tween consecutive launches on the same stream to ensure
+                                         kernel. MPK introduces an SM-level graph representation               that all threads from the previous kernel complete before
+                                         that captures data dependencies at the granularity of individ-        any thread from the next kernel begins. While this mecha-
+                                         ual streaming multiprocessors (SMs), enabling cross-operator          nism correctly enforces data dependencies, it prevents cross-
+                                         software pipelining, fine-grained overlap of computation and          operator software pipelining and forces dependent operators
+                                         communication, and other optimizations that are infeasible            to execute strictly sequentially. NVIDIA recently introduced
+                                         under the conventional kernel-per-operator execution model.           programmatic dependent launch (PDL) [11], which allows
+                                         The MPK compiler lowers tensor programs into optimized                partial overlap between kernels on the same stream. However,
+                                         SM-level task graphs and generates fast CUDA implementa-              adopting PDL requires significant engineering effort, as it
+                                         tions for each task, while the MPK in-kernel parallel runtime         fundamentally alters kernel structure and control flow.
+                                         executes these tasks within a single persistent mega-kernel              Second, the kernel-per-operator execution model prevents
+                                         using decentralized scheduling across SMs. Together, these            fine-grained compute-communication overlap. Since depen-
+                                         components provide end-to-end kernel fusion with minimal              dencies are represented only at the coarse granularity of op-
+                                         developer effort, while preserving the flexibility of existing        erators, the runtime must enforce full-operator completion
+                                         programming models. Our evaluation shows that MPK signifi-            before launching dependent communication or computation.
+                                         cantly outperforms existing kernel-per-operator LLM serving           For example, when a matrix multiplication is followed by an
+                                         systems, achieving up to 1.7× lower end-to-end inference              all-reduce in separate kernels, the all-reduce must wait for the
+                                         latency and pushing LLM inference performance close to the            entire matrix multiplication to complete, even though each
+                                         limits of the underlying hardware. MPK is publicly available          fragment of the all-reduce depends only on a subset of the
+                                         at https : //github.com/mirage-project/mirage.                        multiplication output. Exploiting such opportunities requires
+                                                                                                               representing and enforcing dependencies at a granularity finer
+                                                                                                               than individual kernels.
+                                         1    Introduction                                                        Finally, kernel-per-operator execution may require launch-
+                                                                                                               ing hundreds to thousands of kernels for each inference itera-
+                                         Enabling high-performance inference of ML models on GPUs
+                                                                                                               tion. To reduce launch overhead, current systems rely heavily
+                                         is critical for modern AI applications, since inference latency
+                                                                                                               on CUDA Graphs, which capture a sequence of GPU opera-
+                                         directly affects both user experience and serving cost. Today’s
+                                                                                                               tions and replay them with low overhead. However, CUDA
+                                         ML systems generally express model computation as a tensor
+                                                                                                               Graphs are largely static: any changes to control flow, ten-
+                                         program structured as a directed acyclic graph, whose nodes
+                                                                                                               sor shapes, or data dependencies require re-instantiating or
+                                         denote tensor algebra operators (e.g., matrix multiplication)
+                                                                                                               modifying the captured graph, limiting their flexibility for the
+                                         and whose edges represent tensors, i.e., the n-dimensional
+                                                                                                               dynamic workloads commonly seen in model inference.
+                                         arrays produced and consumed by these operators.
+                                                                                                                  A promising approach to overcoming these limitations is to
+                                            Most existing systems execute each operator using a ded-
+                                                                                                               fuse all computation and communication of model inference
+                                         icated GPU kernel, either hand-optimized by domain ex-
+                                                                                                               into a single mega-kernel, also known as a persistent kernel.
+                                         perts [18, 43] or generated automatically by ML compil-
+                                                                                                               In this design, the system launches one GPU kernel to execute
+                                             ∗ Equal   contribution.                                           the entire model, including layer computations and inter-GPU
+
+
+                                                                                                           1
+             Inference                                                          The MPK compiler. The MPK compiler takes a tensor
+            Configuration                                      Requests         program and an inference configuration as input and automat-
+                             MM                MM   E   AR
+                             MM                MM   E   AR
+                             MM
+                             MM
+                                  E   AT
+                                               MM
+                                               MM
+                                                    E
+                                                    E
+                                                        AR
+                                                        AR
+                                                                                ically transforms the program’s computation graph into an
+                             MM
+                                           E
+                                               MM   E   AR
+                                                              In-Kernel         optimized SM-level tGraph tailored to the given inference
+               MPK           MM                MM   E   AR
+
+                                                               Parallel
+                                  E   AT
+                             MM                MM   E   AR
+
+            Compiler (§4)    MM                MM   E   AR
+                                                                                configuration and GPU architecture. The compiler applies a
+                                                             Runtime (§5)
+  Tensor                     SM-Level Graph                                     range of optimizations, including event fusion, graph normal-
+ Program                    Representation (§3)
+                                                                                ization, and graph linearization, to reduce synchronization
+                                                                                overhead and improve the performance of generated tGraphs.
+              Figure 1: An overview of MPK.                                     In addition, MPK automatically generates fast CUDA imple-
+                                                                                mentations for individual tasks using existing superoptimiza-
+                                                                                tion techniques [41], ensuring efficient SM-level execution.
+communication, without interruption.
+   Mega-kernels address the limitations of kernel-per-operator                  In-kernel parallel runtime. MPK executes the SM-level
+execution in several ways. First, they eliminate repeated                       tGraph using an in-kernel parallel runtime embedded en-
+kernel launch overhead by replacing many operator-level                         tirely within a mega-kernel, enabling fine-grained control
+launches with a single kernel invocation. Second, by fusing                     over task execution and scheduling without additional kernel
+all operators into one kernel, they enable cross-operator soft-                 launches during model execution. To achieve this goal, the
+ware pipelining, allowing data for the next operator to be                      runtime partitions a GPU’s SMs into workers and schedulers.
+prefetched while computation for the current operator is still                  Each worker maintains a dedicated task queue and executes
+in progress. Third, they support fine-grained overlap of com-                   assigned tasks in a first-in-first-out order, while schedulers
+putation and inter-GPU communication, enabling concurrent                       track dependencies across tasks and dispatch tasks once their
+execution that more effectively hides communication latency.                    prerequisites are satisfied. The MPK runtime uses an event-
+   Despite these benefits, automatically transforming an ML                     driven, fully asynchronous execution model to keep GPUs
+model into a high-performance mega-kernel remains challeng-                     highly utilized. Finally, the runtime uses a hybrid task-launch
+ing. Existing ML systems—such as PyTorch [29], Triton [36],                     strategy that combines just-in-time and ahead-of-time dis-
+and TVM [15]—do not support end-to-end mega-kernel gen-                         patch to minimize runtime overhead while preserving dy-
+eration. Moreover, these systems rely on a fragmented ecosys-                   namic load balance across SMs.
+tem of specialized libraries: NCCL [4] or NVSHMEM [10]
+for communication, FlashInfer [43] or FlashAttention [18] for
+attention, and CUDA or Triton for custom computation. This                      Evaluation results. We implement MPK as a PyTorch com-
+fragmentation makes it difficult to unify the entire inference                  piler backend: a PyTorch program can be compiled into an
+pipeline within a single kernel.                                                MPK mega-kernel with only a few lines of code changes. We
+                                                                                evaluate MPK on five widely used models across three gener-
+   We present Mirage Persistent Kernel (MPK), the first com-
+                                                                                ations of NVIDIA GPUs: A100, H100, and B200. Even for
+piler and runtime system that automatically transforms multi-
+                                                                                workloads widely deployed and heavily optimized by existing
+GPU model inference into a high-performance mega-kernel.
+                                                                                kernel-per-operator systems, such as SGLang and vLLM for
+MPK enables end-to-end kernel fusion with minimal devel-
+                                                                                LLM serving, MPK outperforms current systems by 1.0–1.7×
+oper effort: users can mega-kernelize a PyTorch model with
+                                                                                on both single- and multi-GPU deployments, pushing LLM
+only a few lines of code while achieving significant per-
+                                                                                inference performance close to hardware limits.
+formance improvements compared to running the model in
+vanilla PyTorch with CUDA Graphs and torch.compile.
+MPK combines the performance benefits of mega-kernels                           2     Background
+with the usability of existing ML frameworks.
+   A key idea in MPK is to represent computation and inter-                     This section first reviews the kernel-oriented GPU program-
+GPU communication at the granularity of individual stream-                      ming model and its limitations (§ 2.1), and then presents ker-
+ing multiprocessors (SMs), rather than at the granularity of                    nel fusion and mega-kernel techniques (§ 2.2), which motivate
+an entire GPU. MPK introduces an SM-level graph represen-                       the design of MPK.
+tation, called tGraph, whose nodes denote tasks running on
+individual SMs and whose edges encode fine-grained depen-                       2.1    GPU Programming Model
+dencies between tasks. This representation exposes additional
+parallelism and enables optimizations such as cross-operator                    On GPUs, computations are organized as kernels, each repre-
+software pipelining and fine-grained kernel overlap, which                      senting a function executed concurrently across many cores
+are difficult to realize in conventional kernel-per-operator                    in a single-program, multiple-data (SPMD) fashion. A kernel
+execution models. MPK realizes this idea using two key com-                     consists of a grid of thread blocks, where each block is sched-
+ponents shown in Figure 1.                                                      uled on a streaming multiprocessor (SM) and contains mul-
+
+
+                                                                            2
+                              Kernel A                                   Kernel B
+                                                                                                                       MatMul Kernel           AllGather Kernel
+                               Task A                                    Task B
+  Tensor Memory                            Pipeline                                                      SM 1            M1      M3            A1            A3
+                  A1    A2      A3                       B1       B2       B3
+    Accelerator                            bubbles
+   Tensor Cores                                                                                          SM 2            M2      M4            A2            A4
+                        A1      A2       A3                       B1       B2       B3
+                                                         Pipeline                                       (a) Kernel barriers prevent overlapping MatMul and AllGather.
+   CUDA Cores                   A1        A2       A3    bubbles            B1      B2   B3
+
+              (a) Kernel barriers prevent cross-task pipelining.
+                                                                                                                                   Mega-Kernel
+
+                                                  Mega-Kernel                                            SM 1            M1      M3      M4         A3
+                                         Task A
+                                                                Task B                                   SM 2            M2      A1      A2          A4
+        Tensor Memory
+                         A1      A2       A3       B1    B2      B3
+          Accelerator
+                                                                                                        (b) MPK enables fine-grained overlap of MatMul and AllGather.
+         Tensor Cores            A1       A2       A3    B1      B2        B3
+                                                                                                  Figure 3: Comparing how MPK and existing approaches sup-
+          CUDA Cores                      A1       A2    A3       B1       B2       B3            port fine-grained kernel overlap between tasks. Data depen-
+          (b) MPK enables both intra- and cross-task pipelining.
+                                                                                                  dencies (black arrows in Figure 3b) ensure correctness.
+
+Figure 2: Comparing how MPK and existing approaches sup-
+port intra- and cross-task pipelining.                                                            Fine-grained kernel overlap. Kernel barriers also preclude
+                                                                                                  opportunities to overlap kernels that utilize different hardware
+                                                                                                  resources (e.g., compute and communication), as they enforce
+tiple threads that operate on individual data elements. Each                                      dependencies at the granularity of entire kernels rather than
+thread has a private register file, while threads within the same                                 individual data units. Figure 3a illustrates a common pattern
+block can cooperate through low-latency shared memory for                                         in large language models (LLMs), where a MatMul opera-
+data exchange and collective operations. All kernel inputs and                                    tor is followed by an AllGather operator. Existing systems
+outputs are stored in GPU device memory.                                                          generally launch these as two separate kernels, requiring all
+   The conventional GPU programming model does not sup-                                           thread blocks of the AllGather kernel to wait until all thread
+port direct synchronization across thread blocks within a ker-                                    blocks of the preceding MatMul kernel complete.
+nel, because thread blocks are scheduled independently across                                        In practice, the data dependency between MatMul and
+SMs and may not all be resident simultaneously. As a result,                                      AllGather is much finer-grained: since AllGather performs
+cross-operator dependencies are enforced through kernel bar-                                      element-wise operations, each of its thread blocks only de-
+riers, which are automatically inserted by the GPU runtime                                        pends on the output of a single MatMul thread block. This
+between consecutive kernels launched on the same stream.                                          dependency structure enables fine-grained kernel overlap,
+   While kernel barriers simplify dependency management,                                          where different SMs can execute MatMul and AllGather in
+they also prevent key GPU optimizations such as cross-kernel                                      parallel, as long as fine-grained data dependencies are pre-
+software pipelining and fine-grained operator overlap.                                            served. Such overlap allows the system to simultaneously
+                                                                                                  utilize compute resources and communication bandwidth on
+                                                                                                  modern GPUs, as identified in prior work [50]. Achieving this
+Software pipelining. GPU architectures are increasingly                                           overlap, however, requires proper synchronization between
+heterogeneous, integrating specialized accelerators such as                                       SMs at sub-kernel granularity, as shown in Figure 3b, which
+tensor cores and tensor memory accelerators (TMAs). Since                                         is not supported by conventional kernel barriers.
+TMA load and store instructions execute asynchronously, data
+movement can proceed while tensor cores and CUDA cores
+                                                                                                  2.2      Kernel Fusion
+perform computation. Fully exploiting these accelerators re-
+quires software pipelining—a technique that interleaves in-                                       Kernel fusion eliminates kernel barriers by combining multi-
+dependent stages of computation and data movement across                                          ple GPU kernels that execute sequentially on the same data
+multiple iterations of tasks to maximize hardware utilization.                                    into a single, semantically equivalent kernel. Kernel fusion im-
+   Existing systems implement intra-task pipelining, as shown                                     proves performance by avoiding materialization of intermedi-
+in Figure 2a, where a single task is decomposed into multi-                                       ate results, reducing device memory accesses, and eliminating
+ple iterations. In this model, TMAs, tensor cores, and CUDA                                       kernel launch overheads.
+cores can simultaneously perform data transfer, matrix com-                                          Kernel fusion has been widely adopted in tensor pro-
+putation, and auxiliary operations for different iterations in a                                  gram compilers. Frameworks such as PyTorch, JAX, and
+pipeline. However, kernel barriers restrict pipelining to within                                  TVM employ rule-based heuristics to fuse adjacent ker-
+a single task, preventing cross-task pipelining and introducing                                   nels [14, 15, 29], while systems such as Mirage and TASO
+pipeline bubbles that leave hardware resources underutilized.                                     automatically discover fusion rules through compiler super-
+
+
+                                                                                              3
+                                      Compute Task on    Comm. Task on        Event Handled by
+                 Kernel on a GPU                                                                 Kernel Dependency        Event Notification   Task Launch
+                                      a Worker SM        a Worker SM          a Scheduler Warp
+
+             MatMul      Inference Config MM                             MM       E      AR        MM                                  MM             AR
+                                          MM                             MM       E      AR        MM                                  MM             AR
+                                                   E     AT                                                          AT
+             Attention                    MM                             MM       E      AR        MM                                  MM             AR
+                                          MM                             MM       E      AR        MM                                  MM             AR
+                                                                 E                                         E                   E               E
+                                          MM                             MM       E      AR        MM                                  MM             AR
+             MatMul         MPK           MM                             MM       E      AR        MM                                  MM             AR
+                           Compiler                E     AT                                                          AT
+               All                        MM                             MM       E      AR        MM                                  MM             AR
+             Reduce                       MM                             MM       E      AR        MM                                  MM             AR
+
+            (a) Computation Graph                       (b) SM-Level tGraph                             (c) An Equivalent but Suboptimal tGraph
+
+Figure 4: The MPK compiler transforms a kernel-level computation graph into an optimized SM-level tGraph. MM, AT, and AR
+denote MatMul, Attention, and AllReduce tasks, respectively.
+
+optimization [26, 41]. However, existing compilers can only                           edges from dependent events. A task is ready for execution
+fuse small groups of local operators, as generating a single                          when its dependent events are all activated and notifies its
+kernel that faithfully implements an entire complex tensor                            triggering event upon completion. An event is activated once
+program is computationally difficult and often infeasible.                            it has received notifications from all tasks associated with it.
+   The mega-kernel paradigm pushes kernel fusion to the                                  This structure captures dependencies at a much finer gran-
+extreme by fusing all computation and communication of                                ularity than traditional computation graphs. For example,
+a tensor program into one persistent kernel, using device-                            multi-GPU LLM serving often involves a MatMul operator
+memory synchronization primitives to coordinate execution                             followed by an AllReduce operator (Figure 4a). Existing
+across SMs. Despite its performance benefits, current ML                              systems generally execute these operators sequentially be-
+compilers such as PyTorch, Triton, JAX, and TVM do not                                cause coarse-grained kernel barriers synchronize entire ker-
+support mega-kernel compilation. Existing mega-kernels are                            nels. In contrast, SM-level task graphs can represent precise
+instead handcrafted by GPU experts for specific models. For                           task-level dependencies: since AllReduce performs element-
+example, FlashDMoE fuses mixture-of-experts computation                               wise communication and reduction, each of its tasks depends
+and inter-GPU communication into a single kernel [13], while                          only on one corresponding MatMul task that produces its in-
+Spector et al. manually designed and implemented a low-                               put tile. By inserting fine-grained events between dependent
+latency mega-kernel for LLAMA-1B [9, 37].                                             task pairs, MPK can overlap compute-intensive MatMul tasks
+   These manual approaches require substantial engineering                            with communication-intensive AllReduce tasks, improving
+effort and deep GPU expertise to mega-kernelize a tensor                              overall GPU utilization.
+program. In contrast, MPK adopts a compiler-based approach                               Multiple tGraphs may represent the same computation
+that automatically transforms a tensor program into an opti-                          graph. Figure 4c shows an alternative but suboptimal tGraph
+mized mega-kernel, eliminating the need for manual effort.                            where events capture only operator-level dependencies, anal-
+                                                                                      ogous to traditional kernel barriers. § 4 describes how MPK
+                                                                                      generates high-performance task graphs by inferring precise
+3   SM-Level Graph Representation
+                                                                                      data dependencies to maximize concurrency and minimize
+This section introduces tGraph, a representation that ex-                             synchronization overheads.
+presses the computation of a tensor program at the granularity
+of individual streaming multiprocessors (SMs). Unlike con-                            Comparison with CUDA Graphs. tGraphs can be viewed
+ventional computation graphs, which expose dependencies                               as a lower-level extension of CUDA Graphs, sharing several
+only between tensor operators, tGraph captures dependencies                           structural similarities. Like CUDA Graphs, tGraphs are stat-
+between SM-level units of work. This fine-grained representa-                         ically instantiated and encode explicit dependencies among
+tion exposes additional parallelism and enables optimizations                         operations. However, while CUDA Graphs capture dependen-
+such as cross-operator software pipelining and fine-grained                           cies only at the kernel level, tGraphs operate at the granularity
+kernel overlap, both of which are not supported by the existing                       of individual SM tasks and sub-kernel events. CUDA Graphs
+kernel-per-operator execution model.                                                  primarily describe kernel launch order and rely on stream
+   Figure 4 illustrates an example tGraph, where each node                            semantics for synchronization, which confines overlap and
+represents either a task or an event. Each task—shown as a                            fusion to kernel boundaries. In contrast, tGraphs explicitly
+blue (or orange) rectangle—denotes a unit of computation                              model both intra- and cross-operator dependencies, enabling
+(or communication) executed on a single SM. Each event—                               fine-grained synchronization across SMs and overlap of com-
+shown as a green circle—represents synchronization across                             putation and communication within a single kernel. This de-
+tasks. Tasks and events alternate in the graph: every task                            sign allows MPK to exploit parallelism that is inaccessible to
+only has outgoing edges to triggering events and incoming                             CUDA Graphs and other kernel-level execution models.
+
+
+                                                                                 4
+                                                                                                            e9                     Q1
+                                                                                    Q1       e1             e10                                                         e3            R1
+                                                                                                                   R1              Q2
+                                                                                    Q2       e2             e11                                e1            A1         e4            O1
+                                                                                                   A1                              K1
+                                                                                                                   O1
+                                                                                    K1       e3             e12                    V1                                   e5            O2
+                Query                                                               V1       e4                    O2    e0
+                                Q                                                                           e13                    Q3
+              Projection                                  RMSNorm           e0                                                                                          e6            O3
+                                                                                    Q3       e5             e14    O3              Q4
+                 Key                                       Output                   Q4       e6             e15                                e2            A2         e7            O4
+     X                          K        Attention   A                                            A2               O4              K2
+              Projection                                  Projection
+                                                                                    K2       e7             e16                                                         e8            R2
+                                                                                                                                   V2
+                                                                                    V2       e8             e17    R2
+                Value
+                                V                                                                                                   (c) Successor-set fusion
+              Projection                                                                                    e18
+                                                                                                                        IDs      1        2    3         4     5   6     7         8    9
+                           (a) Computation Graph                                  (b) Operator decomposition &          Tasks   Q1        Q2   K1       V1    Q3   Q4    K2       V2   A1
+                                                                                      dependency analysis               Depend e0         e0   e0       e0    e0   e0    e0       e0   e1
+                                                                                                                        Trigger e1        e1   e1       e1    e2   e2    e2       e2   e3
+                Q1                                                     Q1
+                                             e3      R1                                           R1                    IDs     10        11   12       13    14   15    16       17   18
+                Q2                                                     Q2                                               Tasks   A2        R1   D1       R2    D2   O1    O2       O3   O4
+                           e1       A1               O1                     e1     A1        e3                   O1
+                K1                                                     K1                                               Depend e2         e3   e3       e4    e4   e5    e5       e5   e5
+                                                                                                  D1
+                V1                                   O2                V1                                         O2    Trigger e4         -   e5        -    e5    -     -       -     -
+         e0                                  e4               e0                                        e5
+                Q3                                                     Q3                                               Events            e0    e1           e2    e3        e4        e5
+                                                     O3                                           D2              O3
+                Q4                                                     Q4                                               Counts             0        4        4     1          2        1
+                           e2       A2               O4                     e2     A2        e4                   O4
+                K2                                                     K2                                               First task ID      1        9        10    11        13        15
+                                                                                                  R2
+                V2                           e5      R2                V2                                               Last task ID       8        9        10    12        14        18
+
+                  (d) Predecessor-set fusion                                     (e) tGraph normalization                               (f) tGraph linearization
+
+Figure 5: The MPK compiler workflow. In (b), Q, K, V , A, O, and R denote the sets of tasks produced by decomposing the
+query projection, key projection, value projection, attention, output projection, and RMSNorm, respectively. D1 and D2 in (e) are
+dummy tasks inserted during tGraph normalization to ensure that each task has a single triggering event. Finally, (f) shows how
+MPK linearizes the tGraph and stores the resulting structure, where tasks and events use a uniform, canonical representation.
+
+4   The MPK Compiler                                                                         provides an interface for users to specify custom partitioning
+                                                                                             strategies by setting the desired parallelization degree along
+This section presents the MPK compiler, which takes a com-                                   each output dimension.
+putation graph and an associated inference configuration as
+input and generates an optimized tGraph specialized for the                                  Dependency analysis. MPK uses events to capture depen-
+target configuration and underlying GPU architecture. Fig-                                   dencies between tasks. For any two operators sharing a tensor,
+ure 5 illustrates the end-to-end compilation workflow.                                       MPK enumerates all pairs of tasks from the two operators and
+                                                                                             introduces an event e for a task pair (t1 ,t2 ) if and only if the
+                                                                                             output region produced by t1 overlaps with the input region
+4.1 tGraph Generation                                                                        consumed by t2 . The event serves as a synchronization point
+Operator decomposition. The MPK compiler decomposes                                          indicating that t2 cannot begin execution until t1 has produced
+each operator in the input computation graph into a set of                                   the required data. Accordingly, MPK inserts two edges, (t1 , e)
+tasks by partitioning the operator’s output tensors. Each task                               and (e,t2 ), into the resulting tGraph. This fine-grained depen-
+computes a disjoint subset of the output, allowing tasks from                                dency analysis preserves all producer-consumer dependencies
+the same operator to execute in parallel across SMs. Most                                    while exposing parallelism across independent tasks.
+tensor algebra operators can be partitioned along multiple
+output dimensions; for example, the output tensor of a matrix                                Event fusion. MPK applies two complementary forms
+multiplication can be tiled along both the row and column                                    of event fusion—successor-set fusion and predecessor-set
+dimensions to expose parallelism.                                                            fusion—to eliminate redundant synchronization points and
+   The performance of a partitioning strategy depends on both                                simplify the constructed tGraph. For an event e, we define
+the problem shape and the target GPU architecture. To dis-                                   two functions: InTasks(e), the set of tasks that trigger e, and
+cover an effective strategy, MPK selects a partitioning strategy                             OutTasks(e), the set of tasks that depend on e. These functions
+that minimizes data loading from device memory to shared                                     characterize when multiple events have identical dependency
+memory, since device memory accesses are significantly more                                  structure and can therefore be fused.
+expensive than shared-memory accesses or computation on                                         First, successor-set fusion merges events that serve as pre-
+CUDA cores and tensor cores. By default, MPK generates a                                     requisites for the same set of consumer tasks. Since these
+number of tasks proportional to the number of SMs to pro-                                    consumer tasks cannot begin execution until all such events
+mote load balance across SMs during execution. MPK also                                      are activated, representing the events separately provides no
+
+
+                                                                                         5
+                                                                              needs to store only one dependent-event identifier and one
+        e1                T1    e1     e1           e1   T1
+                                                                              triggering-event identifier, rather than variable-length lists.
+        e2                T2    e2     e2           e2   T2
+  T0    …      T0   e’
+                          …     …      …     T0     …     …    e’    T0       MPK achieves this property through the two rewrites shown
+        ek                Tk    ek     ek           ek   Tk                   in Figure 6, which transform an input tGraph into a func-
+(a) A transformation reducing        (b) A transformation reducing
+                                                                              tionally equivalent form in which each task has at most one
+fan-out of a task to one.            fan-in of a task to one.                 dependent event and at most one triggering event.
+                                                                                  First, when a task T0 triggers multiple events e1 , . . . , ek ,
+Figure 6: MPK performs graph transformations to normalize
+                                                                              MPK introduces a new event e′ and k empty tasks T1 , . . . , Tk ,
+an arbitrary tGraph, ensuring that every task has at most one
+                                                                              each of which performs no computation and depends on e′ .
+dependent event and at most one triggering event.
+                                                                              After this transformation, T0 triggers only e′ , and each newly
+                                                                              introduced task Ti triggers exactly one of the original events
+additional scheduling flexibility.                                            ei , as shown in Figure 6a. This transformation ensures that
+Definition 4.1 (Successor-set fusion). For any two events e1                  every task has at most one triggering event. Figure 5(e) shows
+and e2 in a tGraph, successor-set fusion applies if and only if               how MPK applies this transformation to reduce the number
+OutTasks(e1 ) = OutTasks(e2 ). MPK removes e1 and e2 from                     of triggering events for A1 and A2 to one.
+the tGraph and introduces a fused event e′ with InTasks(e′ ) =                    Second, when a task T0 depends on multiple events
+InTasks(e1 ) ∪ InTasks(e2 ) and OutTasks(e′ ) = OutTasks(e1 ).                e1 , . . . , ek , MPK introduces a new event e′ and k empty tasks
+                                                                              T1 , . . . , Tk , each of which performs no computation and trig-
+   For example, successor-set fusion merges events e10 and                    gers e′ . After this transformation, T0 depends only on e′ , and
+e14 in Figure 5(b) into a new event, e4 in Figure 5(c), because               each newly introduced task Ti depends on exactly one of the
+both events are prerequisites for task O1 .                                   original events ei , as shown in Figure 6b. This transformation
+   Second, predecessor-set fusion merges events that depend                   ensures that every task has at most one dependent event.
+on the same set of producer tasks. Since such events are                          tGraph normalization introduces additional tasks and
+triggered simultaneously, maintaining them as separate syn-                   events only when a tGraph contains tasks with multiple fan-in
+chronization nodes introduces unnecessary graph complexity.                   or fan-out events. This situation typically arises when the orig-
+                                                                              inal computation graph contains operators that can execute
+Definition 4.2 (Predecessor-set fusion). For any two events
+                                                                              in parallel. For example, tasks A1 and A2 in Figure 5(d) have
+e1 and e2 in a tGraph, predecessor-set fusion applies if
+                                                                              two fan-out events because both the RMSNorm and output
+and only if InTasks(e1 ) = InTasks(e2 ). MPK removes e1 and
+                                                                              projection operators depend on attention and can therefore run
+e2 from the tGraph and introduces a fused event e′ with
+                                                                              in parallel. In practice, we observe negligible normalization
+InTasks(e′ )=InTasks(e1 ) and OutTasks(e′ )=OutTasks(e1 ) ∪
+                                                                              overhead—always less than 1% in our evaluation—because
+OutTasks(e2 ).
+                                                                              real-world models are usually “deep” (with many sequential
+    For example, predecessor-set fusion merges events e4 , e5 ,               operators), rather than “wide” (with many parallel operators).
+e6 , and e7 in Figure 5(c) into a single event, e4 in the new
+tGraph, because all four events depend on tasks A1 and A2 .                   Algorithm 1 MPK’s tGraph linearization algorithm. It is
+    A core challenge MPK must address is representing depen-                  guaranteed that each task is enqueued into T once and that
+dencies between tasks and events efficiently. Because MPK                     each event is enqueued into E once. Lines 5-7 ensure that all
+executes tasks and updates events in parallel across SMs,                     tasks depending on an event are consecutive in T .
+the runtime requires a uniform and cheap representation that                  Input: A normalized tGraph G
+                                                                              Output: A list of tasks T such that for each event e ∈ G , the tasks launched
+avoids costly indirect indexing. Two challenges arise. First,                     by e are consecutive in T .
+a task may depend on and trigger an arbitrary number of                        1: T ← ∅
+events. A straightforward approach to representing tasks is                    2: E ← {e ∈ G |e.counts = 0} ▷ Enqueue all events with no dependent tasks
+reserving space for the maximum number of dependent and                        3: while E is not empty do
+                                                                               4: e ← E.dequeue()
+triggering events per task. However, this approach leads to                    5: for all task t ∈ G do
+significant memory overhead. Second, after event fusion, an                    6:   if t.dependent_event = e then
+event may trigger an arbitrary number of tasks. Representing                   7:     T.enqueue(t)
+these outgoing edges by allocating space for the maximum                       8:     e′ ←t.trigger_event
+                                                                               9:     if all tasks triggering e′ are in T then
+fan-out per event is also expensive. MPK addresses these                      10:       E.enqueue(e′ )
+challenges using two techniques: tGraph normalization and                     11:
+tGraph linearization.                                                         12: return T
+
+
+tGraph normalization. Normalization bounds the depen-
+dency metadata stored for each task. When every task de-                      tGraph linearization. Linearization complements normal-
+pends on and triggers at most one event, each task descriptor                 ization: while normalization bounds the number of events
+
+
+                                                                          6
+associated with each task, linearization bounds the storage re-                  tGraph               MM1    e3         AR1
+                                                                                                                                              GPU SM
+quired to record the tasks associated with each event. tGraph                           AT1           MM2    e4         AR2                   Compute Task
+                                                                                               e1
+normalization alone does not address the second represen-                               AT2           MM3    e5         AR3                   Comm. Task
+                                                                                  e0
+tation challenge: after event fusion, an event may still need                           AT3           MM4    e6         AR4
+                                                                                               e2                                             Event
+to trigger many tasks. For example, event e5 in Figure 5(e)                             AT4           MM5    e7         AR5
+                                                                                                                                              Event Trigger
+triggers four tasks, which would otherwise require explicit                                           MM6    e8         AR6
+
+storage for all outgoing task indices.                                                                                                        Task Launch
+
+   MPK addresses this challenge using a breadth-first-search-
+                                                                                       Scheduler s1                e1              e3        e5
+based algorithm, shown in Algorithm 1, to linearize a tGraph.
+The algorithm assigns contiguous indices to all tasks triggered                        Scheduler s2   e0                      e2        e4        e6
+by the same event in the final task ordering. As a result, the fan-
+out of an event can be encoded compactly using only the first                          Worker w1            AT1          MM1            AR1            AR3
+and last task indices, eliminating the need to store an explicit
+list of dependent tasks while preserving all dependencies.                             Worker w2            AT2           MM2                AR2         AR4
+
+   Figure 5(f) illustrates how MPK stores the linearized
+                                                                                       Worker w3                  AT3              MM3                 MM5
+tGraph in GPU device memory. For each task, MPK records
+only the indices of its dependent and triggering events. For                           Worker w4                  AT4              MM4                 MM6
+each event, MPK stores the number of triggers required for ac-                  Execution timeline
+tivation; once activated, the runtime launches all tasks whose
+indices fall within the event’s first and last task indices.              Figure 7: The MPK event-driven execution model. Circles
+                                                                          denote events, and blue (or orange) rectangles denote compute
+                                                                          (or communication) tasks, respectively. Edges from an event
+4.2    Task Implementation Generation                                     to a task correspond to task launches, while edges from a task
+                                                                          to an event indicate that the task triggers the associated event
+In addition to constructing a tGraph, MPK must generate a
+                                                                          upon completion. AT, MM, and AR refer to attention, matrix
+device function for each task to execute on a GPU SM. MPK
+                                                                          multiplication, and AllReduce, respectively.
+leverages prior work and uses a compiler superoptimization
+approach to automatically generate a high-performance im-
+plementation for each task.                                               event. This design ensures that workers are fully utilized
+   Specifically, MPK performs superoptimization at the thread             while enabling asynchronous execution across operators.
+block level instead of the kernel level. Each compute task                   Schedulers are organized at warp granularity, with each SM
+is associated with a reference PyTorch implementation, and                hosting four scheduler warps. Each scheduler maintains an
+MPK uses the Mirage superoptimizer [41] to search for an                  event queue and repeatedly polls for newly activated events,
+optimized thread-block graph, which is sent to the Mirage                 dispatching the corresponding tasks to workers. The allo-
+compiler to generate a CUDA implementation. The CUDA                      cation of workers and schedulers is fixed at kernel-launch
+implementation includes intra-SM optimizations such as soft-              time and matches the GPU’s physical SM count, avoiding any
+ware pipelining, register reuse, and layout optimizations to              dynamic role-switching overhead inside the kernel.
+reduce shared-memory bank conflicts.                                         The remainder of this section details the in-kernel run-
+                                                                          time architecture. § 5.1 describes MPK’s event-driven execu-
+                                                                          tion model. § 5.2 introduces two complementary task-launch
+5     In-Kernel Parallel Runtime                                          mechanisms, analyzes their trade-offs, and explains how MPK
+                                                                          combines them to achieve low-latency and load-balanced exe-
+MPK employs an in-kernel parallel runtime that executes                   cution. § 5.3 describes additional runtime optimizations that
+the tGraph across all SMs within a single mega-kernel. This               further reduce overhead and improve throughput.
+design eliminates repeated kernel launches and exposes fine-
+grained control over scheduling, synchronization, and exe-
+                                                                          5.1     Event-Driven Execution
+cution order. Once launched, the mega-kernel continuously
+manages both computation and communication until the in-                  MPK executes a tGraph using an event-driven model. Each
+ference workload completes.                                               tGraph begins with a designated start event (e.g., e0 in Fig-
+   To support this execution model, MPK partitions a GPU’s                ure 7), which has no prerequisites. This event is initially en-
+SMs into workers and schedulers. Each worker runs on one                  queued into a scheduler’s event queue. Upon dequeuing the
+physical SM and maintains an independent task queue. Work-                event, the scheduler (e.g., s1 ) launches all tasks that depend
+ers execute a lightweight loop that repeatedly dequeues tasks,            on it (e.g., AT1 , . . . , AT4 ). Each launched task is dispatched
+performs the associated computation or communication, and                 to a worker, which executes the task and, upon completion,
+signals task completion by notifying the task’s triggering                notifies the triggering event associated with that task.
+
+
+                                                                      7
+                                       Dequeue    Enqueue                            sequence lengths—requests with long sequence lengths take
+  Scheduler s1
+                                       Event e    Task T2
+                                                                                     longer to finish than those with short ones. This variance
+                 Execute     Enqueue
+  Worker w1                                                                          makes static assignment ineffective. Under JIT launch, MPK
+                 Task T1     Event e
+
+  Worker w2
+                                                             Dequeue   Execute       launches downstream tasks (e.g., MatMul or AllReduce) only
+                                                             Task T2   Task T2
+                                                                                     after the attention tasks that trigger them have completed.
+                            (a) Just-in-time task launch.                            Workers that finish their attention tasks earlier can execute
+                                                                                     more downstream tasks, improving end-to-end latency and
+                 Enqueue                                                             balancing load across SMs, as illustrated in Figure 7.
+  Scheduler s1
+                 Task T2
+                             Execute
+                                                                                        On the other hand, JIT launch involves higher latency due
+                                       Trigger
+  Worker w1                                                                          to additional worker–scheduler communication. Figure 8 il-
+                             Task T1   Event e
+
+  Worker w2
+                             Dequeue   Wait For    Execute                           lustrates the difference when launching task T2 after event e is
+                             Task T2   Event e     Task T2
+                                                                                     triggered by task T1 . Under JIT launch (Figure 8a), the worker
+                           (b) Ahead-of-time task launch.                            executing T1 notifies a scheduler, which then dequeues event e,
+      Figure 8: Comparing JIT and AOT task launches.                                 launches T2 , and enqueues it into a worker’s task queue. The
+                                                                                     receiving worker must then dequeue T2 before execution. This
+                                                                                     chain requires two synchronization steps (worker→scheduler
+   An event becomes activated once all of its prerequisites                          and scheduler→worker). By contrast, under AOT launch (Fig-
+have completed and thus have collectively triggered the event                        ure 8b), T2 has already been enqueued on a pre-assigned
+the required number of times. When an event is activated, it is                      worker, which only needs to wait for event e to be activated.
+enqueued into a scheduler’s event queue, allowing the runtime                        Thus, AOT launch requires only one synchronization step
+to continue propagating execution through the tGraph. In this                        through the event trigger, reducing per-task launch latency.
+way, events serve as the mechanism for driving task execution,                          MPK uses hybrid task launch to combine the advantages
+enabling fine-grained, asynchronous scheduling.                                      of both approaches. During tGraph construction, the compiler
+   This event-driven model also allows MPK to adapt to the                           classifies each operator as JIT or AOT based on whether its
+underlying interconnect without requiring an explicit topol-                         execution time is data-dependent and likely to induce runtime
+ogy profile. Communication and computation are represented                           imbalance. Operators with data-dependent durations (e.g., at-
+uniformly as tasks in the same tGraph and dispatched by                              tention) are marked as JIT, and their downstream operators
+the same scheduler. A dependent compute task launches as                             remain JIT until execution reaches a global barrier (i.e., an
+soon as the communication tasks producing its inputs trig-                           event that must be triggered by all upstream tasks). Such bar-
+ger the relevant event, regardless of the latency of the links                       riers eliminate accumulated imbalance, making subsequent
+they traverse. A faster link triggers its event sooner and re-                       operators suitable for AOT launch. All remaining operators
+leases dependent work earlier, while a slower link delays only                       are labeled AOT to minimize dispatch overhead. Labels ap-
+the tasks that depend on it. The scheduler therefore does not                        ply at operator granularity: all tasks generated by the same
+require explicit knowledge of link bandwidths or topology                            operator share the same launch mode.
+distances. The same tGraph and scheduler can thus handle                                Workers maintain two queues, one for JIT tasks and one for
+heterogeneous interconnects, such as intra-node NVLink and                           AOT tasks. Workers always prioritize JIT tasks, as they are
+inter-node networks, by reacting to data availability rather                         ready to execute immediately. When a worker exhausts its JIT
+than relying on a static topology model.                                             queue, it checks whether the first AOT task’s dependent event
+                                                                                     has been fully activated; if so, the worker executes that AOT
+                                                                                     task. This design ensures that a worker blocks only when no
+5.2     Hybrid Task Launch                                                           ready work is available.
+A task can be enqueued into a worker’s task queue either                                Schedulers handle only events that launch JIT tasks. All
+just-in-time (JIT) or ahead-of-time (AOT). In JIT mode, a                            AOT tasks are pre-enqueued before execution begins. Because
+scheduler assigns a task to a worker only after its dependent                        operators typically produce a number of tasks proportional
+event has been fully activated; the task can therefore begin                         to the number of workers (§ 4), MPK distributes AOT tasks
+execution immediately after assignment. In AOT mode, the                             across workers in a round-robin fashion to maintain balanced
+runtime pre-enqueues the task into a worker’s task queue                             load. Pre-enqueuing AOT tasks reduces scheduler load and
+before its predecessor event is activated. The worker cannot                         amortizes dispatch overhead, while JIT launch dynamically
+execute the task until the dependent event is fully activated,                       balances work across SMs.
+and thus waits locally for the dependency to be satisfied.
+   JIT and AOT approaches provide complementary advan-                               5.3    Runtime Optimizations
+tages. On the one hand, JIT launch allows MPK to adapt
+to workload imbalance. For example, attention in LLMs in-                            This subsection introduces runtime optimizations that mini-
+volves highly variable execution times due to data-dependent                         mize MPK’s execution overhead.
+
+
+                                                                                 8
+Paged shared-memory abstraction. In conventional GPU                     6     Evaluation
+programming models, shared memory is a fast on-chip mem-
+ory private to each thread block. Shared memory exists only              This section evaluates MPK by answering four questions.
+for the lifetime of a kernel: once the kernel finishes, its shared       First, § 6.3 compares MPK’s mega-kernel execution model
+memory is automatically released. In the kernel-per-operator             with state-of-the-art kernel-per-operator systems. Second,
+execution model, each kernel typically assumes exclusive ac-             § 6.4 studies how MPK supports dynamic workloads. Third,
+cess to the shared memory allocated to its thread block. How-            § 6.5 evaluates the scalability and efficiency of MPK for
+ever, this assumption prevents cross-task software pipelining            multi-GPU execution. Finally, § 6.6 isolates the performance
+(§ 2), which overlaps data loading for a subsequent task with            contributions of the main runtime optimizations in MPK.
+computation in the current task, since both tasks may need                  We focus our evaluation on LLM serving for two reasons.
+shared memory at the same time.                                          First, LLM serving has several heavily optimized kernel-per-
+   To enable such pipelining, MPK introduces a paged shared-             operator baselines, including SGLang and vLLM [27, 46];
+memory abstraction. Shared memory is partitioned into fixed-             comparing against them provides a stringent benchmark that
+size pages, and task implementations are modified to operate             highlights the benefits of MPK’s mega-kernel approach. Sec-
+on pages instead of assuming a monolithic allocation. A task             ond, LLM serving naturally exhibits dynamic execution be-
+may acquire one or more pages based on its shared-memory                 havior, as different serving iterations may vary in batch size,
+footprint and must release the pages when they are no longer             sequence length, and the mixture of prefill and decode work.
+needed. Once a task releases any page, it is no longer permit-           This variability creates heterogeneous workloads that stress
+ted to acquire additional shared-memory pages, enforcing a               both the compiler and the runtime. Although our evaluation
+monotonic usage pattern that simplifies scheduling. When the             focuses on LLM serving, the MPK compiler and runtime are
+current task releases pages, MPK can immediately allocate                model-agnostic and can support general DNN architectures.
+available pages for the next task and begin data prefetching.
+This design enables fine-grained, on-demand allocation of
+shared memory within the mega-kernel execution model.                    6.1    Implementation Details
+                                                                         We implement MPK as a PyTorch compiler backend. A Py-
+                                                                         Torch program can be compiled into an MPK mega-kernel
+Cross-task software pipelining. To enable software                       via PyTorch’s compilation interface by specifying MPK as
+pipelining across tasks executed on the same worker (§ 2.1),             the backend, i.e., torch.compile(backend=MPK). This call
+MPK decomposes each task into a pre-loading phase and a                  invokes the MPK compiler, which generates a mega-kernel
+compute phase. The pre-loading phase issues data transfer                and returns it as a callable PyTorch function. Invoking this
+instructions to fetch a chunk of the required tensor from de-            function issues a single launch of the generated mega-kernel.
+vice memory into shared memory, initializing the intra-task                 The current MPK implementation consists of approxi-
+software pipeline without performing computation.                        mately 44K lines of C++, 42K lines of CUDA, and 10K lines
+   MPK opportunistically overlaps the compute phase of the               of Python. The in-kernel parallel runtime is written in CUDA
+current task T1 with the pre-loading phase of the subsequent             and uses semaphores in device memory to coordinate workers
+task T2 when two conditions hold: (1) T1 has already issued all          and schedulers. The MPK compiler, implemented in C++ and
+of its own data-transfer instructions, and (2) sufficient shared-        Python, automatically transforms an input tensor program
+memory pages are available for T2 ’s pre-loading phase. This             into an optimized tGraph tailored to specific GPU types. For
+pipeline does not interfere with T1 ’s execution because MPK             compute tasks, the compiler integrates the Mirage superopti-
+inserts the necessary intra-SM synchronization barriers to               mizer [41] to automatically generate optimized CUDA imple-
+ensure that T2 ’s memory transfers do not conflict with ongoing          mentations and uses NVSHMEM [10] to support in-kernel
+data transfers for T1 .                                                  inter-GPU communication.
+                                                                            Our implementation includes several optimizations to min-
+                                                                         imize runtime overhead and support dynamic workloads.
+Pre-fetching task descriptions. Each worker maintains
+both JIT and AOT task queues in device memory. Every task                Task-launch overhead. Because MPK decomposes com-
+is associated with a task description that encodes its input             putation into tasks that are substantially finer-grained than
+tensors, output tensors, and configuration parameters; in our            traditional GPU kernels, minimizing per-task launch over-
+current implementation, each description occupies 352 bytes              head is essential for performance. MPK uses several tech-
+(§ 6.1). To reduce enqueue/dequeue latency and hide device-              niques to keep task-launch costs low. First, the runtime uses
+memory access costs, MPK employs a lightweight prefetch-                 lightweight workers and schedulers: event queues and task
+ing mechanism that retrieves upcoming task descriptions into             queues are implemented as circular buffers in GPU device
+shared memory before they are needed.                                    memory, and enqueue and dequeue operations rely only on
+
+
+                                                                     9
+       Table 1: MPK configuration in our evaluation.                    uses a prompt length of 64 tokens and generates 1024 output
+                                                                        tokens. This methodology eliminates server-side stalls caused
+         GPU     # SMs     # Workers    # Schedulers                    by insufficient request concurrency and enables a controlled
+         A100       108           104              16                   comparison of system-level performance.
+         H100       132           128              16
+         B200       148           144              16
+                                                                        6.3    End-to-end Results
+                                                                        We first compare the end-to-end serving performance of MPK
+low-cost atomicAdd instructions. Second, MPK uses decen-
+                                                                        with SGLang and vLLM, two state-of-the-art LLM serving
+tralized scheduling, in which each scheduler assigns tasks
+                                                                        systems. Both SGLang and vLLM use the kernel-per-operator
+using local state. This design avoids global coordination and
+                                                                        approach and rely on specialized kernel libraries, including
+eliminates the communication and synchronization overheads
+                                                                        FlashInfer [43] and FlashAttention [7] for attention, cuBLAS
+inherent to globally coordinated scheduling.
+                                                                        and cuTLASS [2] for matrix multiplication, and CUDA or
+   Although the current implementation uses decentralized               Triton [36] for other operators. All systems load model archi-
+scheduling, the runtime is designed to support alternative poli-        tectures from HuggingFace Transformers [6], use bfloat16
+cies, including globally coordinated scheduling, with minor             precision, and enable paged attention [27] and continuous
+code changes. Exploring these policies and their performance            batching [44]. The key architectural difference is that MPK
+trade-offs is an interesting direction for future work.                 integrates page allocation and request scheduling directly into
+                                                                        the mega-kernel. In contrast, SGLang and vLLM perform
+Supporting runtime dynamism. To demonstrate MPK’s                       these operations on the CPU, incurring additional host–device
+ability to support highly dynamic workloads, we extend the              synchronization and dispatch overheads.
+system with mechanisms required for LLM serving, includ-                   For each model, we evaluate all three systems on B200,
+ing continuous batching [44] and paged attention [27]. When             H100, and A100 GPUs with maximum batch sizes from 1 to
+processing the start event of a tGraph, the scheduler prepares          16, and report serving throughput.
+a new decoding iteration by (1) removing completed requests                Figure 9 shows the end-to-end throughput results. For
+from the previous iteration, (2) admitting newly arrived re-            single-batch inference, MPK improves serving performance
+quests, and (3) updating per-request KV-cache metadata. This            by 1.0–1.7× across models and hardware. The improvements
+logic executes as a single task, and the KV-cache metadata is           are most significant for smaller models and newer GPU gen-
+stored in device memory for direct access by attention tasks.           erations. This trend is expected because three overheads be-
+   To handle the dynamic batch sizes intrinsic to LLM serving,          come more significant as the amount of computation per to-
+MPK generates multiple tGraphs specialized for representa-              ken decreases and GPU hardware becomes faster: (1) kernel-
+tive batch sizes, using powers of two up to the maximum batch           per-operator approaches incur kernel-switch overheads, even
+size. At runtime, the scheduler selects the appropriate tGraph          when using CUDA Graphs; (2) kernel boundaries introduce
+based on the current batch size. This approach allows the com-          pipeline bubbles and prevent cross-task pipelining (Figure 2);
+piler to generate tGraphs optimized for specific batch sizes            and (3) SGLang and vLLM perform page allocation and re-
+while preserving flexibility for dynamic serving workloads.             quest scheduling on the CPU, adding CPU–GPU synchroniza-
+                                                                        tion delays. § 6.6 quantifies the impact of these optimizations.
+6.2    Experimental Setup                                                  These results show that MPK is well-suited for latency-
+                                                                        sensitive serving scenarios, such as single-batch decoding,
+We evaluate MPK on five widely deployed LLMs that span                  where reducing per-token latency is critical. For example,
+different parameter scales and architectural families, and on           on Qwen3-8B running on an A100 GPU, MPK reduces per-
+three generations of NVIDIA GPUs: A100, H100, and B200.                 token decoding latency from 14.5 ms, achieved by highly
+Table 1 summarizes the MPK configuration for each GPU.                  optimized systems such as vLLM and SGLang, to 12.5 ms.
+In all experiments, MPK reserves four SMs for schedulers,               This approaches the approximate hardware lower bound of
+allocating 16 scheduler warps in total because each SM can              10 ms, estimated by loading 16 GB of model parameters at
+host up to four active scheduler warps. The remaining SMs               1.6 TB/s memory bandwidth.
+are used as workers. We set the shared-memory page size to                 Beyond performance, MPK also improves programmabil-
+32 KB on all GPUs, which yields 5, 7, and 7 shared-memory               ity. vLLM and SGLang require substantial engineering effort
+pages per SM on A100, H100, and B200, respectively. Fig-                to optimize new models and integrate specialized kernels.
+ure 9 shows the evaluated LLMs, which include both dense                In contrast, MPK takes a compiler-based approach that au-
+and mixture-of-experts models across multiple model sizes.              tomatically mega-kernelizes a PyTorch model with only a
+   To control for variability in request-arrival patterns, all          few lines of code changes. As a result, MPK combines high
+experiments are conducted in an offline batched-inference               performance with a familiar PyTorch development workflow,
+setting while varying the maximum batch size. Each request              achieving more than 10× speedup over native PyTorch.
+
+
+                                                                   10
+                                                                                                                      PyTorch            vLLM                SGLang               PyTorch + MPK
+                                           1.4x     1.4x      1.4x      1.4x     1.3x          1.5x   1.5x     1.5x      1.4x     1.2x         1.3x   1.3x      1.3x      1.3x   1.2x          1.1x   1.1x     1.2x     1.2x   1.1x          1.1x   1.1x   1.1x   1.2x   1.0x
+                              1.0                                                       1.0                                              1.0                                             1.0                                           1.0
+                       B200
+
+
+
+                              0.5                                                       0.5                                              0.5                                             0.5                                           0.5
+
+
+                              0.0                                                       0.0                                              0.0                                             0.0                                           0.0
+                                           BS=1    BS=2       BS=4   BS=8       BS=16          BS=1   BS=2    BS=4      BS=8     BS=16         BS=1   BS=2      BS=4   BS=8      BS=16         BS=1   BS=2     BS=4     BS=8   BS=16         BS=1   BS=2   BS=4   BS=8   BS=16
+                                                           Qwen3-0.6B                                 Llama-3.2-1B-Instruct                                  Qwen3-1.7B                                      Qwen3-8B                                Qwen3-30B-A3B
+Relative Performance
+
+
+
+
+                                           1.6x     1.7x      1.6x      1.5x     1.5x          1.5x   1.4x     1.4x      1.3x     1.3x         1.4x   1.4x      1.4x      1.3x   1.2x          1.1x   1.1x     1.2x     1.1x   1.1x          1.1x   1.1x   1.1x   1.1x   1.1x
+                              1.0                                                       1.0                                              1.0                                             1.0                                           1.0
+                       H100
+
+
+
+
+                              0.5                                                       0.5                                              0.5                                             0.5                                           0.5
+
+
+                              0.0                                                       0.0                                              0.0                                             0.0                                           0.0
+                                           BS=1    BS=2       BS=4   BS=8       BS=16          BS=1   BS=2    BS=4      BS=8     BS=16         BS=1   BS=2      BS=4   BS=8      BS=16         BS=1   BS=2     BS=4     BS=8   BS=16         BS=1   BS=2   BS=4   BS=8   BS=16
+                                                           Qwen3-0.6B                                 Llama-3.2-1B-Instruct                                  Qwen3-1.7B                                      Qwen3-8B                                Qwen3-30B-A3B
+                                           1.5x     1.5x      1.4x      1.4x     1.2x          1.3x   1.3x     1.3x      1.3x     1.2x         1.3x   1.3x      1.2x      1.3x   1.1x          1.2x   1.5x     1.4x     1.1x   1.0x          1.1x   1.1x   1.1x   1.1x   1.0x
+                              1.0                                                       1.0                                              1.0                                             1.0                                           1.0
+                       A100
+
+
+
+
+                              0.5                                                       0.5                                              0.5                                             0.5                                           0.5
+
+
+                              0.0                                                       0.0                                              0.0                                             0.0                                           0.0
+                                           BS=1    BS=2       BS=4   BS=8       BS=16          BS=1   BS=2    BS=4      BS=8     BS=16         BS=1   BS=2      BS=4   BS=8      BS=16         BS=1   BS=2     BS=4     BS=8   BS=16         BS=1   BS=2   BS=4   BS=8   BS=16
+                                                           Qwen3-0.6B                                 Llama-3.2-1B-Instruct                                  Qwen3-1.7B                                      Qwen3-8B                                Qwen3-30B-A3B
+
+
+  Figure 9: End-to-end comparison of MPK with existing systems across five models on A100, H100, and B200 GPUs. All results
+  are normalized to MPK; higher is better. The value above each MPK bar reports its speedup over the best-performing baseline.
+
+                                                  SGLang-MoE                     MPK-Static-MoE                MPK-Hybrid-MoE                                   Because communication tasks and expert-computation tasks
+                                                            1.14x              1.07x          1.17x          1.18x              1.15x
+                                                                                                                                                                reside in the same tGraph and are dispatched by the same
+                                         120
+                                                                                                                                                                event-driven scheduler, the runtime overlaps all-to-all commu-
+                                         100
+                                                                                                                                                                nication with computation as soon as the relevant events are
+                          Runtime (us)
+
+
+
+
+                                          80
+                                                                                                                                                                triggered, without relying on CUDA streams or host-side syn-
+                                          60
+                                                                                                                                                                chronization. The two MoE-specific optimizations described
+                                          40
+                                                                                                                                                                below operate within this task representation.
+                                          20
+
+                                           0
+                                                     BS=1               BS=2            BS=4           BS=8             BS=16
+
+
+  Figure 10: Comparing MPK with existing systems for Qwen3-
+  30B-A3B on B200. Each value represents the actual MoE                                                                                                         Hybrid workload balancer. Because the number of tokens
+  runtime in microseconds for each approach (lower is better),                                                                                                  routed to each expert is known only at runtime, choosing an
+  and the numbers above the bars indicate the speedup achieved                                                                                                  effective workload partition statically is challenging. A naive
+  by MPK-Hybrid-MoE over SGLang-MoE.                                                                                                                            static strategy assigns a fixed group of SMs to preassigned
+                                                                                                                                                                experts. However, under skewed routing distributions, this
+                                                                                                                                                                strategy can lead to severe load imbalance: some SM groups
+  6.4                          Case Study: Mixture-of-Experts                                                                                                   become oversubscribed while others remain underutilized. At
+                                                                                                                                                                the other extreme, a fully dynamic strategy based on persis-
+  To efficiently serve dynamic workloads such as mixture-of-                                                                                                    tent Grouped-GEMM [8] can balance work across SMs, but
+  experts (MoE) models, MPK implements two MoE-specific                                                                                                         introduces fine-grained synchronization overheads.
+  optimizations: a hybrid workload balancer and a fused
+  gather–GEMM implementation.                                                                                                                                      MPK therefore uses a hybrid strategy that combines static
+                                                                                                                                                                structure with runtime adaptivity. At compile time, the com-
+                                                                                                                                                                piler partitions the MoE computation into expert-specific
+  Representing expert parallelism. MPK represents expert                                                                                                        tasks. At runtime, each task receives a meta-tensor produced
+  parallelism using the same task abstraction used for other oper-                                                                                              by topk-softmax containing global MoE information, in-
+  ators. An MoE block is lowered into a chain of SM-level tasks                                                                                                 cluding the number of activated experts and tokens assigned
+  in the tGraph (§ 4), including routing, dispatch, expert compu-                                                                                               to each expert. Using this metadata, tasks refine their work-
+  tation, and combine. The dispatch and combine stages capture                                                                                                  load allocation dynamically and split work more evenly while
+  the all-to-all communication required by expert parallelism,                                                                                                  avoiding the overheads of fully dynamic scheduling. As
+  and MPK lowers them into inter-GPU data-transfer tasks in                                                                                                     shown in Figure 10, this hybrid strategy consistently out-
+  the same way it lowers other collective operations (§ 6.5).                                                                                                   performs purely static partitioning across all batch sizes.
+
+
+                                                                                                                                                      11
+                                      PyTorch             vLLM            SGLang              MPK                                                       CUBLAS          MPK-No-Pipe          MPK-Pipe
+                        1.2x 1.2x 1.2x 1.2x 1.2x         1.2x 1.2x 1.3x 1.3x 1.2x         1.0x 1.2x 1.2x 1.2x 1.2x                                     1.15x       1.15x      1.14x     1.28x           1.29x
+Relative Performance
+
+
+                  1.0                              1.0                              1.0                                                        250
+
+                  0.8                              0.8                              0.8                                                        200
+                  0.6                              0.6                              0.6
+
+
+
+
+                                                                                                                                Runtime (us)
+                                                                                                                                               150
+                  0.4                              0.4                              0.4
+                  0.2                              0.2                              0.2                                                        100
+                  0.0 BS=1 BS=2 BS=4 BS=8BS=16     0.0 BS=1 BS=2 BS=4 BS=8BS=16     0.0 BS=1 BS=2 BS=4 BS=8BS=16
+                                                                                                                                                50
+                              2 GPUs                           4 GPUs                           8 GPUs
+                                                                                                                                                 0
+                                                                                                                                                     BS=1        BS=2      BS=4       BS=8        BS=16
+     Figure 11: Multi-GPU comparison of MPK with existing sys-
+     tems for Qwen3-1.7B on H100 GPUs using tensor parallelism.                                                           Figure 12: Ablation study of cross-task pipelining. We mea-
+     All results are normalized to MPK; higher is better.                                                                 sure the runtime of the final linear layer in Qwen3-8B on an
+                                                                                                                          NVIDIA B200 GPU and report execution time in microsec-
+                                                                                                                          onds; lower is better. The value above each bar reports the
+     Fused gather-GEMM. To use tensor memory accelerators                                                                 speedup of MPK-Pipe over MPK-No-Pipe.
+     (TMAs) on Hopper and Blackwell GPUs, conventional MoE
+     implementations first gather tokens routed to the same expert
+                                                                                                                          latter two optimizations in detail.
+     into a contiguous memory layout. For Qwen3-30B-A3B at
+     batch size one on SGLang, this preprocessing step accounts
+     for up to 11% of total MoE execution time. In MPK, imple-                                                            6.6        Ablation Study
+     menting this step as a separate preprocessing task would also
+                                                                                                                          This section evaluates the impact of three runtime opti-
+     introduce additional scheduling overhead.
+                                                                                                                          mizations enabled by MPK: cross-task pipelining, compute–
+        MPK addresses this issue by replacing the TMA-based
+                                                                                                                          communication overlap, and kernel-launch reduction.
+     gather with an asynchronous token-level copy integrated di-
+     rectly into the data-loading phase of the GEMM tasks. This
+     fusion eliminates the standalone gather kernel and avoids                                                            Cross-task pipelining. As described in § 5.3, MPK enables
+     additional scheduling points while preserving efficient mem-                                                         cross-task pipelining by preloading chunks of input tensors
+     ory movement. As a result, MPK with fused gather-GEMM                                                                for the next task while the current task is executing. Fig-
+     achieves consistent speedups over SGLang’s implementation.                                                           ure 12 evaluates the impact of this optimization on the final
+                                                                                                                          linear layer in Qwen3-8B. Cross-task pipelining reduces task
+                                                                                                                          runtime by 1.2–1.3× and even outperforms cuBLAS-based
+     6.5                 Multi-GPU Results                                                                                compiled kernels.
+     We evaluate the scalability of MPK across multiple GPUs
+     on an NVIDIA H100 DGX instance. As in the baseline sys-                                                              Compute-communication overlap. MPK captures fine-
+     tems, we use tensor model parallelism, following Megatron-                                                           grained dependencies between tasks (Figure 5), allowing the
+     LM [31]. Users specify tensor-parallel execution by inserting                                                        runtime to opportunistically overlap compute and commu-
+     AllReduce after attention and gated MLP blocks. MPK then                                                             nication. Figure 13 evaluates the impact of this optimiza-
+     automatically compiles these collective operators into two                                                           tion. To disable overlap, we restrict the tGraph to capture
+     types of tasks: inter-GPU data-transfer tasks, implemented us-                                                       only coarse-grained dependencies between each collective
+     ing NVSHMEM’s nvshmem_signal_wait_until, and local                                                                   operator, such as AllReduce, and its preceding computation
+     reduction tasks. This decomposition converts synchronous                                                             using a single event, as illustrated in Figure 5c. Enabling
+     collective communication into asynchronous tasks that can                                                            fine-grained compute–communication overlap reduces per-
+     be integrated into MPK’s task-based, event-driven runtime.                                                           iteration latency by 1.1×.
+        Figure 11 shows the multi-GPU results. Compared with Py-
+     Torch, which uses a combination of hand-optimized kernels,                                                           Kernel-launch reduction. MPK executes the entire model
+     CUDA Graphs, and torch.compile, MPK’s mega-kernel ex-                                                                with a single kernel launch, whereas a kernel-per-operator
+     ecution improves throughput by up to 10×. Compared with                                                              execution of Qwen3-8B issues 293 kernel launches per token.
+     highly optimized serving systems such as SGLang and vLLM,                                                            On B200, each launch costs 3.8 µs in eager execution, totaling
+     MPK achieves 1.1–1.4× speedups when scaling to 8 H100                                                                1.1 ms per token, and 0.8 µs with CUDA Graphs, totaling
+     GPUs. These gains come from three optimizations missing in                                                           0.2 ms per token. MPK avoids this overhead; its in-kernel
+     kernel-per-operator baselines: (1) MPK integrates page allo-                                                         scheduler accounts for only 0.28% of total runtime (§ 6.1).
+     cation and request scheduling directly into the mega-kernel,
+     eliminating CPU-side dispatch overheads; (2) MPK’s asyn-
+                                                                                                                          6.7        Compiler-Stage Ablation
+     chronous execution model overlaps compute tasks with collec-
+     tive communication; and (3) MPK eliminates kernel barriers                                                           The preceding ablations isolate two runtime mechanisms. We
+     and enables cross-task software pipelining. § 6.6 analyzes the                                                       now isolate the contribution of each compiler stage described
+
+
+                                                                                                                     12
+                                           MPK (without overlap)           MPK (with overlap)               Table 2: Per-compiler-stage statistics on B200. Ops: number
+                                          1.1×        1.1×          1.1×          1.1×          1.1×        of operators; Tasks/op: average number of tasks per operator
+     Per-iteration Runtime (us)
+                                  2500
+                                                                                                            after decomposition; Events: number of events in the final
+                                  2000
+                                                                                                            tGraph; Fusion: event-count reduction from event fusion;
+                                  1500                                                                      Lin.: device-memory footprint reduction from linearization.
+                                  1000
+
+                                  500                                                                        Model              Ops Tasks/op Events Fusion          Lin.
+                                    0
+                                         BS=1       BS=2           BS=4        BS=8        BS=16             Qwen3-1.7B         229       35.6    1,870     37× 4.4×
+                                                                                                             Qwen3-8B           293       47.3    2,366     68× 5.9×
+Figure 13: Ablation study on compute–communication over-                                                     Qwen3-30B-A3B      533       32.2    1,142    118× 15.0×
+lap. We measure the runtime of Qwen3-1.7B on four H100
+GPUs using tensor parallelism; lower is better. We compare
+MPK with compute–communication overlap enabled and dis-                                                     unchanged, confirming the “deep, not wide” structure dis-
+abled to quantify the benefit of fine-grained overlap.                                                      cussed in § 4. Nevertheless, normalization remains necessary
+                                                                                                            for correctness when parallel branches do occur, such as in
+                                                                                                            the unfused Q/K/V example in Figure 5. In those cases, nor-
+in § 4. Because these stages serve different purposes, we
+                                                                                                            malization bounds each task’s event fan-in and fan-out to one,
+report the most appropriate metric for each stage rather than
+                                                                                                            preserving the fixed-size, indirection-free encoding.
+using a single common metric. Table 2 summarizes the results
+on three representative models.
+                                                                                                            tGraph linearization. tGraph linearization encodes each
+Operator decomposition. Operator decomposition parti-                                                       event’s successor tasks as a contiguous index range rather
+tions each operator into independent SM-level tasks. As                                                     than an explicit task list. We measure the resulting on-device
+shown in Table 2, decomposition exposes substantial par-                                                    footprint as the size of the successor encoding with and with-
+allelism in real models: each operator is split into 32–47 tasks                                            out linearization. The contiguous-range encoding reduces
+on average. For example, in Qwen3-8B, 293 operators are                                                     this footprint by 4.4–5.9× on dense models, such as from
+decomposed into 13,867 tasks. Compute-intensive operators,                                                  110,932 bytes to 18,928 bytes for Qwen3-8B, and by 15.0×
+including linear layers, attention, and MoE experts, each ex-                                               on the MoE model. The MoE model benefits most because
+pose tens of parallel tasks, while only a small number of                                                   high-fan-out expert-routing events are particularly compact
+pointwise operators, such as normalization at batch size one,                                               under the range-based encoding. Linearization achieves these
+map to a single task. This decomposition provides the runtime                                               reductions without losing dependency information.
+with sufficient independent work to keep all SMs busy.
+                                                                                                            7   Discussion
+Event fusion. Without fusion, dependency analysis emits a
+separate event for every overlapping producer–consumer task                                                 Resource footprint. A common concern with mega-kernels
+pair. Successor-set and predecessor-set fusion collapse events                                              is that a single kernel must reserve, on every SM, the com-
+that share the same consumer set or producer set into a single                                              bined resources required by all fused operators. MPK avoids
+synchronization point. This optimization is highly effective:                                               this issue: tasks are time-multiplexed across SMs rather than
+across the evaluated models, the final tGraphs contain only                                                 statically partitioned, so each SM uses only the resources re-
+1,142–2,366 events, yet these events encode 69,000–162,000                                                  quired by the task it is currently executing (§ 5). Shared mem-
+producer–consumer task-pair dependencies. This corresponds                                                  ory follows the same pattern: the paged abstraction (§ 5.3)
+to a 37–118× reduction in synchronization events (Table 2).                                                 acquires and releases pages at task granularity. The main ex-
+The reduction is largest for the MoE model because expert                                                   ception is per-thread register usage, which is fixed for the
+routing creates many-to-many dependencies that are espe-                                                    mega-kernel at the maximum required across task types.
+cially amenable to fusion.
+                                                                                                            Integrating hand-tuned kernels and porting to new hard-
+tGraph normalization. tGraph normalization inserts auxil-                                                   ware. Each MPK task is a CUDA device function with a
+iary tasks and events only when a task triggers or depends on                                               uniform calling convention defined by the tGraph. This inter-
+more than one event, namely at forks and joins. The compiled                                                face gives MPK two forms of flexibility. First, a hand-tuned
+LLM forward tGraphs in our evaluation are almost entirely se-                                               kernel can be incorporated into MPK by wrapping it as the
+quential: we observe no fork/join groups in all three compiled                                              device function for a task; the task then executes under the
+tGraphs because operators that would otherwise fan out, such                                                same event-driven schedule as compiler-generated tasks, with-
+as the query/key/value projections, are emitted as fused opera-                                             out requiring changes to the runtime or the tGraph. MPK can
+tors. Normalization therefore leaves these tGraphs essentially                                              thus reuse hand-optimized implementations when available
+
+
+                                                                                                       13
+while automatically generating the remaining tasks. Second,             them as one mega-kernel. These abstractions are therefore
+porting MPK to a new GPU architecture only requires up-                 complementary to MPK: they could be used to implement
+dating the per-task code generators that emit these device              individual task kernels within the MPK runtime.
+functions; the tGraph representation, the compiler’s graph-                TileRT [35] similarly decomposes operators into fine-
+level transformations, the runtime, and the scheduler remain            grained tile-level tasks executed as a single persistent kernel,
+unchanged. Therefore, per-task code generation is the only              validating our core idea that persistent mega-kernel execution
+hardware-specific component of MPK (§ 4), while the rest of             is key to low-latency inference.
+the system is shared across GPU architectures.
+                                                                        Compute–communication overlap. A large body of work
+8   Related Work                                                        overlaps collective communication with computation to
+                                                                        hide inter-GPU communication latency. DeepEP [19] pro-
+Manually designed kernels. Existing ML frameworks such                  vides expert-parallel all-to-all communication kernels for
+as TensorFlow XLA [1, 12], PyTorch [29], and TensorRT [34]              MoE models, and Triton-Distributed [48] extends the Triton
+adopt a kernel-per-operator approach and rely on GPU experts            compiler to express overlapping distributed kernels. Token-
+to manually design and implement kernels for individual op-             Weave [21], FlashOverlap [24], and ParallelKittens [33] fuse
+erators. For attention alone, various specialized kernels have          or co-schedule communication with dependent computation
+been developed, including FlashAttention [5, 18, 23], Faster-           to reduce exposed communication latency. Earlier work from
+Transformer [3], and FlashInfer [43], each targeting specific           Google decomposes collective operators so that they over-
+architectural features or deployment scenarios. Current sys-            lap with dependent computation [40]. These systems realize
+tems rely on many specialized kernel libraries, making it hard          overlap at the granularity of individual kernels or collective
+to unify the entire inference pipeline into one mega-kernel.            operators. In contrast, MPK represents communication and
+                                                                        computation uniformly as tasks in one tGraph and schedules
+                                                                        them using the same in-kernel runtime (§ 6.5). Compute–
+ML compilers. A large body of work has explored                         communication overlap therefore emerges from the global
+compiler-based generation of high-performance kernels for               task schedule and applies uniformly to both tensor-parallel
+tensor programs. Systems such as TVM [15, 16], Ansor [45],              collectives and expert-parallel all-to-all communication.
+and Triton [36], alongside others [20, 22, 25, 49], build on the
+algorithm–schedule separation introduced by Halide [28, 30].
+Another line of work employs superoptimization techniques               9   Conclusion
+to automatically search for efficient kernel implementations
+from high-level specifications [26, 38, 39, 42, 47]. However,           This paper presents MPK, the first compiler and runtime sys-
+these compilers are largely designed around operator- or                tem that automatically transforms multi-GPU model inference
+graph-level optimization and do not support generating a uni-           into a fully fused mega-kernel. By introducing SM-level task
+fied mega-kernel or coordinating cross-operator execution.              graphs and an in-kernel parallel runtime, MPK overcomes key
+                                                                        limitations of the kernel-per-operator execution model, en-
+                                                                        abling inter-operator software pipelining, fine-grained overlap
+Mega-kernels. Prior efforts on mega-kernels largely rely
+                                                                        of computation and communication, and the elimination of
+on manual design. For example, FlashDMoE fuses mixture-
+                                                                        kernel-launch and CPU-side scheduling overheads. Our eval-
+of-experts computation with inter-GPU communication into a
+                                                                        uation shows that MPK brings LLM serving latency close to
+single handcrafted mega-kernel [13]. Spector et al. manually
+                                                                        hardware limits and significantly improves throughput across
+developed a low-latency mega-kernel for LLaMA-1B [9, 37].
+                                                                        models and GPU generations. By unifying execution within
+These approaches require extensive engineering effort and
+                                                                        a single mega-kernel while preserving compatibility with
+deep GPU expertise, and they do not generalize across mod-
+                                                                        existing ML frameworks, MPK opens a new path toward
+els or GPUs. In contrast, MPK provides a compiler-based
+                                                                        high-performance, compiler-driven inference systems.
+solution that automatically transforms a tensor program into a
+highly optimized mega-kernel, eliminating the need for man-
+ual fusion or hand-written mega-kernel implementations.                 Acknowledgment
+   A related line of work simplifies the development of
+manually fused kernels. ThunderKittens [32] provides                    We thank the anonymous OSDI reviewers and our shepherd
+tile-based abstractions for high-performance kernels, and               for their valuable comments and suggestions. This work was
+PipeThreader [17] exposes software-pipelined kernel execu-              partially supported by NSF awards CNS-2211882 and CNS-
+tion to the programmer. These tools still require the developer         2239351, a Sloan Research Fellowship, and research awards
+to decide which operators to fuse, how to pipeline them, and            from Amazon, Cisco, Google, Jane Street, Meta, NVIDIA, Or-
+how to coordinate their execution. MPK instead compiles                 acle, Qualcomm, and Samsung. We also gratefully acknowl-
+an entire tensor program into SM-level tasks and executes               edge NVIDIA for providing access to a DGX B200 system.
+
+
+                                                                   14
+References                                                            [14] James Bradbury, Roy Frostig, Peter Hawkins,
+                                                                           Matthew James Johnson, Chris Leary, Dougal Maclau-
+ [1] Xla: Optimizing compiler for tensorflow. https://                     rin, George Necula, Adam Paszke, Jake VanderPlas,
+     www.tensorflow.org/xla, 2017. 14                                      Skye Wanderman-Milne, and Qiao Zhang. JAX: com-
+                                                                           posable transformations of Python+NumPy programs,
+ [2] Nvidia/cutlass: Cuda templates for linear algebra subrou-
+                                                                           2018. 3
+     tines. https://github.com/NVIDIA/cutlass, 2019.
+     10                                                               [15] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Haichen
+                                                                           Shen, Eddie Q. Yan, Leyuan Wang, Yuwei Hu, Luis
+ [3] Transformer related optimizations. https : //github.
+                                                                           Ceze, Carlos Guestrin, and Arvind Krishnamurthy.
+     com/NVIDIA/FasterTransformer, 2020. 14
+                                                                           TVM: end-to-end optimization stack for deep learning.
+ [4] Nvidia nccl.      https://developer.nvidia.com/                       CoRR, abs/1802.04799, 2018. 1, 2, 3, 14
+     nccl, 2021. 2
+                                                                      [16] Tianqi Chen, Lianmin Zheng, Eddie Yan, Ziheng Jiang,
+ [5] Flash-decoding    for   long-context inference.                       Thierry Moreau, Luis Ceze, Carlos Guestrin, and Arvind
+     https    :    //crfm.stanford.edu/2023/10/12/                         Krishnamurthy. Learning to optimize tensor programs.
+     flashdecoding.html, 2023. 14                                          In Advances in Neural Information Processing Systems
+                                                                           31, NeurIPS’18. 2018. 14
+ [6] Huggingface Models.       https://huggingface.co/
+     models, 2023. 10                                                 [17] Yu Cheng, Lei Wang, Yining Shi, Yuqing Xia, Lingx-
+                                                                           iao Ma, Jilong Xue, Yang Wang, Zhiwen Mo, Feiyang
+ [7] A Triton implementation of the FlashAtten-                            Chen, Fan Yang, Mao Yang, and Zhi Yang. Pipethreader:
+     tion2 algorithm.         https://triton-lang.                         Software-defined pipelining for efficient dnn execution.
+     org/main/getting-started/tutorials/                                   In 19th USENIX Symposium on Operating Systems De-
+     06-fused-attention.html, 2023. 10                                     sign and Implementation (OSDI), 2025. 14
+ [8] Accelerating MoE’s with a Triton Persistent Cache-               [18] Tri Dao, Daniel Haziza, Francisco Massa, and Grigory
+     Aware Grouped GEMM Kernel. Link, 2025. 11                             Sizov. Flash-decoding for long-context inference, 2023.
+                                                                           1, 2, 14
+ [9] Designing a Low-Latency Megakernel for Llama-
+     1B. https: //hazyresearch.stanford.edu/blog/                     [19] DeepSeek-AI. DeepEP: An efficient expert-parallel
+     2025-05-27-no-bubbles, 2025. 4, 14                                    communication library.    https://github.com/
+                                                                           deepseek-ai/DeepEP, 2025. 14
+[10] NVIDIA OpenSHMEM Library (NVSHMEM) Doc-
+     umentation. https://docs.nvidia.com/nvshmem/                     [20] Siyuan Feng, Bohan Hou, Hongyi Jin, Wuwei Lin, Junru
+     api/index.html, 2025. 2, 9                                            Shao, Ruihang Lai, Zihao Ye, Lianmin Zheng, Cody Hao
+                                                                           Yu, Yong Yu, and Tianqi Chen. Tensorir: An abstraction
+[11] Programmatic Dependent Launch. https://docs.
+                                                                           for automatic tensorized program optimization, 2022.
+     nvidia.com/cuda/cuda-c-programming-guide/
+                                                                           14
+     index.html, 2025. 1
+                                                                      [21] Raja Gond, Nipun Kwatra, and Ramachandran Ramjee.
+[12] Martín Abadi, Paul Barham, Jianmin Chen, Zhifeng
+                                                                           TokenWeave: Efficient compute-communication overlap
+     Chen, Andy Davis, Jeffrey Dean, Matthieu Devin, San-
+                                                                           for distributed llm inference. In Proceedings of Machine
+     jay Ghemawat, Geoffrey Irving, Michael Isard, Man-
+                                                                           Learning and Systems (MLSys), 2026. 14
+     junath Kudlur, Josh Levenberg, Rajat Monga, Sherry
+     Moore, Derek G. Murray, Benoit Steiner, Paul Tucker,             [22] Bastian Hagedorn, Bin Fan, Hanfeng Chen, Cris Cecka,
+     Vijay Vasudevan, Pete Warden, Martin Wicke, Yuan Yu,                  Michael Garland, and Vinod Grover. Graphene: An ir for
+     and Xiaoqiang Zheng. Tensorflow: A system for large-                  optimized tensor computations on gpus. In Proceedings
+     scale machine learning. In Proceedings of the 12th                    of the 28th ACM International Conference on Architec-
+     USENIX Conference on Operating Systems Design and                     tural Support for Programming Languages and Operat-
+     Implementation, OSDI, 2016. 14                                        ing Systems, Volume 3, ASPLOS 2023, page 302–313,
+                                                                           New York, NY, USA, 2023. Association for Computing
+[13] Osayamen Jonathan Aimuyo, Byungsoo Oh, and Rachee
+                                                                           Machinery. 14
+     Singh. Flashdmoe: Fast distributed moe in a single
+     kernel, 2025. 4, 14                                              [23] Ke Hong, Guohao Dai, Jiaming Xu, Qiuli Mao, Xiuhong
+                                                                           Li, Jun Liu, Kangdi Chen, Yuhan Dong, and Yu Wang.
+                                                                           Flashdecoding++: Faster large language model infer-
+                                                                           ence on gpus, 2024. 14
+
+                                                                 15
+[24] Ke Hong, Xiuhong Li, Minxu Liu, Qiuli Mao, Tianqi                    Thunderkittens: Simple, fast, and adorable ai kernels. In
+     Wu, Zixiao Huang, Lufang Chen, Zhong Wang, Yi-                       International Conference on Learning Representations
+     chong Zhang, Zhenhua Zhu, Guohao Dai, and Yu Wang.                   (ICLR), 2025. 14
+     FlashOverlap: A lightweight design for efficiently over-
+     lapping communication and computation. In Proceed-              [33] Stuart H. Sul, Simran Arora, Benjamin F. Spector, and
+     ings of the European Conference on Computer Systems                  Christopher Ré. ParallelKittens: Systematic and practi-
+     (EuroSys), 2026. 14                                                  cal simplification of multi-gpu ai kernels. In Proceed-
+                                                                          ings of Machine Learning and Systems (MLSys), 2026.
+[25] Muyan Hu, Ashwin Venkatram, Shreyashri Biswas, Bal-                  14
+     amurugan Marimuthu, Bohan Hou, Gabriele Oliaro,
+     Haojie Wang, Liyan Zheng, Xupeng Miao, Jidong Zhai,             [34] NVIDIA TensorRT: Programmable inference acceler-
+     and Zhihao Jia. Optimal kernel orchestration for tensor              ator. https://developer.nvidia.com/tensorrt,
+     programs with korch. In Proceedings of the 29th ACM                  2017. 14
+     International Conference on Architectural Support for           [35] Tile-AI.    TileRT: Tile-based runtime for ultra-
+     Programming Languages and Operating Systems, Vol-                    low-latency llm inference. https://github.com/
+     ume 3, ASPLOS ’24, page 755–769, New York, NY,                       tile-ai/TileRT, 2026. 14
+     USA, 2024. Association for Computing Machinery. 14
+                                                                     [36] Philippe Tillet, H. T. Kung, and David Cox. Triton:
+[26] Zhihao Jia, Oded Padon, James Thomas, Todd Warsza-                   an intermediate language and compiler for tiled neural
+     wski, Matei Zaharia, and Alex Aiken. Taso: Optimizing                network computations. In Proceedings of the 3rd ACM
+     deep learning computation with automatic generation                  SIGPLAN International Workshop on Machine Learning
+     of graph substitutions. In Proceedings of the 27th ACM               and Programming Languages, MAPL 2019, page 10–19,
+     Symposium on Operating Systems Principles, SOSP ’19,                 New York, NY, USA, 2019. Association for Computing
+     page 47–62, New York, NY, USA, 2019. Association                     Machinery. 1, 2, 10, 14
+     for Computing Machinery. 4, 14
+                                                                     [37] Hugo Touvron, Thibaut Lavril, Gautier Izacard, Xavier
+[27] Woosuk Kwon, Zhuohan Li, Siyuan Liu, Xin Wu,                         Martinet, Marie-Anne Lachaux, Timothée Lacroix, Bap-
+     Michael Zeng, Xiangru Zhang, Yuhao Zou, and Scott                    tiste Rozière, Naman Goyal, Eric Hambro, Faisal Azhar,
+     Moritz. Efficient memory management for large lan-                   et al. Llama: Open and efficient foundation language
+     guage models. In Proceedings of the ACM Symposium                    models. arXiv preprint arXiv:2302.13971, 2023. 4, 14
+     on Operating Systems Principles (SOSP), 2023. 9, 10
+                                                                     [38] Colin Unger, Zhihao Jia, Wei Wu, Sina Lin, Mandeep
+[28] Ravi Teja Mullapudi, Andrew Adams, Dillon Sharlet,                   Baines, Carlos Efrain Quintero Narvaez, Vinay Ramakr-
+     Jonathan Ragan-Kelley, and Kayvon Fatahalian. Auto-                  ishnaiah, Nirmal Prajapati, Patrick S. McCormick, Ja-
+     matically scheduling halide image processing pipelines.              maludin Mohd-Yusof, Xi Luo, Dheevatsa Mudigere,
+     ACM Trans. Graph., 35(4), 2016. 14                                   Jongsoo Park, Misha Smelyanskiy, and Alex Aiken.
+[29] Tensors and Dynamic neural networks in Python with                   Unity: Accelerating DNN training through joint opti-
+     strong GPU acceleration. https://pytorch.org,                        mization of algebraic transformations and paralleliza-
+     2017. 2, 3, 14                                                       tion. In 16th USENIX Symposium on Operating Systems
+                                                                          Design and Implementation, OSDI 2022, Carlsbad, CA,
+[30] Jonathan Ragan-Kelley, Connelly Barnes, Andrew                       USA, July 11-13, 2022, pages 267–284. USENIX Asso-
+     Adams, Sylvain Paris, Frédo Durand, and Saman Ama-                   ciation, 2022. 14
+     rasinghe. Halide: A language and compiler for optimiz-
+     ing parallelism, locality, and recomputation in image           [39] Haojie Wang, Jidong Zhai, Mingyu Gao, Zixuan Ma,
+     processing pipelines. In Proceedings of the 34th ACM                 Shizhi Tang, Liyan Zheng, Yuanzhi Li, Kaiyuan Rong,
+     SIGPLAN Conference on Programming Language De-                       Yuanyong Chen, and Zhihao Jia. PET: Optimizing ten-
+     sign and Implementation, PLDI ’13, 2013. 14                          sor programs with partially equivalent transformations
+                                                                          and automated corrections. In 15th USENIX Sympo-
+[31] Mohammad Shoeybi, Mostofa Patwary, Raul Puri,                        sium on Operating Systems Design and Implementation
+     Patrick LeGresley, Jared Casper, and Bryan Catanzaro.                (OSDI 21), pages 37–54. USENIX Association, July
+     Megatron-lm: Training multi-billion parameter language               2021. 14
+     models using model parallelism. CoRR, abs/1909.08053,
+     2019. 12                                                        [40] Shibo Wang, Jinliang Wei, Amit Sabne, Andy
+                                                                          Davis, Berkin Ilbeyi, Blake Hechtman, Dehao Chen,
+[32] Benjamin F. Spector, Simran Arora, Aaryan Singhal,                   Karthik Srinivasa Murthy, Marcello Maggioni, Qiao
+     Arjun Parthasarathy, Daniel Y. Fu, and Christopher Ré.               Zhang, Sameer Kumar, Tongfei Guo, Yuanzhong Xu,
+
+
+                                                                16
+     and Zongwei Zhou. Overlap communication with                        Kozyrakis, Ion Stoica, Joseph E. Gonzalez, Clark Bar-
+     dependent computation via decomposition in large                    rett, and Ying Sheng. Sglang: efficient execution of
+     deep learning models. In Proceedings of the 28th ACM                structured language model programs. In Proceedings
+     International Conference on Architectural Support                   of the 38th International Conference on Neural Infor-
+     for Programming Languages and Operating Systems,                    mation Processing Systems, NIPS ’24, Red Hook, NY,
+     Volume 1 (ASPLOS), pages 93–106, 2023. 14                           USA, 2024. Curran Associates Inc. 9
+[41] Mengdi Wu, Xinhao Cheng, Shengyu Liu, Chunan Shi,              [47] Liyan Zheng, Haojie Wang, Jidong Zhai, Muyan Hu,
+     Jianan Ji, Man Kit Ao, Praveen Velliengiri, Xupeng                  Zixuan Ma, Tuowei Wang, Shuhong Huang, Xupeng
+     Miao, Oded Padon, and Zhihao Jia. Mirage: A {Multi-                 Miao, Shizhi Tang, Kezhao Huang, and Zhihao Jia.
+     Level} superoptimizer for tensor programs. In 19th                  EINNET: Optimizing tensor programs with Derivation-
+     USENIX Symposium on Operating Systems Design and                    Based transformations. In 17th USENIX Symposium on
+     Implementation (OSDI 25), pages 21–38, 2025. 1, 2, 4,               Operating Systems Design and Implementation (OSDI
+     7, 9                                                                23), pages 739–755, Boston, MA, July 2023. USENIX
+                                                                         Association. 14
+[42] Yichen Yang, Phitchaya Phothilimthana, Yisu Wang,
+     Max Willsey, Sudip Roy, and Jacques Pienaar. Equality          [48] Size Zheng, Wenlei Bao, Qi Hou, Xuegui Zheng, Jin
+     Saturation for Tensor Graph Superoptimization. Pro-                 Fang, Chenhui Huang, Tianqi Li, Haojie Duanmu, Renze
+     ceedings of Machine Learning and Systems, 3:255–268,                Chen, Ruifan Xu, Yifan Guo, Ningxin Zheng, Ziheng
+     March 2021. 14                                                      Jiang, Xinyi Di, Dongyang Wang, Jianxi Ye, Haibin Lin,
+[43] Zihao Ye, Lequn Chen, Ruihang Lai, Wuwei Lin, Yineng                Li-Wen Chang, Liqiang Lu, Yun Liang, Jidong Zhai, and
+     Zhang, Stephanie Wang, Tianqi Chen, Baris Kasikci,                  Xin Liu. Triton-distributed: Programming overlapping
+     Vinod Grover, Arvind Krishnamurthy, and Luis Ceze.                  kernels on distributed ai systems with the triton compiler.
+     Flashinfer: Efficient and customizable attention engine             arXiv preprint arXiv:2504.19442, 2025. 14
+     for llm inference serving, 2025. 1, 2, 10, 14                  [49] Size Zheng, Yun Liang, Shuo Wang, Renze Chen, and
+[44] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soo-                   Kaiwen Sheng. Flextensor: An automatic schedule ex-
+     jeong Kim, and Byung-Gon Chun. Orca: A distributed                  ploration and optimization framework for tensor compu-
+     serving system for {Transformer-Based} generative                   tation on heterogeneous system. In Proceedings of the
+     models. In 16th USENIX Symposium on Operating                       Twenty-Fifth International Conference on Architectural
+     Systems Design and Implementation (OSDI 22), pages                  Support for Programming Languages and Operating
+     521–538, 2022. 10                                                   Systems, ASPLOS ’20, page 859–873, New York, NY,
+                                                                         USA, 2020. Association for Computing Machinery. 14
+[45] Lianmin Zheng, Chengfan Jia, Minmin Sun, Zhao Wu,
+     Cody Hao Yu, Ameer Haj-Ali, Yida Wang, Jun Yang,               [50] Kan Zhu, Yufei Gao, Yilong Zhao, Liangyu Zhao, Gefei
+     Danyang Zhuo, Koushik Sen, Joseph E. Gonzalez, and                  Zuo, Yile Gu, Dedong Xie, Zihao Ye, Keisuke Kama-
+     Ion Stoica. Ansor : Generating high-performance tensor              hori, Chien-Yu Lin, et al. {NanoFlow}: Towards opti-
+     programs for deep learning. CoRR, abs/2006.06762,                   mal large language model serving throughput. In 19th
+     2020. 14                                                            USENIX Symposium on Operating Systems Design and
+                                                                         Implementation (OSDI 25), pages 749–765, 2025. 3
+[46] Lianmin Zheng, Liangsheng Yin, Zhiqiang Xie, Chuyue
+     Sun, Jeff Huang, Cody Hao Yu, Shiyi Cao, Christos
+
+
+
+
+                                                               17
+A    Artifact Appendix                                                Hosting
+                                                                      The artifact is on the frozen branch tgx-osdi26-ae of
+Abstract
+                                                                      https://github.com/mirage-project/mirage (commit
+The artifact is the MPK compiler and runtime together with            8b981a4), archived on Zenodo at https://doi.org/10.
+scripts that reproduce the paper’s end-to-end latency results.        5281/zenodo.20563064 (DOI: 10.5281/zenodo.20563064).
+MPK transforms a PyTorch model into a single mega-kernel;
+the scripts measure per-token decoding latency for MPK,               Requirements
+PyTorch, vLLM, and SGLang across five LLMs, five batch
+sizes, and three GPU generations.                                     Hardware. One NVIDIA A100, H100 (SXM), or B200 for
+                                                                      the single-GPU sweeps, and a multi-GPU node (4–8 H100s)
+                                                                      for the tensor-parallel experiments. The four smaller models
+Scope
+                                                                      fit on a 40 GB A100; Qwen3-30B-A3B needs at least 80 GB
+The artifact validates the paper’s main performance claims:           and runs on an 80 GB A100, an H100, or a B200.
+(i) on single-batch serving, MPK reduces per-token latency            Software. Linux with CUDA (12.8 in the paper), PyTorch 2.7,
+by 1.0–1.7× over vLLM and SGLang, with the largest gains              NVSHMEM and OpenMPI for the multi-GPU runs, and
+on smaller models and newer GPUs (Figure 9); (ii) under               transformers 4.57.1. setup.sh installs these and builds
+tensor parallelism, MPK improves throughput by up to 10×              MPK; vLLM and SGLang each run in a separate virtual envi-
+over PyTorch and 1.1–1.4× over vLLM/SGLang on 8 H100s                 ronment.
+(Figure 11); and (iii) cross-task pipelining and compute–             Benchmarks. Qwen3-0.6B, Llama-3.2-1B-Instruct, Qwen3-
+communication overlap each contribute measurable speedups             1.7B, Qwen3-8B (dense), and Qwen3-30B-A3B (MoE),
+(Figures 12 and 13).                                                  downloaded from HuggingFace (Llama-3.2 is gated; set
+                                                                      HF_TOKEN).
+Contents
+                                                                      Reproducing the results
+The repository holds the MPK compiler and in-kernel run-
+time, a runnable demo for each model under demo/, and one             git clone --recursive -b tgx-osdi26-ae \
+                                                                         https://github.com/mirage-project/mirage
+evaluation driver per GPU under artifact_evaluation/.                 cd mirage && bash artifact_evaluation/setup.sh
+A driver sweeps the five models over batch sizes 1 to 16 for          bash artifact_evaluation/<gpu>/run_tgx.sh
+all four systems and writes one result file per run, recording        bash artifact_evaluation/<gpu>/run_pytorch.sh
+the system, GPU, model, batch size, and measured per-token            bash artifact_evaluation/<gpu>/run_vllm.sh
+                                                                      bash artifact_evaluation/<gpu>/run_sglang.sh
+latency. Collecting these files reproduces Figure 9 and the
+ablation figures. A setup.sh script installs the dependencies         All runs use offline batched inference with a fixed prompt
+and builds MPK.                                                       length of 64, 1024 decoded tokens, and greedy decoding;
+                                                                      each reported number is the median of five runs after a four-
+                                                                      iteration warmup. On a 40 GB A100 the sweep covers the
+                                                                      four smaller models; reproducing the Qwen3-30B-A3B point
+                                                                      additionally requires an 80 GB A100 (or an H100/B200).
+
+
+
+
+                                                                 18
+

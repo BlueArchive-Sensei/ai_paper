@@ -1,0 +1,1019 @@
+Janus: Fast and Flexible Deep Learning via Symbolic
+     Graph Execution of Imperative Programs
+    Eunji Jeong, Sungwoo Cho, Gyeong-In Yu, Joo Seong Jeong, Dong-Jin Shin,
+                  and Byung-Gon Chun, Seoul National University
+               https://www.usenix.org/conference/nsdi19/presentation/jeong
+
+
+
+
+          This paper is included in the Proceedings of the
+          16th USENIX Symposium on Networked Systems
+               Design and Implementation (NSDI ’19).
+                     February 26–28, 2019 • Boston, MA, USA
+                                 ISBN 978-1-931971-49-2
+
+
+
+                                             Open access to the Proceedings of the
+                                        16th USENIX Symposium on Networked Systems
+                                             Design and Implementation (NSDI ’19)
+                                                       is sponsored by
+                              JANUS: Fast and Flexible Deep Learning
+                       via Symbolic Graph Execution of Imperative Programs
+
+                Eunji Jeong                          Sungwoo Cho                         Gyeong-In Yu
+          Seoul National University             Seoul National University           Seoul National University
+              Joo Seong Jeong                        Dong-Jin Shin                     Byung-Gon Chun†
+          Seoul National University             Seoul National University           Seoul National University
+
+
+
+                              Abstract                           family comprises frameworks that base their execution
+      The rapid evolution of deep neural networks is demand-     on symbolic graphs constructed from DL programs. The
+   ing deep learning (DL) frameworks not only to satisfy the     other family consists of frameworks that directly execute
+   requirement of quickly executing large computations, but      DL programs in an imperative manner.
+   also to support straightforward programming models for
+                                                                 Symbolic graph execution. Frameworks such as Ten-
+   quickly implementing and experimenting with complex
+                                                                 sorFlow [1], Caffe2 [11], and MXNet [6] formulate neural
+   network structures. However, existing frameworks fail to
+                                                                 networks as symbolic dataflow graphs. Graph vertices de-
+   excel in both departments simultaneously, leading to di-
+                                                                 note the states and operations of a neural network, while
+   verged efforts for optimizing performance and improving
+                                                                 graph edges indicate the flow of data between vertices.
+   usability.
+                                                                 Operations in the graph are executed as their dependen-
+      This paper presents JANUS, a system that combines
+                                                                 cies are solved, similar to how most dataflow systems
+   the advantages from both sides by transparently convert-
+                                                                 process dataflow graphs [9,17]. The graph representation
+   ing an imperative DL program written in Python, the
+                                                                 allows the framework to identify which operations can be
+   de-facto scripting language for DL, into an efficiently ex-
+                                                                 run in parallel, and apply various compiler optimization
+   ecutable symbolic dataflow graph. JANUS can convert
+                                                                 techniques such as common subexpression elimination or
+   various dynamic features of Python, including dynamic
+                                                                 constant folding to generate optimized versions of graphs.
+   control flow, dynamic types, and impure functions, into
+                                                                 Moreover, it is easy to process dataflow graphs on accel-
+   elements of a symbolic dataflow graph. Our experiments
+                                                                 erator devices or deploy graphs across multiple machines
+   show that JANUS can achieve fast DL training by exploit-
+                                                                 by assigning an operation to the appropriate device or
+   ing the techniques imposed by symbolic graph-based DL
+                                                                 machine [24].
+   frameworks, while maintaining the simple and flexible
+   programmability of imperative DL frameworks at the               However, the separation of building a symbolic graph
+   same time.                                                    and executing it complicates user experience, because
+                                                                 users are not actually running any numerical computa-
+   1     Introduction                                            tions when defining neural networks through the frame-
+   In recent years, deep neural networks have been widely        work interface. Rather, they are constructing graphs that
+   used in various application domains such as computer          will be executed later through separate functions.
+   vision, speech, and natural language processing for their
+                                                                 Imperative program execution. In contrast, frame-
+   powerful capabilities of extracting abstract features from
+                                                                 works including PyTorch [31], TensorFlow Eager [40],
+   data. Scientists have created deep learning (DL) frame-
+                                                                 and MXNet Imperative [26] have adopted the execution
+   works – TensorFlow [1], PyTorch [31], Caffe2 [11],
+                                                                 model of running operations imperatively, without going
+   MXNet [6], and many more [2, 12, 27, 29, 40, 42, 46, 49] –
+                                                                 through a separate graph construction phase. Stemming
+   to improve the performance of deep neural networks in
+                                                                 from popular Python libraries for scientific, numerical
+   various jobs and promote the use of deep neural networks
+                                                                 computation such as NumPy [48] and Scikit-learn [4], this
+   in both production and research.
+                                                                 imperative approach is useful for rapidly experimenting
+      Such DL frameworks can be classified into two dis-
+                                                                 and working with new neural network models, particu-
+   tinct families depending on their execution models. One
+                                                                 larly those with complex structures. The native control
+    † Corresponding author.                                      flow statements of Python can be exploited to build mod-
+
+
+
+
+USENIX Association                        16th USENIX Symposium on Networked Systems Design and Implementation                453
+      els of interest. Unfortunately, skipping the formation of      1    class RNNModel ( object ):
+      a dataflow graph means that such frameworks lose the           2      def __call__ (self , sequence ):
+      chance to apply the many optimizations that were pos-          3        state = self.state
+      sible in the symbolic graph execution model, leading to        4        outputs = []
+      significant performance differences for certain models.        5        for item in sequence :
+         The different characteristics of DL frameworks suggest      6          state = rnn_cell (state , item)
+      that we cannot achieve high performance and good usabil-       7          outputs += [state]
+      ity at the same time. To reach high performance, we must       8        self.state = state
+      sacrifice framework usability to a certain extent, and vice    9        return compute_loss ( outputs )
+      versa. Otherwise, users are forced to resort to an awkward    10
+      approach of learning how to use several frameworks and        11    for sequence in sequences :
+      switching between them according to the current task in       12      optimize ( lambda : model( sequence ))
+      hand.
+                                                                    Figure 1: A Python program that implements training
+      From imperative programs to symbolic graphs. In               process of a recurrent neural network (RNN) in an imper-
+      this paper, we propose to transparently convert impera-       ative manner. For each item in the sequence, rnn_cell
+      tive Python DL programs into symbolic dataflow graphs         function is called to produce the next state required for the
+      before execution. By not altering the user-facing interface   next rnn_cell invocation. After finishing up processing
+      for building neural networks, we maintain the flexible pro-   the whole sequence, the model holds the final state by
+      grammability of frameworks with imperative execution          replacing self.state attribute for processing the next
+      models. At the same time, behind the scenes, we execute       sequence.
+      the symbolic graph versions of the imperative programs
+      to enjoy the performance optimizations done by symbolic       generative adversarial networks, and deep reinforcement
+      graph execution models.                                       learning models that extensively use the dynamic features
+         However, this approach introduces a technical chal-        of Python. JANUS converted the programs into symbolic
+      lenge of capturing the dynamic semantics of an impera-        dataflow graphs successfully, trained the models to reach
+      tive Python program in a symbolic dataflow graph. The         target accuracy with up to 18.7 times higher throughput
+      dynamic aspects of Python, including dynamic control          compared to TensorFlow Eager, while executing the iden-
+      flow, dynamic typing, and impure functions, must be em-       tical imperative programs.
+      bedded in a symbolic graph correctly while providing the      2     Challenges and Proposed Solution
+      performance of symbolic graph execution frameworks.
+         To this end, we present JANUS, a DL framework that         2.1    Challenges
+      achieves the best of both worlds by receiving an impera-      Converting an imperative program written in Python
+      tive DL program as input and creating symbolic graphs         into a DL dataflow graph brings on many challenges,
+      of the program accordingly with speculative program           because dataflow graphs consist of a restrictive set of op-
+      context assumptions. JANUS makes environment assump-          erations, lacking the dynamic semantics of the program-
+      tions on the program context (e.g., constant variables and    ming language. More specifically, various characteristics
+      branches) based on past iterations to simplify the dynamic    of a Python program, such as the execution count and
+      nature of the program and transform the program into          execution order of statements, the types of expressions,
+      a symbolic graph. These assumptions are speculative,          or the global program execution state, can only be de-
+      because the context may change during execution; an in-       termined after the program is actually executed. For the
+      correct assumption results in an invalidation of a symbolic   rest of this paper, we will refer to these characteristics as
+      graph, in which case JANUS falls back to imperative execu-    the dynamic features of Python. In contrast, DL dataflow
+      tion to guarantee correctness. For design (Section 4.3.1)     graphs are expected to be defined before the computa-
+      and implementation (Section 4.3.2) reasons, JANUS con-        tion starts, to apply aggressive graph optimizations and
+      verts only the subset of Python programs into the efficient   efficiently schedule the graph operations by viewing the
+      symbolic graphs, but the rest of them still can be executed   entire graph. In this sense, DL dataflow graphs are usu-
+      imperatively, ensuring the full Python coverage.              ally considered to be static [23, 29, 31]. The difference
+         We have implemented JANUS on TensorFlow 1.8.0 [1].         in characteristics makes it difficult to embed dynamic
+      To demonstrate the performance of JANUS, we evaluated         Python features in static dataflow graphs.
+      JANUS with 11 imperative DL programs in five categories:         Figure 1 depicts a DL program written in Python, of
+      convolutional, recurrent, and recursive neural networks,      which semantics are difficult to be captured in a dataflow
+
+
+
+
+454    16th USENIX Symposium on Networked Systems Design and Implementation                                    USENIX Association
+                                                                   Imp. Sym.          Correctness        Optimization
+     Frameworks                                                                                                            Language
+                                                                   pgm exec          DCF DT       IF    w/ runtime info
+
+     Symbolic: TensorFlow (TF), Caffe2, MXNet                       ×      ○         –      –       –          –           Python
+     Imperative: PyTorch (PTH), TF Eager, DyNet                     ○      ×         –      –       –          –           Python
+     Imperative to Symbolic
+       Tracing: TF defun, PTH JIT trace, MXNet Gluon                ○      ○         ×     △      ×       ○ (unsafe)       Python
+       JAX                                                          ○      ○         ○     △      ×       ○ (unsafe)       Python subset
+       Swift for TensorFlow (S4TF)                                  ○      ○         ○      –     ○            ×           Swift
+       TF AutoGraph                                                 ○      ○         △     △      △       ○ (unsafe)       Python subset
+       PTH JIT script                                               ○      ○         ○     △      △            ×           Python subset
+       JANUS                                                        ○      ○         ○     ○      ○           ○            Python
+
+   Table 1: Comparison of DL frameworks with respect to correctly supported features for converting imperative programs
+   into symbolic graphs ("Correctness") and the ability to optimize the generated graphs with the information given only at
+   program runtime ("Optimization w/ runtime info"). Optimizations can be incorrect in some frameworks ("○ (unsafe)"),
+   not preserving the original semantics of Python. The host language is also specified.
+
+   graph correctly due to the following representative dy-                     formance of state-of-the-art symbolic graph execution
+   namic features of Python.                                                   DL frameworks is also a challenge on its own. State-
+   • Dynamic control flow (DCF) Conditional branches                           of-the-art frameworks require additional information on
+   and iterative loop constructs have different execution                      dynamic types and control flow in order to optimize graph
+   paths depending on intermediate values. Lines 5-7 of                        execution. However, a naïve, one-shot converter would
+   Figure 1 show an example of an iterative loop construct                     be unable to extract this information from an imperative
+   used in a DL program. Such control flow statements are                      program before execution, and thus is incapable of supply-
+   intensively used in Python and must be correctly repre-                     ing frameworks with such hints. For instance, if the input
+   sented in the dataflow graph.                                               sequence at Line 2 in Figure 1 is expected to always have
+   • Dynamic types (DT) Python is a dynamically-typed                          a fixed length, then that information can be exploited to
+   language, i.e., the type of a Python expression can only                    unroll the following loop at Line 5 when generating the
+   be determined at program execution time. The example                        corresponding dataflow graph. It is unclear how a naïve
+   program in Figure 1 does not have any type annotations                      converter would do this without actually executing the
+   (e.g. int or float), which makes it difficult to statically                 program to check the loop length.
+   decide the type of target dataflow graph operations. Fur-
+   thermore, various non-numerical types of Python, such as
+                                                                               2.2    Related Works
+   lists, dictionaries, and arbitrary class instances, are even                Previous works that try to translate a Python DL program
+   harder to be converted into elements of a dataflow graph,                   into a dataflow graph either fail to capture the important
+   of which vertices usually output numerical arrays.                          dynamic semantics of Python, or run in slower perfor-
+   • Impure1 functions (IF) Another useful feature for us-                     mance due to the lack of sufficient information at graph
+   ing Python is the ease of accessing and mutating global                     build time. Table 1 summarizes state-of-the-art DL frame-
+   states within functions. In Figure 1, the function __call__                 works alongside their execution models and their status
+   reads from and writes to an object attribute2 at Lines 3                    regarding the coverage and efficiency of graph conversion
+   and 8, to pass the final state of a sequence to the next                    support.
+   sequence. Since the modified global states can make the                        Tracing-based graph generation approaches such as Py-
+   following function call behave differently, such reads and                  Torch’s JIT compiler (torch.jit.trace) [31], MXNet
+   writes of global states must be handled correctly while                     Gluon [27], and the defun [43] functionality of Tensor-
+   generating dataflow graphs.                                                 Flow Eager [40] execute the imperative program once,
+      Moreover, correctness is not the only issue when con-                    and convert the single execution trace directly into a
+   verting an imperative program; achieving the high per-                      dataflow graph. Though this approach enables generating
+   1A
+                                                                               optimized symbolic graphs with sufficient information
+       pure function is a function whose return value is determined only
+   by its parameters, and has no side effects.
+                                                                               gathered from a specific execution trace, it fails to capture
+   2 "class members" in C++ terminology, except that the attributes are        dynamic semantics of the Python interpreter correctly,
+   stored in dictionaries, without fixed data layout.                          leading to incorrect computation results for dynamically
+
+
+
+
+USENIX Association                               16th USENIX Symposium on Networked Systems Design and Implementation                          455
+      changing execution paths, dynamic types of non-tensor         JavaScript programs into efficient machine code, and this
+      or non-input expressions, or impure functions of Python       conversion is done speculatively assuming that the pro-
+      at runtime. Moreover, these approaches currently do not       gram inherently maintains some statically fixed structures
+      give any feedback about incorrectly-converted control         over repeated executions. In case this assumption breaks,
+      flows to users, making the problem even worse.                the program falls back to the interpreter and attempts to
+         On the other hand, there exist other approaches that       compile the program again with different assumptions.
+      select a less-dynamic host language and therefore suc-           We propose to adopt this concept of speculative opti-
+      ceed in capturing the wider semantics of source pro-          mization when converting imperative DL programs into
+      grams. JAX [12] limits the Python syntax and supports         symbolic dataflow graphs. Converting various dynamic
+      converting only pure-and-statically-composed functions.       features like dynamic control flow and impure functions
+      S4TF [42] supports Swift, losing the merit of supporting      correctly may impose some inevitable overheads if we
+      Python, the de-facto standard programming language for        generate dataflow graphs in a conservative manner. To
+      DL programming, and introduces new programming mod-           overcome this challenge, JANUS makes assumptions about
+      els that most DL researchers are unfamiliar with. More-       the program’s behavior based on the runtime profiling
+      over, since the graph conversion occurs before actually       information, and generates a symbolic graph tailored for
+      executing the program, these approaches can miss the          the assumptions. This speculatively constructed dataflow
+      opportunity to further optimize the graph with the infor-     graph can show much better performance compared to
+      mation only obtainable during the program execution. For      the conservative counterpart due to specializations. If the
+      example, always converting a Python loop into control         assumptions do not hold, JANUS builds a new dataflow
+      flow operations can be sub-optimal if the loop iteration      graph based on different assumptions. Since a DL pro-
+      count is known to be fixed.                                   gram comprises a number of iterations of an optimization
+         Concurrent works including AutoGraph-enabled Ten-          procedure, the speculative approach is a good fit since
+      sorFlow defun functionality [45] and the "scripting"          the interpreter is likely to execute specific code blocks of
+      mode of PyTorch JIT (torch.jit.script) [31] also have         the program repeatedly.
+      limitations. AutoGraph makes users to explicitly provide         Unlike the JIT compilers of managed language run-
+      the necessary information, or generates incorrect or sub-     times, however, the goal of JANUS is not to optimize the
+      optimal graph in some cases, all of which could be avoided    host language execution itself. In fact, when running im-
+      if sufficient information existed. For example, users must    perative DL programs, the execution time of the language
+      explicitly specify the types of Python lists, prohibiting     runtime is usually much shorter compared to the execu-
+      the dynamic typed or heterogeneous elements. For an-          tion time of the mathematical operations for DL, such
+      other example, for dynamic control flow statements, the       as convolution or matrix multiplication. However, since
+      statements with non-tensor predicates are always unrolled,    these mathematical operations are usually implemented
+      which is error-prone, and the statements with tensor-typed    in separate low-level language like C++, existing JIT
+      predicates are always converted to control flow opera-        compilers of managed language runtimes would execute
+      tions, which can be sub-optimal. In the "scripting" mode      them just as separated function invocations. Under such
+      of PyTorch JIT, users must use TorchScript, a subset of       an execution model, it is impossible to see the multi-
+      Python which does not allow variables to have dynamic         ple mathematical operations at once and apply compiler
+      types. Further graph optimizations based on the runtime       optimizations or execute them in parallel. On the other
+      information are also not possible.                            hand, JANUS understands the function invocations for
+                                                                    such mathematical operations, and converts them into ap-
+      2.3    Proposed Solution: Speculative                         propriate target graph operations, which can be optimized
+             Graph Generation and Execution                         and be executed efficiently by symbolic graph executors.
+      Existing optimizers and compilers for dynamic languages       3   JANUS System Design
+      suggest a useful technique for performing such conver-
+      sions from imperative programs to symbolic dataflow           In this section, we introduce JANUS, a DL framework that
+      graphs: speculative optimization. Managed language run-       receives an imperative DL program and either executes
+      times have succeeded in exploiting the inherent static        it as is directly, or generates a symbolic graph version of
+      nature of dynamic programs which rarely changes during        the program and executes the graph instead.
+      the execution to convert them into static, low-level repre-      The input program for JANUS is assumed to be written
+      sentations while maintaining correctness. For example,        using the API and the programming model of existing
+      JavaScript just-in-time (JIT) compilers convert dynamic       imperative DL frameworks like TensorFlow Eager [40].
+
+
+
+
+456    16th USENIX Symposium on Networked Systems Design and Implementation                                   USENIX Association
+                                  Common Case             Rare Case                   hasty generalizations, JANUS does not begin graph gen-
+                                                                                      eration until the executor has profiled the program for a
+                 Runtime Information      Speculative Graph Generator                 certain amount of iterations.3 First, JANUS traverses the
+                                                                                      abstract syntax tree (AST) of the DL program and gen-
+                  Imperative           (C) Do Not Generate       (B) Generate Graph
+                  DL Program                                                          erates the corresponding graph elements for each AST
+                                           Speculative Graph Executor                 node, along with assertion operations that can validate
+     (A) Proﬁle                                                                       the context assumption at runtime. Since JANUS targets
+                   Imperative           Assumption                1     Graph         DL programs, operations for automatic differentiation
+                    Executor (E) Fallback Fails                 cache   Cache         and model parameter updates are also automatically in-
+       Proﬁler
+
+
+
+
+                                                                 miss
+
+                                                2
+                                                    runtime                cache      serted if necessary. Next, the generated graph is further
+                                                    assertion              hit
+                     Python                                                           optimized by the post-processor, of which optimizations
+                   Interpreter                      Graph Executor                    were not applicable to the original imperative DL pro-
+                                                    (D) Execute Graph                 gram. Finally, the optimized graph and the assumption
+                                                                                      that were used to generate the graph are saved into the
+   Figure 2: An illustration of the execution model of JANUS,                         graph cache.
+   showing how a DL program is processed by several com-
+                                                                                      Graph execution. If a graph representation with cor-
+   ponents. Profiler observes imperative program execution
+                                                                                      rect assumptions regarding the program context is avail-
+   and collects information to make the realistic assumptions.
+                                                                                      able, the Speculative Graph Executor executes the sym-
+   Speculative Graph Generator generates dataflow graphs
+                                                                                      bolic graph (Figure 2 (D)). Note that the same graph can
+   from the program and hands the optimized graphs over
+                                                                                      be reused multiple times, given that the runtime context
+   to Speculative Graph Executor. The Speculative Graph
+                                                                                      assumption holds for future invocations.
+   Executor actually runs the generated graph and handles
+   assumption failures.                                                               3.2    Accurate Path for Rare Cases
+   Given an input program, JANUS extracts the main neu-                               Assumption failure. Handling the assumptions is im-
+   ral network computation part, over which the automatic                             portant to guarantee the correctness of the converted
+   differentiation is performed, and starts the speculative                           graph. If an assumption is proven to be wrong, the associ-
+   graph generation and execution process. From the user’s                            ated graph cannot be executed for the current runtime as it
+   point of view, the whole graph conversion and execution                            may produce incorrect results. Instead, JANUS falls back
+   process is done transparently; in other words, the given                           to the imperative executor (Figure 2 (E)) and resumes
+   DL program is automatically transformed into a corre-                              runtime profiling to make more relaxed assumptions for
+   sponding graph representation without any interactions.                            subsequent executions.
+      Figure 2 depicts the system components and the overall                             Assumptions that can be validated before actually exe-
+   execution model of JANUS. The common case in which                                 cuting the associated graph, such as type assumptions on
+   an efficient dataflow graph is utilized is depicted as solid                       input arguments, are checked when retrieving the graph
+   lines in the figure, while the rare case where the graph                           from the graph cache (Figure 2 1 ). In the unfortunate
+   representation is not available is depicted as dotted lines.                       case where such an assumption is wrong, JANUS regards
+                                                                                      this as a cache miss and falls back to imperative execution.
+   3.1            Fast Path for Common Cases                                             On the other hand, for assumptions that can only be
+   Runtime profiling. Once JANUS receives a DL pro-                                   validated during graph execution (Figure 2 2 ), it can be
+   gram, the program is first executed imperatively, while                            erroneous to simply abort the current execution to fall
+   the Profiler gathers runtime information required for mak-                         back to the imperative executor, because the global state
+   ing reasonable assumptions (Figure 2 (A)). Various in-                             may have been changed during the current execution. To
+   formation is collected, including control flow decisions                           solve this issue, JANUS defers state update operations
+   on conditional branches, loop iteration counts for itera-                          until every assumption is validated (Section 4.2.3). This
+   tive loop constructs, variable type information, non-local                         way, even if an assumption turns out to be wrong during
+   variables, object attributes, and so on.                                           computation, no state update operation has been triggered
+   Symbolic graph generation. After a sufficient amount                               yet and thus no state has been mutated. Knowing this,
+   of information has been collected, the Speculative Graph                           the system can safely stop the current execution. In other
+   Generator tries to convert the program into a symbolic                             words, states are updated in an all-or-nothing manner.
+   dataflow graph with the assumptions based on the run-                              3 We found that 3 iterations were enough to come up with a decent
+   time information (Figure 2 (B)). To avoid making any                               program context assumption, for our experimental workloads.
+
+
+
+
+USENIX Association                                           16th USENIX Symposium on Networked Systems Design and Implementation                         457
+         In order to validate an assumption, a runtime assertion    1      def loss_fn (x, y):
+      is encoded into the symbolic graph as an operation called     2        y_ = 0.5 ∗ x + 1.5
+      AssertOp. The AssertOp aborts the graph execution if the      3        return (y_ − y) ∗∗ 2
+      given condition fails. It also reports which assumption
+      has been broken, and this information is used to give up       (a) Source code of a DL program calculating a linear model
+      further optimizations that rely on the assumptions that
+                                                                               Body
+      repeatedly break.
+                                                                                                                            loss
+
+
+                                                                           =          Ret
+      Imperatively executed programs. With Turing-                                                          AddOp          PowOp
+
+      complete graph representations, any Python program can         y_        +          **
+                                                                                                             MultOp       SubOp
+      be represented as a symbolic graph, in theory. However,
+                                                                                                      1.5                          2
+                                                                     1.5       *      -        2
+      the Speculative Graph Generator does not convert                                                      0.5
+      every single Python feature into a symbolic graph              0.5       x   y_          y                    x         y
+      operation (Figure 2 (C)). For example, to ensure the
+                                                                    (b) AST of loss_fn             (c) Generated graph from loss_fn
+      all-or-nothing characteristic of state updates, programs
+      that include invisible state mutations are not converted      Figure 3: The Python source code, AST, and symbolic
+      into symbolic graphs. Some complicated Python features        graph of a simple linear model that receives several exter-
+      such as coroutines and generators are also not converted,     nal inputs. The static features of the program are repre-
+      since they do not have any clear graph representations.       sented as nodes in the AST, which in turn are converted
+      Section 4.3 describes the design choices and current          to vertices of the symbolic graph.
+      limitations of the Speculative Graph Generator in terms
+                                                                       Input parameters (x and y) are converted into graph in-
+      of Python coverage. In spite of such limitations of the
+                                                                    put objects that require external inputs in order to execute
+      Speculative Graph Generator, however, it is worth noting
+                                                                    the graph. In the case of TensorFlow, this corresponds
+      that JANUS users can still freely use the all features of
+                                                                    to PlaceholderOp4 s. At runtime, they are filled with the
+      Python on the imperative executor.
+                                                                    actual argument values. The return value of the return
+      4     Symbolic Graph Generation                               statement is marked as the computation target of the graph,
+                                                                    so that we can retrieve the value after executing the graph.
+      In this section, we describe in detail how JANUS con-            Python literals such as 0.5, 1.5 and 2 are simply
+      verts an imperative DL program into a symbolic dataflow       converted into operations that output constant values –
+      graph. We start the section by showing the conversion         ConstantOp for TensorFlow. The conversion of mathe-
+      process of a basic DL program free of dynamic features        matical operators is done by finding the corresponding
+      (Section 4.1). Next, we explain how JANUS converts dy-        mathematical graph operations and replacing them one-
+      namic features of Python, including dynamic control flow,     to-one. For standard Python operators such as + and **,
+      dynamic types, and impure functions, into symbolic graph      JANUS places the appropriate primitive calculation opera-
+      operations (Section 4.2). JANUS uses the runtime infor-       tions in the graph, like AddOp and PowOp for TensorFlow.
+      mation to simplify the dynamic program and treat it as a         An assignment to a Python local variable and a value
+      program of only static aspects, which is then easily trans-   retrieval from the same variable is converted into a con-
+      formed into a static graph. Finally, we discuss the Python    nection between two operations, just as in Pydron [28].
+      coverage limitations of the Symbolic Graph Generator          Figures 3(b) and 3(c) illustrate how such a connection is
+      (Section 4.3). More thorough discussion about the Python      made for the variable y_ in Figure 3(a), along with the
+      coverage of JANUS is in Appendix A.                           rest of the program.
+         For simplicity, we describe our design using various
+      operations of TensorFlow [1], a widely-used DL frame-         4.2        Dynamic Features
+      work. However, our design is not necessarily coupled with     In addition to the basic features, JANUS converts the dy-
+      TensorFlow and can be applied to other DL frameworks.         namic features of Python into the elements of the sym-
+                                                                    bolic DL graph as well to provide the performance of
+      4.1     Graph Generation Basics
+                                                                    dataflow graphs while maintaining the same programma-
+      Figure 3(a) is a simple, imperative Python program that       bility of imperative DL frameworks. Moreover, JANUS
+      calculates a linear model, written as a pure function with-   4 PlaceholderOps     are unique operations that generate errors unless
+      out any dynamic control flow or arbitrary Python objects.     they are provided with external inputs before graph execution. Ten-
+      We use this program as an example to show the basic           sorFlow expects users to feed a dictionary {ph1: v1, ph2: v2,
+      graph conversion process.                                     ...} to a PlaceHolderOp.
+
+
+
+
+458       16th USENIX Symposium on Networked Systems Design and Implementation                                          USENIX Association
+   exploits the fact that the dynamism in Python DL pro-             To be more specific, for conditional branches, if the
+   grams can often be simplified to static dataflow, treating     program takes only one side of the branch during profiling,
+   a dynamic program as a program of only static aspects          JANUS generates that particular side of the branch in the
+   with appropriate program context assumptions. Context          final graph without any switch or merge primitives and
+   assumptions are generated based on the profile informa-        adds an assertion operation that can detect a jump to the
+   tion JANUS gathers at runtime.                                 other side of the branch. For iterative statements, if the
+                                                                  number of iterations of a loop is discovered to be fixed,
+   4.2.1   Dynamic Control Flow
+                                                                  JANUS unrolls the loop with this fixed iteration count, and
+   Basic translation rules. Among various dynamic con-            adds an assertion operation to check that the number of
+   trol flow statements, JANUS focuses on conditional             iterations is indeed correct.
+   branches, loop constructs, and function calls, similar to         For function calls, if the callee is expected to be fixed
+   Pydron [28]. As shown in Pydron, these three constructs        for a function call at a certain position, JANUS inlines the
+   are enough to express most complex dynamic control             callee function body inside the caller unless that func-
+   flows in Python. Furthermore, they can all be expressed        tion call is identified as a recursive one. In addition, for
+   using special control flow graph operations proposed in        callee functions whose implementation is already known
+   recent works [19, 50] as follows.                              for JANUS, e.g., the functions provided by the framework
+      Python’s conditional statement, the if statement, can       such as matmul() or conv2d(), or Python built-in func-
+   be obtained by combining switch and merge primitives.          tions like print() or len(), JANUS adds the correspond-
+   The switch and merge primitives, originating from classic      ing graph operations which behave the same as the origi-
+   dataflow architectures [8, 10, 30], act as demultiplexers      nal callee functions, based on the prior knowledge about
+   and multiplexers, respectively, selecting a single path to     their behaviors. Section 4.3.1 includes more details and
+   pass their inputs or outputs. In TensorFlow, the SwitchOp      limitations about such function calls.
+   and MergeOp [50] serve as symbolic dataflow graph coun-
+                                                                  4.2.2   Dynamic Type
+   terparts for these primitives, allowing JANUS to plant
+   conditional branches in graphs.                                Basic translation rules. The types of all expressions
+      The iterative statements of Python, while and for, are      within a Python program must be known before JANUS
+   handled by using the switch and merge primitives together      can convert the program into a symbolic graph, because
+   with loop context primitives that hold iteration frames.       graph operations require operands to have fixed types.
+   TensorFlow conveniently provides EnterOp, ExitOp, and          This is a challenging task for Python programs because we
+   NextIterationOp [50] for creating iteration frames and         cannot determine the type of an arbitrary Python expres-
+   passing values over them.                                      sion before actually executing the expression. Fortunately,
+      Finally, for function calls, a separate graph is gener-     it is possible to infer the types of some expressions, given
+   ated for the callee function, and a function invocation        the types of other expressions; for example, it is clear that
+   operation that points to the generated graph is inserted in    the variable c in c = a + b is an integer if a and b are
+   the position of the function calls. Recent work proposes       integers.
+   a TensorFlow implementation of this operation called               As a basic rule, JANUS converts numerical Python val-
+   InvokeOp [19], which can represent an invocation of a          ues such as scalars, list of numbers, and NumPy [48]
+   recursive function with automatic differentiation support.     arrays into corresponding tensors, and converts non-
+                                                                  numerical values, including arbitrary class instances, into
+   Speculative graph generation: unrolling and inlining.          integer-typed scalar tensors which hold pointers to the cor-
+   If JANUS detects that only a single particular path is         responding Python values. Next, JANUS infers the types
+   taken for a certain control flow statement during pro-         of other expressions that are derived from expressions
+   filing, JANUS presumes that the control flow decision is       covered by the basic rule.
+   actually fixed. The system replaces the control flow oper-
+   ation with an assertion operation that double-checks the       Speculative graph generation: specialization. Ex-
+   assumption for this control flow decision, and proceeds        pressions whose types cannot be inferred from other ex-
+   with graph generation as if the control flow statement         pressions require a different measure. For instance, it is
+   were unrolled. This allows JANUS to remove control flow        impossible to identify the types of input parameters for
+   operation overheads and apply graph optimizations such         functions, or Python object attribute accesses (obj.attr)
+   as common subexpression elimination or constant folding        without any external clues. Similarly, inferring the return
+   in broader portions of the graph. If the assertion operation   types of recursive function calls is also challenging due to
+   fails, JANUS falls back to imperative execution.               the circular dependencies. To make proper assumptions
+
+
+
+
+USENIX Association                         16th USENIX Symposium on Networked Systems Design and Implementation                   459
+                         Abstract              float,                                                                       Read
+            1     2                          Unknown                                                         Model          Only      Python
+                                                                                          loss    Gradient
+          Sequence of                                                                                        Update           1        Heap
+                                                                 2
+           observed                      float,         float,
+                                          (4,?)         (?, 8)                                     PySetAttrOp
+                                                                                                                            Copy on     Deferred
+         tensor shapes                                                                                           0xb84c
+                                                                                                                              Write 2 4 Writeback
+                                                                                       RNN Loop
+              1    2            float,            float, 1         float,                                                     3
+                                                                                                   PyGetAttrOp                        Local
+                                (4, 7)            (4, 8) 1         (3, 8)   2
+                                                                                                                 “state”    Read
+         Sequence of                                                                                                                  Copy
+                                                                                       seq                                 & Write
+            shape
+                                    [[1.0, ⋯],        [[2.0, ⋯],        [[6.0, ⋯],
+         assumptions Concrete
+                                    [⋯], ⋯]           [⋯], ⋯]           [⋯], ⋯]
+                                                                                     Figure 5: Symbolic dataflow graph generated graph from
+      Figure 4: Type, shape, and value specialization hierarchy                      Figure 1 and the global states.
+      for an example tensor.
+                                                                                     which can execute arbitrary Python functions as graph
+      about the types of such expressions, Profiler observes the                     operations. A function for reading and updating a certain
+      types of the expressions during imperative executions.                         global state can be created and inserted in the appropriate
+      Given these context assumptions, JANUS can finish infer-                       position within the graph. However, this trivial approach
+      ring the types of remaining expressions, and construct a                       has clear limitations. First, since only one Python func-
+      specialized dataflow graph accordingly.                                        tion can be executed at a time due to the global interpreter
+         In addition, JANUS makes further assumptions about                          lock (GIL), the overall performance can be reduced when
+      the expressions to apply more aggressive optimizations.                        multiple operations should be executed in parallel. It also
+      For numerical expressions, we can try to specialize the                        complicates the fallback mechanism of JANUS. If a global
+      shape of tensors before constructing the graph. Further-                       state has already been mutated before the fallback occurs,
+      more, if a Python expression always evaluates to the same                      instead of starting the imperative executor from the func-
+      value while profiling, JANUS converts it into a constant                       tion entrance at fallback, execution must start from the
+      node in the dataflow graph. With statically determined                         middle of the function to be correct, by mapping the state
+      shapes or values, the graph can be further optimized, or                       update operation with corresponding Python bytecode.
+      even be compiled to the efficient machine code [44].
+         Figure 4 shows an example hierarchy of shapes and                           Optimized graph generation: deferred state update.
+      values that a certain tensor may have. After profiling the                     To make things simpler and also faster, JANUS does not
+      first few runs, JANUS finds out that even though the values                    mutate global states in place on the fly. JANUS instead
+      of the tensor are different every time, they all have the                      creates local copies of global states, and mutates only the
+      same shape, for example (4, 8), as in the figure. JANUS                        local copies during symbolic graph execution.
+      exploits this information to generate a dataflow graph with                       Figure 5 shows the symbolic dataflow graph version
+      an assumption that the shape of this tensor is (4, 8). When                    of the program in Figure 1, which includes the object
+      the assumption fails, JANUS tries to relax the assumption.                     attribute expressions (self.state) that access and mu-
+      For instance, in case the tensor has a shape (3, 8) for the                    tate the global states. We add new graph operations
+      next iteration to process a different size of mini-batch,                      PyGetAttrOp and PySetAttrOp to represent Python at-
+      JANUS modifies the assumption to suit both shapes (4, 8)                       tribute read and write. Each of them receives an object
+      and (3, 8), resulting in another dataflow graph with a shape                   pointer (0xb84c) and a name of the attribute ("state")
+      assumption of (?, 8). The system does not have to repeat                       as inputs, and behaves as follows: 1 The PyGetAttrOp
+      the graph generation process for a possible future case                        can access the Python heap to read the state unless a cor-
+      in which the example tensor has yet another unpredicted                        responding local copy exists. 2 When the PySetAttrOp
+      shape of (2, 8) or (6, 8).                                                     wants to update the attribute, a new value is inserted to
+                                                                                     the local copy instead of directly updating the Python
+      4.2.3       Impure Functions
+                                                                                     heap. 3 Further read and write operations are redirected
+      Naïve translation rules. It is common for a Python                             to the local copies. Note that JANUS inserts appropriate
+      function to access global variables to calculate return val-                   dependencies between PyGetAttrOps and PySetAttrOps
+      ues and have side-effects, mutating its enclosing Python                       if necessary to prevent any data hazards. 4 After the
+      context during execution. Likewise, it is common for a                         graph executor finishes this run, the local copies are writ-
+      Python DL program to read from and write to global states                      ten back to the Python heap. Global or nonlocal variables
+      such as global or nonlocal variables and heap objects.                         can also be regarded as the object attributes, where the
+      JANUS respects this characteristic and handles global state                    global variables are the attributes of the global object, and
+      accesses alongside symbolic graph execution.                                   the nonlocal variables are the attributes of the function’s
+        A trivial solution is to use TensorFlow’s PyFuncOps,                         closure objects. Subscript expressions (obj[subscr]) are
+
+
+
+
+460    16th USENIX Symposium on Networked Systems Design and Implementation                                                          USENIX Association
+   similarly implemented with equivalent custom operations,             class definitions and in-line import statements. We plan
+   PyGetSubscrOp and PySetSubscrOp.                                     to support these features as future work.
+     By not mutating the Python heap directly, JANUS can
+   always bypass the Python GIL to execute more read and                5     Implementation
+   write operations in parallel. In addition, the fallback mech-        We implemented JANUS on top of TensorFlow [1] 1.8.0
+   anism of JANUS can be simplified thanks to the all-or-               and CPython [32] 3.5.2. JANUS exploits the existing Ten-
+   nothing based state update mechanism.                                sorFlow graph executor and TensorFlow Eager imperative
+                                                                        executor as its components. In this section, we explain
+   4.3     Imperative-Only Features                                     the modifications to existing systems, and then describe
+   Albeit being able to support a wide range of imperative              how JANUS supports data-parallel training.
+   DL programs, the current JANUS graph generator does not              Modifications to existing systems. TensorFlow has
+   convert some particular features of Python into dataflow             been modified for several reasons. First, to transparently
+   graph elements. Programs with such features are executed             separate out the neural network computation from the rest
+   only on the imperative executor.                                     of the Python program without extra user intervention,
+   4.3.1    Coverage Limitations from Design                            the automatic differentiation functionality of TensorFlow
+                                                                        Eager is modified to trigger JANUS graph conversion. Sec-
+   Alignment with the design principles. To be aligned
+                                                                        ond, to share the model parameters between eager mode
+   with the design of JANUS in previous sections, the JANUS
+                                                                        and graph mode, JANUS slightly modifies the parame-
+   graph generator does not convert some features of Python.
+                                                                        ter storing mechanism of TensorFlow Eager. Third, sev-
+   For example, to keep the implementation of local copies
+                                                                        eral custom operations had been added, including the
+   of global state simple (Section 4.2.3), Python objects with
+                                                                        InvokeOp and PyAttrOp as described in earlier sections.
+   custom accessor functions (e.g., __setattr__) are not
+                                                                           CPython has also been modified to have bytecode-level
+   supported by the JANUS graph generator. Also, a function
+                                                                        instrumentation functionality for non-intrusive profiling.
+   should always return the same type of value, to infer the
+                                                                        Without modifying the interpreter, instrumentation for
+   type of call expressions (Section 4.2.2).
+                                                                        the profiling should exist at the Python source-code level,
+   External function calls. JANUS must understand the                   which would significantly affect the performance and the
+   behavior of the external functions, i.e., the framework-             debuggability of the imperative execution.
+   provided functions or foreign functions5 , to convert them           Data-parallelization on JANUS. Using multiple ma-
+   into corresponding graph operations. The JANUS graph                 chines equipped with multiple GPUs is a common ap-
+   generator converts the external functions into the graph             proach for accelerating DL jobs. We integrate JANUS
+   operations based on a separate whitelist. Most of the                with Horovod [35], a distributed training module for Ten-
+   framework-provided functions such as matmul or conv2d,               sorFlow that encapsulates the MPI collective communica-
+   and many commonly-used Python built-in functions such                tion [14] (e.g. AllReduce and AllGather) as an operation
+   as print or len are included in this whitelist. We plan to           inside the symbolic graph. After converting an imperative
+   cover more functions in the Python standard library.                 program into a dataflow graph, JANUS inserts appropriate
+      JANUS handles such external functions with extra cau-             communication operations to the graph in order to get
+   tion to ensure correctness. First, since the underlying              the average of gradients generated by multiple workers.
+   assumption here is that the implementation of external               Since the generated dataflow graph contains both commu-
+   functions never changes, JANUS prohibits the modifica-               nication and computation operations, we can parallelize
+   tion of the functions included in the whitelist. Also, if an         their execution and therefore achieve higher throughput.
+   external function includes state mutation (e.g., assign()
+   in TensorFlow), the execution of the corresponding graph             6     Evaluation
+   operation is deferred until all the other assumptions are            We present experimental results that show how impera-
+   validated, under the same principle about the deferred               tive DL programs can be executed both correctly and effi-
+   state update in Section 4.2.3.                                       ciently when converted into symbolic graphs on JANUS.
+   4.3.2    Coverage Limitations from Implementation
+                                                                        6.1    Experimental Setup
+   Currently, JANUS does not cover a few features from
+   Python that do not have clear graph representations. Such            Frameworks. As baseline frameworks representing
+   Python features include coroutines, generators, in-line              symbolic graph execution frameworks and imperative ex-
+                                                                        ecution frameworks respectively, we use TensorFlow [1]
+   5 functions   written in the languages other than Python             and TensorFlow Eager [40]. We could run the same DL
+
+
+
+
+USENIX Association                                  16th USENIX Symposium on Networked Systems Design and Implementation              461
+      program on JANUS as on TensorFlow Eager, thanks to                           Category Model       DataSet        BS     DCF DT IF
+      the transparent graph conversion feature of JANUS. In                                 LeNet        MNIST [22]    50      × ○ ×
+      addition, to demonstrate the correctness of graph conver-                    CNN      ResNet50 ImageNet [33] 64          ○ ○ ×
+      sion of JANUS, we also compare JANUS with TensorFlow                                  Inception-v3 ImageNet [33] 64      ○ ○ ×
+      defun [43], which implements a trace-based graph con-                                 LSTM        PTB [51]        20     ○   ○ ○
+                                                                                   RNN
+      version mechanism. TensorFlow-based frameworks have                                   LM          1B [5]         256     ○   ○ ○
+      been chosen to avoid implementation-dependent perfor-                                 TreeRNN SST [37]            25     ○   ○ ○
+                                                                                   TreeNN
+      mance differences.                                                                    TreeLSTM SST [37]           25     ○   ○ ○
+      Applications. We have evaluated JANUS with 11 mod-                           DRL
+                                                                                            A3C         CartPole [3]    20     ○   ○ ○
+      els in five major neural network types, covering three                                PPO         Pong [3]       256     × ○ ○
+      convolutional neural networks (CNN; LeNet [21],                              GAN
+                                                                                            AN          MNIST [22] 128         × ○ ○
+      ResNet50 [15], Inception-v3 [38]), two recurrent neu-                                 pix2pix     Facades [47] 1         × ○ ○
+      ral networks (RNN; LSTM [51], LM [20]), two recur-                        Table 2: Categories, models, datasets, batch sizes ("BS"),
+      sive neural networks (TreeNN; TreeRNN [36], Tree-                         and the dynamic features of the applications used for
+      LSTM [39]), two deep reinforcement learning models                        evaluation.
+      (DRL; A3C [25], PPO [34]), and two generative adversar-
+      ial networks (GAN; AN [13], pix2pix [18]) as shown in                     Environments. A homogeneous GPU cluster of 6 ma-
+      Table 2. The datasets and the mini-batch sizes used for                   chines, connected via Mellanox ConnectX-4 cards with
+      evaluation are also specified in the table.                               100Gbps InfiniBand is used for evaluation. Each machine
+         These models are implemented in an imperative pro-                     is equipped with two 18-core Intel Xeon E5-2695 @ 2.10
+      gramming style, using a number of dynamic features in                     GHz, and 6 NVIDIA TITAN Xp GPU cards. Ubuntu
+      Python as shown in Table 2. First, large CNN models                       16.04, Horovod 0.12.1, CUDA 9.0, cuDNN 7, OpenMPI
+      such as ResNet50 and Inception-v3 have conditional state-                 v3.0.0, and NCCL v2.1 are installed for each machine.
+      ments for handling batch normalization [16], which make                      LeNet, LSTM, AN, and pix2pix models are evaluated
+      them behave differently under particular conditions when                  on a single GPU, since these models and the datasets
+      training and evaluating the model. Next, RNNs include                     are regarded to be too small to amortize the communica-
+      Python for loops, and they also include global state mu-                  tion cost of parallel execution. Similarly, TreeRNN, Tree-
+      tation statements to retain hidden states inside the mod-                 LSTM, and A3C models are evaluated on CPUs on a sin-
+      els. Next, TreeNNs6 require all three kinds of dynamic                    gle machine, since these models and datasets are regarded
+      features. They include recursive function calls, and con-                 to be too small to amortize the communication between
+      ditional statements to separate recursion base cases and                  CPU and GPU. The other models are evaluated using
+      inductive cases. They also include values with undecided                  multiple GPUs. ResNet50 and Inception-v3 models are
+      type; the return type of a recursive function is unknown                  evaluated using up to 36 GPUs, and LM is evaluated on up
+      until the function returns certain values. In addition, they              to 12 GPUs. The network bandwidth made the throughput
+      include the Python object access to fetch the informa-                    of LM saturated on more than 2 machines with MPI col-
+      tion of the current subtree. For DRL models7 , Python                     lective communication, due to the huge parameter size of
+      for loops are used for handling an arbitrary length of the                LM (0.83 billion parameters). Therefore, model conver-
+      states of an episode, and global state mutation statements                gence of LM is experimented with 6 GPUs. We evaluated
+      are used for storing the intermediate computation results                 the model convergence of PPO using 4 GPUs on a single
+      to monitor the progress of the training. GAN models also                  machine, since the number of parallel actors used in the
+      use global state mutation statements for the same reason.                 original paper was only 8.
+      All models use Python function calls, including Python                    6.2    Model Convergence
+      class methods of high-level DL programming APIs such
+      as Keras [7]. Training data instances fed into each neural                Figure 6 shows how the neural networks converge on
+      network have different shapes over different training iter-               various underlying frameworks, with ResNet50 with the
+      ations, when the length of the dataset cannot be divided                  ImageNet dataset, LM with the 1B dataset, TreeLSTM
+      by the batch size.                                                        with the SST dataset, PPO with the Pong-v4 environment,
+                                                                                and AN with the Facades dataset on four frameworks.
+      6 The  implementation of TreeNN models on TensorFlow follows the          For all evaluated models, JANUS, TensorFlow, and Ten-
+      recursion-based implementation with InvokeOp [19], and JANUS con-
+      verts an imperative Python program into similar recursion-based graphs.
+                                                                                sorFlow Eager succeeded to make the neural networks
+      7 The DL framework only handles model training and policy evaluation,     converge correctly as reported in literatures: 23.7% top-
+      and the environment simulation is handled by an external library [3].     1 error for ResNet50 after 90 epochs, perplexity 47.5
+
+
+
+
+462     16th USENIX Symposium on Networked Systems Design and Implementation                                                 USENIX Association
+                                          JANUS             Symbolic         Imperative                 Tracing
+              (a) ResNet50                   (b) LM                (c) TreeLSTM                   (d) PPO                    (e) AN
+            (Top-1 Test Error)          (Test Perplexity)         (Test Accuracy)            (Episode Reward)         (Discriminator Loss)
+     100%                                                                               20
+                                   60                       80%
+                                                                                                                    4.0
+                                                                                         0
+      50%
+                                   50                       60%
+                                                                                                                    3.5
+                                                                                       −20
+            0   10000 20000 (s)         104        105   (s)       102     103   (s)            103       104 (s)         0   200      400(s)
+
+   Figure 6: (a) The test error of ResNet50, (b) validation perplexity of LM, (c) test accuracy of TreeLSTM, (d) episode
+   reward of PPO, and (e) discriminator loss of AN measured on JANUS, TensorFlow (Symbolic), TensorFlow Eager
+   (Imperative), and TensorFlow defun (Tracing) according to the elapsed time in seconds. Each marker in (b) represents
+   each training epoch, describing that per-epoch convergence is slower on TensorFlow defun compared to other frameworks.
+
+   for LM after 5 epochs, 82.0% binary accuracy for Tree-                                         (A)     (B)         (C)       (B)     (B)
+   LSTM after 4 epochs, 20.7 mean final score for PPO after                 Model                                                           –1
+                                                                                                 Imp.    JANUS       Sym.       (A)     (C)
+   40M game frames, and 3.52 discriminator loss for AN
+                                                                            LeNet                7.94k   25.84k     26.82k     3.25x   -3.6%
+   after 30 epochs.8 Also, JANUS could make the model to
+                                                                            ResNet50            188.46   200.37     207.39     1.06x   -3.4%
+   converge up to 18.7 times faster than TensorFlow Eager,                  Inception-v3        108.36   119.32     124.33     1.10x   -4.0%
+   while executing the identical imperative program. The                    LSTM                 2.75k   22.06k     22.58k     8.03x   -2.3%
+   performance difference between JANUS and TensorFlow                      LM                  19.02k   40.18k     40.45k     2.11x   -0.7%
+   was within 4.0%.                                                         TreeRNN              20.76   988.72     928.66     47.6x   +6.5%
+      On the other hand, trace-based TensorFlow defun                       TreeLSTM             7.51    138.12     141.71     18.4x   -2.5%
+   failed to make the models to converge correctly. The                     A3C                 220.66   1132.9     1178.6     5.13x   -3.9%
+   ResNet50 model includes the conditional statement to                     PPO                 596.80   1301.0     1306.4     2.18x   -0.4%
+   distinguish the behavior of the batch-normalization [16]                 AN                   4.34k   11.33k     11.56k     2.61x   -2.1%
+   layer on model training and evaluation. If a user evalu-                 pix2pix              4.04     8.69       8.88      2.15x   -2.1%
+   ates the initial accuracy before training the model by ma-             Table 3: Training throughput of all models evaluated on a
+   nipulating the model object attribute, TensorFlow defun                single machine with a single GPU in JANUS, TensorFlow
+   converts the first execution trace into graph operations,              (Sym.), and TensorFlow Eager (Imp.). The numbers rep-
+   which silently leads to an inaccurate result. Similarly, the           resent processed images/s for CNN and GAN models, pro-
+   LM model does not converge properly with TensorFlow                    cessed words/s for RNN models, processed sentences/s for
+   defun, since it failed to capture state passing across se-
+                                                                          TreeNN models, and processed frames/s for DRL models.
+   quences, due to its trace-based conversion mechanism.
+   The TreeLSTM model could not be converted into the
+                                                                          table, JANUS outperforms TensorFlow Eager (imperative
+   symbolic graph at all with TensorFlow defun, since it
+                                                                          execution) by up to 47.6 times, and shows throughput
+   does not support recursive function call. We could not
+                                                                          similar to TensorFlow (symbolic graph execution) by up
+   get the convergence metrics for PPO model with Tensor-
+                                                                          to 4.0% performance degradation. JANUS even performs
+   Flow defun, as it does not support global state update
+                                                                          slightly better (+6.5%) for TreeRNN, since there is no
+   statements. TensorFlow Eager converges slowly, since its
+                                                                          need to pre-process the input sentences, which are the
+   training throughput is much lower than TensorFlow and
+                                                                          tree-structured Python objects.
+   JANUS. We next analyze the training throughput of the
+   frameworks, excluding TensorFlow defun, which fails to                    JANUS achieves bigger performance gains on RNNs,
+   make models converge correctly.                                        TreeNNs, DRLs, and GANs than on CNNs, since those
+                                                                          networks have many concurrently executable operations.
+   6.3      Training Throughput                                           In addition, the performance gain of JANUS on a single
+   6.3.1    Single-machine Throughput                                     machine is larger on models with fine-grained graph op-
+                                                                          erations such as LeNet, LSTM, TreeRNN, A3C, and AN,
+   Table 3 presents the training throughput of all models                 compared to the models with coarse-grained operations
+   executed with JANUS, TensorFlow Eager, and TensorFlow                  such as ResNet50, Inception-v3, LM, PPO, and pix2pix,
+   on a single machine with a single GPU. As shown in the                 since the gain from bypassing the Python interpreter and
+   8 We measured the training loss with the official implementation in    applying compiler optimizations is bigger when the com-
+   Tensorflow Eager [41].                                                 putation time of each operation is short.
+
+
+
+
+USENIX Association                              16th USENIX Symposium on Networked Systems Design and Implementation                             463
+                                                                         JANUS           Symbolic                          Imperative
+                             (a) ResNet50                               (b) Inception-V3                                    (c) LM                                   (d) PPO
+                  6K                                             4K                                          100K                                       6K
+       images/s
+
+
+
+
+                                                      images/s
+
+
+
+
+                                                                                                                                             frames/s
+                                                                                                   words/s
+                                                                 3K                                           75K
+                  4K                                                                                                                                    4K
+                                                                 2K                                           50K
+                  2K                                             1K                                           25K                                       2K
+                   0                                              0                                             0                                        0
+                       13 6   12      24        36                    13 6    12     24       36                     123      6         12                   1   2    3   4    5   6
+                         Number of GPUs                                 Number of GPUs                                Number of GPUs                         Number of GPUs
+
+      Figure 8: Training throughput for the ResNet50, Inception-v3, LM, and PPO models on JANUS, TensorFlow (Symbolic),
+      TensorFlow Eager (Imperative), using varying numbers of GPUs.
+
+                       IMP         BASE     +UNRL                 +SPCN            +PARL                     independent tree nodes.
+                                                                                                                We have also measured the effect of assumption vali-
+              LeNet
+                                                                                                             dation, but the effect was negligible (in the error range),
+           ResNet50
+        Inception-V3                                                                                         since the AssertOps can be executed with the main neural
+               LSTM                                                                                          network in parallel.
+                 LM
+           TreeRNN                                                                                           6.3.2    Scalability
+          TreeLSTM
+                A3C                                                                                          Figure 8 shows the scalability of ResNet50, Inception-
+                PPO
+                                                                                                             v3, LM, and PPO models on JANUS, TensorFlow, and
+                 AN
+             pix2pix                                                                                         TensorFlow Eager on the cluster with 36 GPUs (12 GPUs
+                                                                                                             for LM, 6 GPUs for PPO). We measured the scale factor,
+                                Imp. 2x    3x    4x   5x         6x   7x     8x 18.4x 47.6x
+                                                                                                             which is defined as Multi-GPU Throughput / (Single-
+      Figure 7: The contribution of optimizations to im-                                                     GPU Throughput × Number of GPUs). JANUS achieves
+      prove training throughput. Optimizations are cumulative.                                               similar scalability (scale factor 0.77, 0.81, 0.18 each) as
+      +PARL is the default configuration of JANUS.                                                           TensorFlow (0.81, 0.80, 0.18 each), but TensorFlow Eager
+                                                                                                             does not scale well (0.24, 0.24, 0.14 each), due its inability
+         For large CNN models such as ResNet50 and Inception-
+                                                                                                             to overlap computation and communication.
+      v3, optimized GPU kernel computation accounts for most
+                                                                                                                The performance difference between JANUS and Ten-
+      of the computation time, which makes the performance
+                                                                                                             sorFlow becomes smaller when the synthetic dataset is
+      difference among JANUS, TensorFlow, and TensorFlow
+                                                                                                             used, since the input processing of TensorFlow is highly
+      Eager relatively small.
+                                                                                                             optimized. The slight difference in the scalability of
+      Optimization effect. Figure 7 analyzes the cause of the                                                ResNet50 comes from the under-optimized input pipeline
+      performance improvement of JANUS in detail. Converting                                                 of TensorFlow Eager, which JANUS also uses. Optimiz-
+      the imperative program into the symbolic graph without                                                 ing the input processing pipeline for JANUS will further
+      any following optimizations (BASE) enabled up to 4.9x                                                  reduce the performance difference between JANUS and
+      performance improvement compared to the imperative                                                     TensorFlow. We leave this optimization as future work.
+      execution (IMP). It removes the Python interpreter and
+      framework code overhead, which has the bigger effect
+                                                                                                             7      Conclusion
+      when each graph operation is relatively smaller. Con-                                                  In this paper, we introduced JANUS, a system that achieves
+      trol flow unrolling (+UNRL) and type specialization                                                    the performance of symbolic DL frameworks while main-
+      (+SPCN) enable more aggressive compiler optimiza-                                                      taining the programmability of imperative DL frame-
+      tions. On RNNs, +UNRL improved the performance                                                         works. To achieve the performance of symbolic DL frame-
+      of LSTM and LM by 2.09x and 1.04x, respectively. The                                                   works, JANUS converts imperative DL programs into
+      control flow statements in CNNs, TreeNNs and DRLs                                                      static dataflow graphs by assuming that DL programs
+      could not be unrolled due to their dynamicity. +SPCN                                                   inherently have the static nature. To preserve the dynamic
+      enabled some compiler optimizations and improved the                                                   semantics of Python, JANUS generates and executes the
+      throughput up to 18.3% in small neural networks. Finally,                                              graph speculatively, verifying the correctness of such
+      executing multiple operations in parallel (+PARL) im-                                                  assumptions at runtime. Our experiments showed that
+      proved the throughput up to 9.81x. Especially higher gain                                              JANUS can execute various deep neural networks effi-
+      could be achieved for TreeNNs, since there exist many                                                  ciently while retaining programmability of imperative
+      operations that could be executed in parallel in multiple                                              programming.
+
+
+
+
+464     16th USENIX Symposium on Networked Systems Design and Implementation                                                                                         USENIX Association
+   Acknowledgments                                               [13] Ian J. Goodfellow et al. Generative adversarial nets.
+   We thank our shepherd Srikanth Kandula and the anony-              In NIPS, 2014.
+   mous reviewers for their insightful comments. This work       [14] William Gropp, Ewing Lusk, and Anthony Skjellum.
+   was supported by Samsung Advanced Institute of Tech-               Using MPI: portable parallel programming with the
+   nology, the AWS Machine Learning Research Awards                   message-passing interface, volume 1. MIT press,
+   program, and Institute for Information & communications            1999.
+   Technology Promotion(IITP) grant funded by the Korea
+                                                                 [15] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and
+   government(MSIT) (No.2015-0-00221, Development of
+                                                                      Jian Sun. Deep residual learning for image recogni-
+   a Unified High-Performance Stack for Diverse Big Data
+                                                                      tion. In CVPR, 2016.
+   Analytics).
+                                                                 [16] Sergey Ioffe and Christian Szegedy. Batch nor-
+   References                                                         malization: Accelerating deep network training by
+     [1] Martín Abadi et al. TensorFlow: A system for large-          reducing internal covariate shift. arXiv preprint
+         scale machine learning. In OSDI, 2016.                       arXiv:1502.03167, 2015.
+     [2] Jeff Bezanson, Alan Edelman, Stefan Karpinski, and      [17] Michael Isard, Mihai Budiu, Yuan Yu, Andrew Bir-
+         Viral B. Shah. Julia: A Fresh Approach to Numeri-            rell, and Dennis Fetterly. Dryad: distributed data-
+         cal Computing, 2017.                                         parallel programs from sequential building blocks.
+     [3] Greg Brockman et al.        Openai gym.      CoRR,           In EuroSys, 2007.
+         abs/1606.01540, 2016.                                   [18] P. Isola et al. Image-to-image translation with con-
+     [4] Lars Buitinck et al. API design for machine learning         ditional adversarial networks. In CVPR, 2017.
+         software: experiences from the scikit-learn project.    [19] Eunji Jeong, Joo Seong Jeong, Soojeong Kim,
+         In LML Workshop at ECML PKDD, pages 108–122,                 Gyeong-In Yu, and Byeong-Gon Chun. Improv-
+         2013.                                                        ing the expressiveness of deep learning frameworks
+     [5] Ciprian   Chelba.            1-billion-word-                 with recursion. In EuroSys, 2018.
+         language-modeling-benchmark.                            [20] Rafal Jozefowicz, Oriol Vinyals, Mike Schuster,
+         https://github.com/ciprian-chelba/                           Noam Shazeer, and Yonghui Wu. Exploring the
+         1-billion-word-language-modeling                             limits of language modeling. 2016.
+        -benchmark.
+                                                                 [21] Yann LeCun, Leon Buttou, Yoshua Bengio, and
+     [6] Tianqi Chen et al. MXNet: A flexible and effi-               Patrick Haffner. Gradient-based learning applied
+         cient machine learning library for heterogeneous dis-        to document recognition. Proceedings of the IEEE,
+         tributed systems. In Workshop on Machine Learn-              1998.
+         ing Systems in NIPS, 2015.
+                                                                 [22] Yann LeCun and Corinna Cortes. The MNIST
+     [7] François Chollet et al. Keras: The Python Deep               Database of handwritten digits, 2010. http://
+         Learning library, 2015. https://keras.io/.                   yann.lecun.com/exdb/mnist/.
+     [8] David E Culler. Dataflow architectures. Annual          [23] Moshe Looks, Marcello Herreshoff, DeLesley
+         review of computer science, 1(1):225–253, 1986.              Hutchins, and Peter Norvig. Deep learning with
+     [9] Jeffrey Dean and Sanjay Ghemawat. Mapreduce:                 dynamic computation graphs. In ICLR, 2017.
+         simplified data processing on large clusters. Com-      [24] Azalia Mirhoseini, Hieu Pham, Quoc Le, Moham-
+         munications of the ACM, 51(1):107–113, 2008.                 mad Norouzi, Samy Bengio, Benoit Steiner, Yue-
+   [10] Jack B Dennis and David P Misunas. A preliminary              feng Zhou, Naveen Kumar, Rasmus Larsen, and Jeff
+        architecture for a basic data-flow processor. In ACM          Dean. Device placement optimization with rein-
+        SIGARCH Computer Architecture News, volume 3,                 forcement learning. 2017.
+        pages 126–132. ACM, 1975.                                [25] Volodymyr Mnih et al. Asynchronous methods for
+   [11] Facebook. Caffe2, 2017. https://caffe2.ai.                    deep reinforcement learning. In ICML, 2016.
+   [12] Roy Frostig, Matthew James Johnson, and Chris            [26] MXNet.    Deep Learning Programming Style,
+        Leary. Compiling machine learning programs via                2018.    https://mxnet.incubator.apache.
+        high-level tracing. In SysML, 2018.                           org/architecture/program_model.html.
+
+
+
+
+USENIX Association                         16th USENIX Symposium on Networked Systems Design and Implementation               465
+      [27] MXNet Developers. Gluon, 2018. http://gluon.             [42] TensorFlow. Swift for TensorFlow, 2018. https:
+           mxnet.io/.                                                    //github.com/tensorflow/swift.
+      [28] Stefan C. Müller, Gustavo Alonso, and Adam               [43] TensorFlow. tf.contrib.eager.defun, 2018. https:
+           Amara André Csillaghy. Pydron: Semi-automatic                 //www.tensorflow.org/versions/master/
+           parallelization for multi-core and the cloud. In              api_docs/python/tf/contrib/eager/defun.
+           OSDI, 2014.                                              [44] TensorFlow. XLA Overview, 2018. https://www.
+      [29] Graham Neubig et al. DyNet: The Dynamic                       tensorflow.org/performance/xla/.
+           Neural Network Toolkit, 2017. arxiv preprint             [45] TensorFlow. AutoGraph: Easy control flow for
+           arXiv:1701.03980.                                             graphs, 2019. https://www.tensorflow.org/
+      [30] RishiyurS Nikhil et al. Executing a program on                guide/autograph.
+           the mit tagged-token dataflow architecture. IEEE         [46] Theano Development Team. Theano: A Python
+           Transactions on computers, 39(3):300–318, 1990.               Framework for Fast Computation of Mathe-
+                                                                         matical Expressions, 2016.  arXiv preprint
+      [31] Adam Paszke et al. Automatic differentiation in
+                                                                         arXiv:1605.02688.
+           pytorch. In Autodiff Workshop in NIPS, 2017.
+                                                                    [47] Radim Tyleček and Radim Šára. Spatial pattern
+      [32] Python Software Foundation. Python programming                templates for recognition of objects with regular
+           language. https://www.python.org/.                            structure. In GCPR, 2013.
+      [33] Olga Russakovsky et al. Imagenet large scale vi-         [48] Stéfan Van Der Walt, S. Chris Colbert, and Gael
+           sual recognition challenge. International Journal             Varoquaux. The NumPy Array: a Structure for Effi-
+           of Computer Vision, 115(3):211–252, 2015.                     cient Numerical Computation, 2011. Computing in
+      [34] John Schulman, Filip Wolski, Prafulla Dhariwal,               Science & Engineering, 13, 2, 22-30.
+           Alec Radford, and Oleg Klimov. Proximal pol-             [49] Dong Yu et al. An introduction to computational
+           icy optimization algorithms.    arXiv preprint                networks and the computational network toolkit. Mi-
+           arXiv:1707.06347, 2017.                                       crosoft Technical Report MSR-TR-2014–112, 2014.
+      [35] Alexander Sergeev and Mike Del Balso. Horovod:           [50] Yuan Yu et al. Dynamic control flow in large-scale
+           fast and easy distributed deep learning in tensorflow.        machine learning. In EuroSys, 2018.
+           arXiv preprint arXiv:1802.05799, 2018.
+                                                                    [51] Wojciech Zaremba, Ilya Sutskever, and Oriol
+      [36] Richard Socher et al. Parsing natural scenes and              Vinyals. Recurrent neural network regularization.
+           natural language with recursive neural networks. In           arXiv preprint arXiv:1409.2329, 2014.
+           ICML, 2011.
+      [37] Richard Socher et al. Recursive deep models for se-
+           mantic compositionality over a sentiment treebank.       Appendix
+           In EMNLP, 2013.
+      [38] Christian Szegedy, Vincent Vanhoucke, Sergey             A    Python Syntax Coverage
+           Ioffe, Jon Shlens, and Zbigniew Wojna. Rethinking        Table 4 describes the entire set of opcode in the
+           the inception architecture for computer vision. In       CPython [32] 3.5.2 interpreter, and maps them to
+           CVPR, 2016.                                              the sections which describe the corresponding graph
+      [39] Kai Sheng Tai et al. Improved semantic representa-       generation rules. Python programs whose opcodes are
+           tions from tree-structured long short-term memory        mapped to Section 4.3 can only be executed on the
+           networks. In ACL, 2015.                                  imperative executor, and the others can be executed on
+                                                                    the graph executor. Python features that are not covered
+      [40] TensorFlow.        Eager Execution, 2018.                in previous sections are briefly discussed in the rest of
+           https://www.tensorflow.org/programmers_                  this section.
+           guide/eager.
+                                                                    Exceptions. A Python raise statement can be
+      [41] TensorFlow. Gan with tensorflow eager execution.         represented as an AssertOp in the dataflow graph. When
+           2018.                                                    the AssertOp for an exception aborts the graph execution,
+
+
+
+
+466    16th USENIX Symposium on Networked Systems Design and Implementation                                 USENIX Association
+                                       Opcode                                   Num       Description             Section Ref.
+      POP_TOP, ROT_TWO, ROT_THREE, DUP_TOP, DUP_TOP_TWO, NOP,                          stack                    No conversion is
+                                                                                   7
+      EXTENDED_ARG                                                                     manipulation             necessary
+      LOAD_CONST                                                                   1   constant                 Section 4.1
+      UNARY_INVERT, UNARY_NEGATIVE, UNARY_NOT, UNARY_POSITIVE, BINARY_ADD,
+      BINARY_AND, BINARY_FLOOR_DIVIDE, BINARY_LSHIFT, BINARY_MATRIX_MULTIPLY,
+      BINARY_MODULO, BINARY_MULTIPLY, BINARY_OR, BINARY_POWER,
+      BINARY_RSHIFT, BINARY_SUBTRACT, BINARY_TRUE_DIVIDE, BINARY_XOR,                  mathematical
+                                                                                  31                            Section 4.1
+      INPLACE_ADD, INPLACE_AND, INPLACE_FLOOR_DIVIDE, INPLACE_LSHIFT,                  operators
+      INPLACE_MATRIX_MULTIPLY, INPLACE_MODULO, INPLACE_MULTIPLY, INPLACE_OR,
+      INPLACE_POWER, INPLACE_RSHIFT, INPLACE_SUBTRACT, INPLACE_TRUE_DIVIDE,
+      INPLACE_XOR, COMPARE_OP
+
+      LOAD_FAST, STORE_FAST, DELETE_FAST, UNPACK_SEQUENCE, UNPACK_EX               5   local variables          Section 4.1
+      JUMP_ABSOLUTE, JUMP_FORWARD, JUMP_IF_FALSE_OR_POP,
+                                                                                       dynamic control
+      JUMP_IF_TRUE_OR_POP, POP_JUMP_IF_FALSE, POP_JUMP_IF_TRUE, POP_BLOCK,        12                            Section 4.2.1
+                                                                                       flow
+      GET_ITER, FOR_ITER, BREAK_LOOP, CONTINUE_LOOP, SETUP_LOOP
+
+      CALL_FUNCTION, CALL_FUNCTION_KW, CALL_FUNCTION_VAR,                                                       Section 4.2.1,
+                                                                                   6   function call
+      CALL_FUNCTION_VAR_KW, RETURN_VALUE, MAKE_FUNCTION                                                         Section 4.3.1
+                                                                                                                Section 4.2.2,
+      LOAD_ATTR, STORE_ATTR, DELETE_ATTR                                           3   arbitrary object
+                                                                                                                Section 4.2.3
+      BUILD_LIST, BUILD_LIST_UNPACK, LIST_APPEND, BUILD_MAP,
+      BUILD_MAP_UNPACK, BUILD_MAP_UNPACK_WITH_CALL, MAP_ADD, BUILD_SET,                                         Section 4.2.2,
+                                                                                  16   list, set, map
+      BUILD_SET_UNPACK, SET_ADD, BUILD_SLICE, BUILD_TUPLE,                                                      Section 4.2.3
+      BUILD_TUPLE_UNPACK, BINARY_SUBSCR, STORE_SUBSCR, DELETE_SUBSCR
+
+      LOAD_GLOBAL, LOAD_DEREF, LOAD_NAME, STORE_GLOBAL, STORE_DEREF,
+                                                                                       non-local
+      STORE_NAME, DELETE_GLOBAL, DELETE_DEREF, DELETE_NAME,                       11                            Section 4.2.3
+                                                                                       variables
+      LOAD_CLOSURE, MAKE_CLOSURE
+
+                                                                                       exception
+      POP_EXCEPT, SETUP_EXCEPT, SETUP_FINALLY, RAISE_VARARGS, END_FINALLY          5                            Appendix A
+                                                                                       handling
+      SETUP_WITH, WITH_CLEANUP_FINISH, WITH_CLEANUP_START                          3   with                     Appendix A
+      YIELD_FROM, YIELD_VALUE, GET_YIELD_FROM_ITER                                 3   yield                    Section 4.3.2
+      IMPORT_FROM, IMPORT_NAME, IMPORT_STAR                                        3   in-line import           Section 4.3.2
+                                                                                       in-line          class
+      LOAD_BUILD_CLASS, LOAD_CLASSDEREF                                            2                            Section 4.3.2
+                                                                                       definition
+      GET_AITER, GET_ANEXT, GET_AWAITABLE, BEFORE_ASYNC_WITH,
+                                                                                   5   coroutine                Section 4.3.2
+      SETUP_ASYNC_WITH
+                                         Total                                   113
+
+                Table 4: The mapping of the full list of CPython opcode and the corresponding sections.
+
+
+   the fallback occurs, and the actual, Python-style exception   to debug through symbolic graph execution traces,
+   can be safely raised on the imperative executor. Under        which are relatively more complicated than imperative
+   the same principle, for try-except-finally statements,        execution traces.
+   only the try-finally part is converted into the graph         Context manager. Since exception handling always
+   elements, and the except part is simply not converted,        occurs on the imperative executor as described in the
+   since the exception will never be caught by the symbolic      previous paragraph, the with statement can be converted
+   graph. By avoiding exception handling inside the              into the simple function calls to __enter__ and __exit__
+   symbolic graph, we can protect users from having              of the corresponding context manager object.
+
+
+
+
+USENIX Association                         16th USENIX Symposium on Networked Systems Design and Implementation                    467
+

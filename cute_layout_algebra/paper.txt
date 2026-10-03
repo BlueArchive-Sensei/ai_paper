@@ -1,0 +1,2033 @@
+                                                       C U T E L AYOUT R EPRESENTATION AND A LGEBRA
+
+                                                                                               A P REPRINT
+
+
+                                                                                              Cris Cecka
+                                                                                           NVIDIA Research
+                                                                                          ccecka@nvidia.com
+
+
+
+
+                                                                                              A BSTRACT
+                                                   Modern architectures for high-performance computing and deep learning increasingly incorpo-
+                                                   rate specialized tensor instructions, including tensor cores for matrix multiplication and hardware-
+                                                   optimized copy operations for multi-dimensional data. These instructions prescribe fixed, often
+arXiv:2603.02298v2 [cs.MS] 29 Jul 2026
+
+
+
+
+                                                   complex data layouts that must be correctly propagated through the entire execution pipeline to
+                                                   ensure both correctness and optimal performance. We present C U T E, a novel mathematical spec-
+                                                   ification for representing and manipulating tensors. C U T E introduces two key innovations: (1) a
+                                                   hierarchical layout representation that directly extends traditional flat-shape and flat-stride tensor
+                                                   representations, enabling the representation of complex mappings required by modern hardware
+                                                   instructions, and (2) a rich algebra of layout operations – including concatenation, coalescence,
+                                                   composition, complementation, division, tiling, and inversion – that enables sophisticated layout
+                                                   manipulation, derivation, verification, and static analysis. C U T E layouts provide a framework for
+                                                   managing both data layouts and thread arrangements in GPU kernels, while the layout algebra en-
+                                                   ables powerful compile-time reasoning about layout properties and the expression of generic tensor
+                                                   transformations.
+                                                   In this work, we demonstrate that C U T E’s abstractions significantly aid software development com-
+                                                   pared to traditional approaches, promote compile-time verification of architecturally prescribed lay-
+                                                   outs, facilitate the implementation of algorithmic primitives that generalize to a wide range of ap-
+                                                   plications, and enable the concise expression of tiling and partitioning patterns required by modern
+                                                   specialized tensor instructions.
+                                                   C U T E has been successfully deployed in production systems, forming the foundation of NVIDIA’s
+                                                   CUTLASS library and a number of related efforts including CuTe DSL. We provide both mathe-
+                                                   matical foundations and a reference implementation in Python (PyCuTe) [1], establishing C U T E as
+                                                   a principled approach to layout-aware programming for the tensor-centric computing era.
+
+
+                                         Contents
+
+                                         1   Introduction and Motivation                                                                                         3
+                                             1.1   Related Work . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    3
+                                             1.2   Canonical Loops and Loop Transformations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .        4
+                                             1.3   Tensors and Folding . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .   6
+
+                                         2   Layout Representation                                                                                               8
+                                             2.1   Tuples and HTuples . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    8
+                                             2.2   Shape . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .   8
+                                                   2.2.1   Coordinate Sets and Compatibility . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .     9
+                                                   2.2.2   Coordinates . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .   10
+    2.3   Stride . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    11
+          2.3.1   Integer-Semimodules . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .       12
+    2.4   Layout . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    12
+          2.4.1   Notations and Operations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .      12
+          2.4.2   Layout Examples . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .       13
+          2.4.3   Completeness . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .      14
+          2.4.4   Semi-Linearity . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .      14
+    2.5   Tensor . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    15
+          2.5.1   Slicing . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .     16
+    2.6   Applications . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    18
+          2.6.1   COPY . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .      18
+          2.6.2   GEMM . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .        19
+
+3   Layout Algebra                                                                                                        20
+    3.1   Concatenate . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .     20
+    3.2   Coalesce . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    20
+    3.3   Composition . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .     21
+          3.3.1   Composition Properties . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .      21
+          3.3.2   Evaluation and Restrictions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .       22
+          3.3.3   Intuition and Divisibility . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    24
+          3.3.4   Application: Partitioning Example . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .       25
+          3.3.5   By-mode Composition and Tilers . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .          26
+    3.4   Inverse . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .   26
+          3.4.1   Right-Inverse . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .     26
+          3.4.2   Application: Vectorization Example . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .        27
+          3.4.3   Left-Inverse . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    28
+          3.4.4   Application: Admissibility Example . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .        29
+    3.5   Complement . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .      30
+          3.5.1   Application: Logical Product . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .      30
+          3.5.2   Application: Logical Divide . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .       31
+
+4   Conclusion                                                                                                            33
+
+
+Acknowledgments
+
+The author thanks Vijay Thakkar for being an early adopter of C U T E, for his pivotal role in its popularization and
+integration into CUTLASS, and for substantial contributions to its foundational design and deployment. He also
+thanks Andrew Kerr, Pradeep Ramani, and Manish Gupta for their insights into using C U T E within CUTLASS and
+for driving its early adoption in the development of high-performance kernels. He thanks Muhammad Osama and
+Duane Merrill for early experimental work with C U T E prototypes and low-level performance optimizations in initial
+C U T E examples. Finally, the author thanks Michael Garland, Bastian Hagedorn, Jay Shah, and Amanda Liu for
+insightful feedback and for repeatedly challenging the C U T E specifications.
+
+
+                                                             2
+1     Introduction and Motivation
+
+Modern GPUs are increasingly optimized for tensor-centric computations, driven by the demands of deep learning and
+scientific computing. NVIDIA’s Volta architecture [2] introduced Tensor Cores, enabling efficient small-matrix mul-
+tiplications directly in hardware. This capability expanded in Turing [3] and Ampere [4] with specialized instructions
+for structured matrix movement within the GPU memory hierarchy. The Hopper [5] and Blackwell [6] architectures
+further advance this paradigm, introducing copy instructions for efficiently transferring rank-5 tensors between global
+and shared memory and further expanding tensor core capabilities. Fully harnessing these tensor-oriented hardware
+features is critical for peak GPU performance, motivating high-performance programming models that can represent
+and manipulate these tensors efficiently.
+The existing and emerging hardware depends critically on how multidimensional data is stored and accessed in mul-
+tiple hierarchical memory spaces and in multiple hierarchical levels of parallelism. Data storage layouts have always
+affected performance by dictating how and when memory accesses occur, but as hardware instructions become larger
+and prescribe fixed layouts for inputs and outputs the effect on correctness also becomes vital. These layouts must
+be propagated through the entire execution pipeline to ensure correct invocation of hardware instructions and ensure
+optimized memory access patterns.
+In this work, we present the foundational concepts of C U T E, a specification for CUDA Tensors, or Compute Unified
+Tensors, designed to provide building blocks for writing peak-performance linear algebra libraries. At its core, C U T E
+introduces two key innovations:
+       • A novel representation for tensor layouts: C U T E shapes, layouts, and tensors are inherently hierarchical,
+         constructed from smaller nested instances. This hierarchy provides the means to represent complex mappings
+         required by modern tensor instructions, but remains a strict extension of existing flat-shape and flat-stride
+         representations found in libraries like BLAS, torch.tensor, numpy.ndarray, and MATLAB.
+       • A novel algebra of operations defined over layouts: C U T E layouts support a rich set of operations, including
+         concatenation, coalescence, composition, complementation, division, tiling, and inversion, which all result
+         in new C U T E layouts. These operations enable sophisticated partitioning, manipulation, verification, and
+         derivation of tensor layouts demanded by modern tensor instructions.
+C U T E’s layout representation provides an intuitive framework for managing threads and data in writing generic algo-
+rithms. C U T E’s layout algebra provides an expressive approach for manipulating layouts and generating new layouts
+in the development of high-performance linear algebra kernels. These approaches enable:
+       • Support for complex layouts and partitioning: C U T E facilitates the representation of intricate layouts re-
+         quired by application-specific data patterns and complex partitioning patterns required by specialized tensor
+         instructions.
+       • Separation of concerns: Data layouts are declared independently of algorithmic logic, promoting clarity and
+         modularity.
+       • Static analysis and optimization: Sophisticated algebraic techniques empower the inspection, reordering, and
+         partitioning of tensor arguments according to architectural constraints.
+
+1.1   Related Work
+
+C U T E is motivated by the need to support development of efficient tensor contractions, which are at the core of many
+scientific computing and machine learning applications. Conventional approaches for computing general tensor con-
+tractions rely on matricization, which involves logically or explicitly restructuring tensor data to perform computations
+using a sequence of calls to a Basic Linear Algebra Subprograms (BLAS) library.
+BLAS provides efficient and portable implementations of core linear algebra operations, with highly optimized ver-
+sions available for a wide range of architectures [7]. Among BLAS primitives, the GEneral Matrix Multiply (GEMM)
+routine is easily the most optimized and widely used operation in all of scientific computing and machine learning.
+The BLAS-like Library Instantiation Software (BLIS) framework [8] extends GEMM by supporting non-unit strides in
+both row and column modes simultaneously, which addresses some challenges in handling irregular memory layouts
+without resorting to explicit memory copies. The strided-batched GEMM extension to BLAS further generalizes the
+primitive and allows its application to even more tensor contractions [9]. Abstracting matrix layouts even further, a
+key insight motivating C U T E is the use of multi-indices in tensor notation to enable the transformation of arbitrary
+tensor contractions into a canonical batched-GEMM primitive.
+Many existing libraries rely on tensors and nearly all of them are based on the flat-shape and flat-stride representation.
+In Python, these include numpy.ndarray and torch.tensor
+
+
+                                                            3
+>>> import numpy                                                >>> import torch
+>>> a = numpy . ndarray ( [3 ,7 , 5 ] )                         >>> a = torch . empty (3 ,7 , 5 )
+>>> a . dtype                                                   >>> a . dtype
+dtype ( ’ float64 ’)                                            torch . float32
+>>> a . shape                                                   >>> a . shape
+(3 , 7 , 5 )                                                    torch . Size ( [3 , 7 , 5 ] )
+>>> a . strides                                                 >>> a . stride ()
+( 280 , 40 , 8 )                                                ( 35 , 5 , 1 )
+
+and in C++, std::mdspan
+
+std :: mdspan a      = std :: mdspan ( data , 3 , 7 , 5);
+a . extent (0);      // 3
+a . extent (1);      // 7
+a . extent (2);      // 5
+a . stride (0);      // 35
+a . stride (1);      // 5
+a . stride (2);      // 1
+
+
+C U T E supports these representations and strictly expands on them with generalizations to hierarchical shapes and
+strides to represent more complex layouts, non-integral strides, and non-integral layout codomains.
+Independent generalizations of dense tensor representations include HeLayers [10], ThunderKittens [11], and the
+Linear Layouts [12] approach used in OpenAI’s Triton compiler [13]. Thunderkittens implements a wide variety of
+bespoke types for register memory, shared memory, row/column-major tiles, row/column-major tiles of row/column-
+major subtiles, and prescribed access patterns for warps and threads. These types are written with the architectural
+layout requirements and memory hierarchy in mind, but the representational span is limited to the existing types and
+patterns. Linear Layouts are based on F2 linear algebra and provide a more general representation of tensor layouts as
+well as an avenue for layout analysis and generation. Linear Layouts’ strict reliance on F2 makes some of the operators
+difficult for humans to inspect and limits the work to power-of-two shapes and strides, which is unacceptable to many
+applications.
+Other approaches to layout analysis which inspired portions of this work also rely on F2 linear algebra, such as the
+work of Edelman et al. [14], Cormen et al. [15], and Bouverot et al. [16]. These works provide a foundation for
+analysis and algorithm generation, but are limited due to the application contexts in which they were written.
+As the C++ implementation of C U T E within CUTLASS v3 [17] is open-source with some documentation, it has
+already been referenced and used in independent works analyzing the C U T E layouts and C U T E algebraic operations.
+Bhaskaracharya et al. [18] analyzes C U T E and Linear Layouts [12] in the context of integer set relations (ISL), but omit
+stride abstractions that allow the representation of Linear Layouts as C U T E layouts. LEGO [19] uses a restricted form
+of C U T E layouts and a primitive form of C U T E composition to generate complex indexing within a code generator.
+Carlisle et al. [20] analyzes C U T E layouts and some operations on them in the context of category theory. In this
+paper, we intend to provide a more definitive and formal treatment of C U T E concepts and their applications as well as
+a reference implementation of C U T E in Python. A pure-Python reference implementation, PyCuTe [1], is available at
+https://github.com/NVlabs/CuTe and mirrors the definitions and post-conditions of this paper; it is distinct from
+CuTe DSL [21], which targets JIT compilation of CUDA kernels, and from the C++ CuTe headers in CUTLASS.
+The design and concepts of C U T E have already demonstrated utility in several applications. For instance, C U T E has
+been used within the Graphene tensor compiler [22], where it plays a critical role in representing tensor operations.
+Additionally, the C++ implementation of C U T E has been used in implementations of the Stream-K algorithm [23] and
+is core to the development of NVIDIA’s CUTLASS v3 library [24]. C U T E has also been a core component in state-of-
+the-art implementations for large language models, including FlashAttention and each of its evolving generations [25,
+26, 27], highlighting its relevance to cutting-edge research and applications in deep learning. Additionally, C U T E
+is the basis for a number of related compiler projects including CuTe DSL [21], a Python-based DSL for dynamic
+compilation of CUDA software for linear algebra applications.
+
+1.2   Canonical Loops and Loop Transformations
+
+The explicit calculation of loop indices is a common challenge in the development of high-performance linear algebra
+kernels. These calculations are difficult for programmers to get right and even more challenging to maintain. Rather
+
+
+                                                            4
+than coupling information about data access with algorithmic logic, we prefer to write algorithmic logic clearly in
+terms of matrix/vector coordinates and abstract the data access patterns to the data layouts.
+To illustrate, we first define the class of loop nests that can be addressed by the techniques developed in this work.
+Specifically, we consider a standard loop form to be a loop with a single index, starting at zero, bounded by a constant,
+and incremented by 1 each iteration.
+For instance, consider the following loop:
+f o r ( i n t m = 2; m <= 50; m += 3)
+    A [ m ] = e ( m );
+
+This loop sets A[2], A[5], A[8], . . . to the result of a pure expression e(m). It can be transformed into a canonical
+loop as follows:
+f o r ( i n t i = 0; i < 17; ++ i )
+    ( A + 2)[3* i ] = g ( i );
+
+Here, the pointer is offset by a loop-invariant constant, the loop stride is normalized to 1, the lower bound is trans-
+formed to zero, the upper bound is tight and non-inclusive, and the pure expression is transformed g(i) = e(3*i+2).
+It is now intuitive to interpret the above example as iterating through a logically 17-element vector, where the logical
+coordinate is strided by 3 to index the data at base address A + 2. This program can be represented with the following
+data:
+
+Accessor: A + 2
+   Shape: 17
+  Stride: 3
+
+Nested loops can be treated similarly. Consider the following two-dimensional loop nest:
+f o r ( i n t n = 3; n < 43; n += 2)
+    f o r ( i n t m = 4; m <= 22; m += 5)
+        A [ p * m + q * n ] = e (m , n );
+
+which can be transformed into canonical loop form:
+f o r ( i n t j = 0; j < 20; ++ j )
+    f o r ( i n t i = 0; i < 4; ++ i )
+        ( A + 4* p + 3* q )[5* p * i + 2* q * j ] = g (i , j );
+
+With the canonical loop nest, it is natural to interpret the transformed loop as iterating through a logically 4×20 matrix,
+where the logical row coordinate i is strided by 5p, and the logical column coordinate j is strided by 2q to index the
+data at base address A + 4*p + 3*q. This can be represented with the following data
+
+Accessor: A + 4p + 3q
+   Shape: ( 4, 20)
+  Stride: (5p, 2q)
+
+A key observation is that the 4×20 matrix can also be interpreted as an 80-element vector with non-uniform, semi-
+affine striding, expressed with an equivalent canonical loop form:
+f o r ( i n t k = 0; k < 80; ++ k )
+    ( A + 4* p + 3* q )[5* p *( k %4) + 2* q *( k /4)] = f ( k );
+
+where % is modulo and / is integer floor-division. This transformation is the colexicographical bijection,
+(i,j) = (k%4,k/4), between 2D coordinates (i,j) and 1D coordinates k. This bijection is equivalent to, and
+can be derived directly from, the shape represented previously. Thus, the shape representation can accept both 2D
+coordinates and 1D coordinates, providing a flexible and rank-agnostic framework for indexing data.
+Furthermore, the canonical loop form also provides guidance for provably correct loop transformations that often
+appear in optimizing compilers for tensor computations. Consider the most general canonical loop nest:
+
+
+                                                            5
+f o r ( i n t in = 0; in < Nn ;          ++ in )
+    ...
+      f o r ( i n t i1 = 0; i1 <         N1 ; ++ i1 )
+          f o r ( i n t i0 = 0; i0       < N0 ; ++ i0 )
+              A [ d0 * i0 + d1 * i1 +    ... + dn * in ] = e ( i0 , i1 ,... , in );
+
+where (N0 , N1 , . . . , Nn ) is the “shape" of the computation and (d0 , d1 , . . . , dn ) are the “strides" of the access pattern,
+Accessor: A
+   Shape: (N0,N1,...,Nn)
+  Stride: (d0,d1,...,dn)
+Because there is a one-to-one correspondence between the Shape : Stride information and the loop nest itself, rather
+than asking how to perform transformations on the loops – splitting, transposition, concatenation, permutation, trun-
+cation, vectorization, etc – we can instead ask “What are valid ways to transform the Shape : Stride representation and
+what operators provide those transformations?" Indeed, if L = Shape : Stride represents the data access and the loop
+nest, what functions P exist such that
+                                                      L′ = P (L) = L ◦ P
+is a meaningful transformation of L = Shape : Stride to a new loop nest L′ = Shape′ : Stride′ with a potentially new
+shape and stride. These transformations, P , essentially rewrite the loop nest and, if defined properly, may themselves
+be composable, invertible, and provide functional-programming-like control of imperative loops. With considerations
+of the bijection between the 1D coordinates and the ND coordinates discussed above, this paper demonstrates that a
+very effective representation of these transformations is P = P = Shape∗ : Stride∗ , the same objects that we use to
+represent the data accesses and loop nests themselves.
+
+1.3   Tensors and Folding
+
+To further motivate shapes that can be indexed by ND coordinates in addition to 1D coordinates, we generalize obser-
+vations made in [9] mapping tensor contractions to canonical BLAS-like primitives.
+In this work, tensors are denoted by bold letters, indices by lowercase letters, and the bounds of those indices by their
+corresponding uppercase letters. The rank of a tensor refers to the number of dimensions, also known as modes, it
+possesses. For example:
+       •   A scalar, α, is a rank-0 tensor.
+       •   A vector, ai , is a rank-1 tensor with 0 ≤ i < I.
+       •   A matrix, Amn is a rank-2 tensor with 0 ≤ m < M and 0 ≤ n < N .
+       •   A three-way array, Amnp , is a rank-3 tensor with 0 ≤ m < M , 0 ≤ n < N , and 0 ≤ p < P .
+Summation is implied over repeated indices that appear only on a single side of an equation (Einstein notation), so an
+instance of a tensor contraction is
+                                                    Cstqp = Astupr Bqtru ,                                                      (1)
+which represents the contraction of a rank-5 tensor with a rank-4 tensor to produce a rank-4 tensor. Contractions of
+this form are expressed compactly in the numpy.einsum and torch.einsum interfaces, for instance.
+The above tensor contraction can be rewritten as
+                                            C(sp)(q)(t) = A(sp)(ur)(t) B(q)(ur)(t) ,
+where the modes of the original tensor contraction have been grouped into four types:
+       •   Row modes, m:
+                      b Appear in A and C, and not in B.
+       •   Column modes, n b: Appear in B and C, and not in A.
+       •   Reduction modes, bk: Appear in A and B, and not in C.
+       •   Batch modes, ℓ:
+                        b Appear in A, B, and C.
+This is referred to as tensor folding. Folding a tensor need not require any explicit copy, but can instead simply be a
+change of view of the data.
+As an explicit example of tensor folding, consider the 2×2×2 tensor of 8 elements shown in the first row of Figure 1.
+The flat representation holds a shape and a stride for each mode of the tensor to index into the physical data. The flat
+
+
+                                                                 6
+representation is identical to the representation that is adopted by std::mdspan in C++, torch.tensor in PyTorch,
+numpy.ndarray in NumPy, among many other similar libraries. The 2×2×2 tensor can be folded into a 4×2 matrix
+by folding the third mode into the first, as shown in the second row. The result admits the flat representation with a
+shape of (4, 2) and a stride of (2, 1). In principle, the 2×2×2 tensor can also be folded into a 2×4 matrix by folding
+the third mode into the second mode. However, the result no longer admits a flat representation – there is no integer
+that can represent the stride of the second mode.
+
+
+                                                       0          1   2      3       4      5    6   7
+                                                       a          b   c      d       e      f    g   h
+                                                                          Physical data
+
+          View Description             View Diagram                                  Flat Representation     C U T E Representation
+           Tensor, 2×2×2                              e   f                              Shape: (2, 2, 2)       Shape: (2, 2, 2)
+              Rank-3                          a       gb h                               Stride: (2, 1, 4)      Stride: (2, 1, 4)
+                                              c         d
+
+
+
+            Matrix, 4×2                           a     b                                 Shape: (4, 2)        Shape: ((2, 2), 2)
+         Fold mode 2 into 0                       c     d                                 Stride: (2, 1)       Stride: ((2, 4), 1)
+                                                  e     f
+                                                  g     h
+
+
+            Matrix, 2×4                   a       b     e     f
+                                                                                          Shape: (2, 4)        Shape: (2, (2, 2))
+         Fold mode 2 into 1               c       d     g     h
+                                                                                          Stride: (2, ✗)       Stride: (2, (1, 4))
+
+           Figure 1: A physical array of 8-elements viewed as a rank-3 tensor and folded into two matrices.
+
+
+The C U T E representation of the folded matrices is shown in the last column and emphasizes that the tensor folding
+really is just grouping modes together. In the case of the 4×2 matrix, the flat representation is called the coalesced
+version of the C U T E representation, while in the case of the 2×4 matrix no such flat representation exists.
+This generalized form of tensor folding allows all tensor contractions to be written in a single canonical contraction
+form,
+
+                                                                  Cmb
+                                                                   b nℓb = Amkℓb Bn
+                                                                            bb     kℓb.
+                                                                                  bb                                                  (2)
+
+where each mode may be a single mode or a group of modes, which we call a multi-mode. Appealing to the canonical
+loops in Section 1.2, regardless of whether the shape of m
+                                                         b is M or (M0 , M1 ), we can loop over it with 1D coordinates,
+m. Thus, any tensor contraction can be folded into a canonical batched-GEMM and evaluated with a trivial reference
+implementation composed of four nested loops:
+
+f o r ( i n t l = 0; l < L ; ++ l )
+    f o r ( i n t m = 0; m < M ; ++ m )
+        f o r ( i n t n = 0; n < N ; ++ n )
+            f o r ( i n t k = 0; k < K ; ++ k )
+                C (m ,n , l ) += A (m ,k , l ) * B (n ,k , l );
+
+
+This simple implementation of batched-GEMM can be used to evaluate a wide range of compatible tensor contrac-
+tions, including any matrix-multiplication (GEMM), tensor contraction (GETT), and convolution (CONV), with intelligent
+construction of folded layouts. See Section 2.6.2 for details on generic GEMM and its applications.
+Optimizations can then focus on loop reordering, tiling, vectorization, and other common optimizations by transform-
+ing the order and rank of the loop nests. These transformations, it turns out, can very often be represented by layouts
+as permutations on the coordinates spaces of the algorithm. These transform layouts functionally compose with the
+data layouts to generate new loop nests that are guaranteed to be consistent with the original problem. See Section 3.3
+for details on layout composition and application to generic partitioning.
+
+
+                                                                                 7
+2     Layout Representation
+C U T E layouts are versatile objects that are capable of representing a wide range of data and thread arrangements and
+have great utility in abstracting physical addresses and separating iteration order from storage order. In this section, we
+define the C U T E representation of shapes, layouts, and tensors and construct their interaction with coordinates. C U T E
+layouts enable generic algorithms that, with a single implementation, can be applied to any complex layout of data that
+may be folded into that algorithms’ canonical form. Examples of such algorithms and their breadth of applications are
+provided in Section 2.6.
+
+2.1   Tuples and HTuples
+
+The Tuple and HTuple concepts serve as foundational data structures throughout this work.
+Definition 2.1. A Tuple(T ) is a finite, ordered list of elements selected from a set T .                    For an X =
+(X0 , X1 , . . . , Xn−1 ) ∈ Tuple(X ), we define the operations:
+       • Rank: rank(X). The tuple length n.
+       • Access: Xi . The ith element of the Tuple X for 0 ≤ i < rank(X).
+Where a Tuple(T ) is a flat collection of elements, an HTuple(T ) is a “hierarchical tuple of T s".
+Definition 2.2. An HTuple(T ) is either an element of set T or a Tuple(HTuple(T )). For an X ∈ HTuple(X ) we
+define the operations:
+       • Rank: rank(X). If X ∈ Tuple, then the tuple length, else 1.
+       • Access: Xi . The ith element of an HTuple X for 0 ≤ i < rank(X).
+       • Depth: depth(X). If X ∈ Tuple, then 1 + max(depth(X0 ), depth(X1 ), . . .), else 0.
+For instance,
+                      31     (16, 32)      (3, −8, 7)      (2, (4, 1), −1)      ((4, 6), (3, (2, 2), 8))
+are all instances of HTuple(Z).
+When reasoning with HTuples, it is useful to define a notion of congruence and weak congruence.
+Definition 2.3. Congruence, ∼, is an equivalence relation on HTuples. For P ∈ HTuple(P) and S ∈ HTuple(S),
+                                    
+                                      P ∈ P and S ∈ S, or
+                    P ∼ S iff
+                                      P, S ∈ Tuple and rank(P ) = rank(S) and ∀i Pi ∼ Si
+and we say that P and S are congruent and have the same profile.
+For instance,
+                  (4, 8) ∼ (5, 7)   and   (4, (2, 4)) ∼ (7, (3, 2))   and    (v, ((p, 3))) ∼ (0, ((0, 0)))
+but (4, 8) and (4, (2, 4)) are not congruent and (4, (2, 4)) and (0, ((0, 0))) are not congruent.
+Similarly, weak congruence tests that the profile of one HTuple is at least as refined as another.
+Definition 2.4. Weak Congruence, ≲, is a partial order on HTuples. For P ∈ HTuple(P) and S ∈ HTuple(S),
+                                     
+                                       P ∈ P, or
+                    P ≲ S iff
+                                       P, S ∈ Tuple and rank(P ) = rank(S) and ∀i Pi ≲ Si
+and we say that P and S are weakly congruent, P coarsens the profile of S, and S refines the profile of P .
+For instance,
+                            30 ≲ (a, b) ≲ (v, (0, α))    and     30 ≲ (a, b, c) ≲ ((0, 0), 0, 0)
+but (a, b) and (a, b, c) are not weakly congruent and (v, (0, α)) and ((0, 0), 0) are not weakly congruent.
+
+2.2   Shape
+
+Multidimensional arrays are often characterized by their shape, a sequence of positive integers describing the extent
+of each mode. The 2D shape of an M ×N matrix is represented as (M, N ) and is naturally indexed by coordinates
+(m, n) with 0 ≤ m < M and 0 ≤ n < N . A natural extension of this is to represent a shape as a hierarchical tuple of
+positive integers.
+
+
+                                                             8
+Definition 2.5. A shape is an HTuple(Z+ ), where Z+ = {1, 2, 3, . . .} is the set of positive integers.QThe rank of a
+shape S is the rank of the HTuple. The size of a shape S is the product of its elements, denoted |S| = k |Sk |.
+
+What makes hierarchical shapes particularly useful is that they can be indexed by multiple coordinate systems. Con-
+sider the set of integers up to N ,
+                                                ZN = {0, 1, 2, . . . , N − 1}.
+C U T E makes the observation that a 2D shape (M, N ) can also be interpreted to describe 1D M N elements indexed
+by an integral coordinate i with 0 ≤ i < M N provided a bijection
+                                                 S : ZM N ←→ ZM × ZN
+maps between the 1D integral coordinates i ∈ ZM N and the 2D natural coordinates (m, n) ∈ ZM × ZN .
+Similarly, the 2D shape (M, N P ) can be interpreted as a hierarchical shape (M, (N, P )) indexed by natural coordi-
+nates (m, (n, p)) with 0 ≤ m < M , 0 ≤ n < N , 0 ≤ p < P . A similar bijection can be made
+                                         S : ZM × ZN P ←→ ZM × (ZN × ZP )
+to map between the 2D coordinates (m, q) ∈ ZM × ZN P and the natural coordinates (m, (n, p)) ∈ ZM × (ZN × ZP ).
+A direct consequence of hierarchical shapes and coordinates is that tensor algorithms can be written for the shapes that
+are most natural to them (Section 2.6) – 1D shapes for vectors in COPY, 2D shapes for matrices in GEMM, 3D shapes
+for tensors in batched-GEMM, etc – while still accepting hierarchically shaped tensors that are folded to be weakly
+congruent with the algorithm’s specification (Section 2.2.1). Tensors of data, whose shape is often represented as a
+flat sequence of integers, can be arbitrarily folded into shapes accepted by generic tensor algorithms. Furthermore,
+because each mode of a tensor is associated with a stride (Section 2.3) to index data, this folding of modes allows
+the representation of much more complex layouts of data beyond simple contiguous arrays in COPY or row-major and
+col-major matrices in BLAS GEMM (Section 2.4).
+In the following sections, we define this notion of compatibility and these relations between coordinate sets within a
+shape.
+
+2.2.1   Coordinate Sets and Compatibility
+As previously suggested, hierarchical shapes provide for indexing by multiple coordinate systems. Here, we define
+the coordinate set for a specific shape and a notion of compatibility between shapes to share coordinate sets between
+shapes.
+Definition 2.6. A coordinate set is a set ZN = {0, 1, 2, . . . , N − 1} of non-negative integers or a Cartesian product
+of coordinate sets, ZN × ZM = Z(N,M ) .
+
+For instance, the following are examples of coordinate sets:
+                          Z6 = {0, 1, 2, 3, 4, 5}
+             Z3 × Z4 = Z(3,4) = {(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1), (0, 2), (1, 2), (2, 2), (0, 3), (1, 3), (2, 3)}
+ (Z2 × Z1 ) × Z3 = Z((2,1),3) = {((0, 0), 0), ((1, 0), 0), ((0, 0), 1), ((1, 0), 1), ((0, 0), 2), ((1, 0), 2)}
+A coordinate set ZS is precisely the set of natural coordinates for a shape S. Other coordinate sets for a shape S are
+any coordinate set for a shape that is compatible with S and coarsens S.
+Definition 2.7. Compatibility, ⪯, is a partial order on the set of shapes. For shapes P and S,
+                                         P ∈ Z+ and P = |S| , or
+                                       
+                     P ⪯ S iff
+                                         P, S ∈ Tuple and rank(P ) = rank(S) and ∀i Pi ⪯ Si
+and we say that P and S are compatible, P coarsens S, and S refines P .
+
+Compatibility requires that the two shapes be the same size, so the integral values of the HTuples matter. For example,
+                               30 ⪯ (2, 15) ⪯ (2, (3, 5))      and   30 ⪯ (6, 5) ⪯ ((3, 2), 5)
+but (2, (3, 5)) and ((3, 2), 5) are not compatible despite having the same size. They do, however, share a common
+compatible shape of 30.
+With the definition of a coordinate set and shape compatibility, we can define the set of all compatible coordinates for
+any given shape.
+
+
+                                                               9
+Definition 2.8. A shape S defines a set of compatible coordinate sets, Z(S), as the coordinate sets of all shapes that
+coarsen S.
+
+                                                   Z(S) = {ZS ′ | S ′ ⪯ S}.                                               (3)
+
+Every shape has an integral coordinate set,
+
+                                            {0, 1, 2, . . . , |S| − 1} = Z|S| ∈ Z(S),
+
+and every rank-r shape has a rank-r coordinate set,
+
+                              {(a0 , . . . , ar−1 ) | ai ∈ Z|Si | } = Z(|S0 |,|S1 |,...,|Sr−1 |) ∈ Z(S).
+
+Note that if shape P coarsens shape S, then Z(P ) ⊆ Z(S). This means that any coordinate within shape P is also a
+coordinate within shape S.
+
+2.2.2   Coordinates
+In this section, we define classes of coordinates, define a bijection between the compatible coordinate sets of a shape,
+and provide examples of these coordinate mappings.
+Definition 2.9. An in-bounds coordinate, or simply coordinate, into a shape S is an element of one of its coordinate
+sets, c ∈ ZS ′ ∈ Z(S). Note that a coordinate is always an HTuple(N). When intention is clear, we will simply write
+c ∈ Z(S).
+Definition 2.10. An integral coordinate into a shape S is a coordinate c ∈ Z|S| ∈ Z(S). Note that an integral
+coordinate is always an integer, c ∈ N.
+                                                                     c ∈ ZS ∈ Z(S). Note that a natural coordinate
+Definition 2.11. A natural coordinate into a shape S is a coordinate e
+                                                       c ∼ S.
+is always an HTuple(N) that is congruent to the shape, e
+
+To transform between in-bound coordinates, we construct an enumeration over the coordinate sets of a shape S to
+define coordinate lists. In this work, we choose the colexicographical ordering, <, of coordinates defined by:
+                                                           
+                                                             an < bn , or
+               (a0 , . . . , an ) < (b0 , . . . , bn ) iff
+                                                             an = bn and (a0 , ..., an−1 ) < (b0 , ..., bn−1 )
+
+and applied recursively as needed. The colexicographical enumeration defines a bijection on coordinate lists. The
+function
+
+        idx2crd : Z|S| → Z(|S0 |,|S1 |,...,|Sr−1 |) ,
+                                                                         $           %              $           %
+                                                i                             i                          i        
+                     i 7→ i mod |S0 | ,                 mod |S1 | , . . . , Qr−3         mod |Sr−2 | , Qr−2               (4)
+                                               |S0 |                         k=0 |Sk |                  k=0 |Sk |
+
+maps the ith coordinate of Z|S| (the ith integral coordinate of shape S) to the ith coordinate of Z(|S0 |,|S1 |,...,|Sr−1 |)
+(the ith natural coordinate of shape (|S0 | , |S1 | , . . . , |Sr−1 |)). Other bijections such as the reverse and/or reflected
+lexicographical or colexicographical orderings can be used as well.
+The inverse of idx2crd is given by
+
+                         crd2idx : Z(|S0 |,|S1 |,...,|Sr−1 |) → Z|S| ,
+                                                                                                        r−2
+                                                                                                        Y
+                                        (c0 , c1 , . . . , cr−1 ) 7→ c0 + c1 · |S0 | + . . . + cr−1 ·         |Sk |       (5)
+                                                                                                        k=0
+
+which maps the ith coordinate of Z(|S0 |,|S1 |,...,|Sr−1 |) to the ith coordinate of Z|S| .
+If two shapes are compatible, P ⪯ S, then coordinates in ZP can be mapped to ZS via repeated application of
+idx2crd, and coordinates in ZS can be mapped to ZP via repeated application of crd2idx. Following the co-
+lexicographical ordering of coordinates, Figure 2 tabulates the mappings from integral coordinates to natural coordi-
+nates for each shape.
+
+
+                                                                  10
+                                                                                  Z12     Z(6,2)     Z((2,3),2)
+                                                                                   0      (0, 0)     ((0, 0), 0)
+                                                                                   1      (1, 0)     ((1, 0), 0)
+                                            Z6    Z(2,3)                           2      (2, 0)     ((0, 1), 0)
+                Z4                          0     (0, 0)                           3      (3, 0)     ((1, 1), 0)
+                0                           1     (1, 0)                           4      (4, 0)     ((0, 2), 0)
+                1                           2     (0, 1)                           5      (5, 0)     ((1, 2), 0)
+                2                           3     (1, 1)                           6      (0, 1)     ((0, 0), 1)
+                3                           4     (0, 2)                           7      (1, 1)     ((1, 0), 1)
+                                            5     (1, 2)                           8      (2, 1)     ((0, 1), 1)
+              S=4
+           Z(S) = {Z4 }
+                                                                                   9      (3, 1)     ((1, 1), 1)
+                                            S = (2, 3)
+                                        Z(S) = {Z6 , Z(2,3) }
+                                                                                  10      (4, 1)     ((0, 2), 1)
+                                                                                  11      (5, 1)     ((1, 2), 1)
+                                                                                       S = ((2, 3), 2)
+                                                                                Z(S) = {Z12 , Z(6,2) , Z((2,3),2) }
+                             Figure 2: Examples of the sets of coordinate lists for shapes S.
+
+
+Out-of-bounds Coordinates In addition to the coordinate sets we have already defined, it is useful to define coor-
+dinates of specific profiles that may not be in the coordinate sets of a shape.
+Definition 2.12. An admissible coordinate into a shape S is any coordinate c ∈ HTuple(Z) that is weakly congruent
+to the shape, c ≲ S.
+Definition 2.13. An out-of-bounds coordinate into a shape S is any admissible coordinate c ∈ HTuple(Z) that is not
+in-bounds, c ∈
+             / Z(S).
+Definition 2.14. A congruent coordinate into a shape S is any coordinate c ∈ HTuple(Z) that is congruent to the
+shape, c ∼ S. This is denoted as ZS = {c ∈ HTuple(Z) | c ∼ S}.
+
+That is, ZS is the finite set of coordinates bounded by shape S, and ZS is the infinite set of all coordinates congruent
+to S. Because the values within the shape S for ZS don’t matter, we will sometimes use (∗, ∗) as a placeholder profile.
+For instance,
+                      Z(∗,∗) = {(a, b) | a, b ∈ Z}      and     Z(∗,(∗,∗)) = {(a, (b, c)) | a, b, c ∈ Z}
+
+Note that idx2crd is well-defined for all integers, equivalently coordinates in Z|S| , rather than simply the integers
+in Z|S| . When it is evaluated on an integer i ≥ |S|, it will always return a coordinate (c0 , c1 , . . . , cr−1 ) that is out-
+of-bounds with respect to shape (|S0 | , |S1 | , . . . , |Sr−1 |). In contrast, crd2idx cannot guarantee an out-of-bounds
+result for an out-of-bounds coordinate input. Therefore, crd2idx and idx2crd are only inverses of each other when
+evaluated on in-bounds coordinates.
+
+2.3   Stride
+
+The previous section described shapes, their hierarchies, and coordinates for those shapes. To construct layouts of
+data, threads, or other objects, we define a mapping from coordinates within a shape to offsets.
+Definition 2.15. A stride D for a shape S is an HTuple(D) that is congruent with the shape, S ∼ D. This stride
+                                            c ∈ ZS to the codomain D, given by
+defines a mapping from a natural coordinate e
+                                 inner_product : Z · D → D,
+                                                 c · d 7→ cd
+                                 inner_product : HTuple(Z) · HTuple(D) → D,
+                                                          X
+                                                 c · d 7→    inner_product(ci , di )                                       (6)
+                                                                 i
+
+
+In most cases, strides are also HTuple(Z)s, meaning D = Z. The resulting integer produced by inner_product
+is typically interpreted as an offset within a data array. However, the concept of a stride element generalizes to any
+element of an integer-semimodule, which provides significant flexibility in the span of functions that layouts can
+represent.
+
+
+                                                                11
+2.3.1    Integer-Semimodules
+Definition 2.16. An integer-semimodule is a set M equipped with an associative addition, M + M → M , and a scalar
+multiplication, Z · M → M . For a, b ∈ Z and m, n, p ∈ M , the addition and scalar multiplication satisfy
+        • Multiplicative Identity: 1 · m = m,
+        • Additive Associativity: m + (n + p) = (m + n) + p,
+        • Multiplicative Associativity: a · (b · m) = (ab) · m.
+Additive identities and inverses are not required, so (M, +) is a semigroup. We write an integer-semimodule as
+(M, +, ·) to denote the set M , the additive operation +, and the scalar multiplication ·.
+
+The integers, Z, are an integer-semimodule. The rationals, Q, are an integer-semimodule. The field F2 =
+({0, 1}, XOR, AND) of arithmetic operations modulo 2 is an integer-semimodule. Any Cartesian product or HTuple
+of integer-semimodules is an integer-semimodule given elementwise addition and scalar multiplication.
+A uniquely useful integer-semimodule is (ZS , +, ·) with ZS the set of all HTuple(Z) congruent to S. For instance, the
+basis elements of rank-2 arithmetic tuples form an integer-semimodule:
+                            e0 = (1, 0),   e1 = (0, 1),    Z(∗,∗) = {a · e0 + b · e1 | a, b ∈ Z}
+with integer scaling and addition defined element-wise:
+                                                   a · e0 + b · e1 = (a, b)
+
+Thus, e0 , e1 , and any linear combination can be used as strides within a layout. By selecting stride elements from ZS ,
+layouts can generate natural coordinates of a shape S through the inner_product operation.
+
+2.4     Layout
+
+C U T E uses a shape S and a stride D to define a layout function, or just layout. The shape S defines the domain(s) of
+the layout function, while the stride D defines the codomain of the layout function.
+An alternate interpretation of the shape presented previously is that it is a map from the set of all coordinate lists to
+the natural coordinates. This map is bijective so that each coordinate is mapped to a unique and equivalent natural
+coordinate within the shape. Similarly, a stride is a map from the natural coordinates of a shape to some codomain.
+                                                S : Z ↔ ZS , ∀Z ∈ Z(S)
+                                                D : ZS → D
+The ↔ are the functions idx2crd (4) and crd2idx (5) that map between natural coordinates of compatible shapes,
+while the → mapping is the inner_product (6) between a natural coordinate and the stride.
+The composition of the shape and the stride defines the layout function, which is a map from the set of all coordinate
+lists to the codomain.
+Definition 2.17. A layout L = D ◦ S is the functional composition of a shape S and a stride D, where S ∼ D, and
+defines a mapping Z → D for each Z ∈ Z(S).
+
+2.4.1    Notations and Operations
+We write layouts L in different notations depending on context. For instance:
+        (4, (3, 2))   S
+                    =            or     (4, (3, 2)) : (2, (8, 1)) = S : D     or    (2, (8, 1)) ◦ (4, (3, 2)) = D ◦ S
+        (2, (8, 1))   D
+where the last style emphasizes that the shape and stride themselves can be interpreted as functions that compose to
+define the layout function.
+Since the domain(s) of a layout are determined by its shape, layout properties align closely with shape properties. For
+layouts L = S : D and U = X : Y , we define:
+        •   rank(L) = rank(S): The rank of a layout is the rank of its shape.
+        •   depth(L) = depth(S): The depth of a layout is the depth of its shape.
+        •   |L| = |S|: The size of a layout is the size of its shape.
+        •   Li = Si : Di : The ith sublayout is constructed from the ith element of its shape and stride.
+
+
+                                                              12
+        • Z(L) = Z(S): The coordinate sets of a layout are the coordinate sets of its shape.
+        • L ∼ U ⇔ S ∼ X: The congruence of two layouts is the congruence of their shapes.
+        • L ⪯ U ⇔ S ⪯ X: The compatibility of two layouts is the compatibility of their shapes.
+As an example of layout evaluation, consider the layout L = ((2, 2), (4, 2)) : ((1, 8), (2, 16)) from Figure 3e and the
+integral coordinate 22 ∈ Z32 ∈ Z(L), then
+                                               L(22) = L(2, 5) = L((0, 1), (1, 1)) = 26
+where we have shown the integral coordinate, the equivalent 2D coordinate, the equivalent natural coordinate, and the
+computed offset.
+The in-bounds domain of a layout is the set of all coordinates c ∈ Z(L). Layouts can also be evaluated on out-of-
+bounds coordinates, analogous to arrays that can be evaluated on out-of-bounds indices with undefined behavior. So
+while the domain of a layout is the finite set Z(L), the extended domain is the infinite set ZL of all HTuple(Z) that are
+weakly congruent with S.
+We also make the distinction between the codomain and the image of a layout. The codomain of a layout is D, which
+is often infinite (for instance, Z or ZD ). The image of a layout is finite and is the range of values the layout produces
+for all coordinates in the domain.
+                                          image(L) = L(Z(L)) = L(Z|L| ) ⊆ codomain(L)
+
+2.4.2   Layout Examples
+Having defined shapes, strides, and layouts, we now present examples that demonstrate C U T E layouts are a strict
+generalization of common flat N-dimensional layouts.
+
+         0     4    8   12   16   20     24   28     0   1     2   3     4    5     6     7    0    5   10   15   20   25   30   35
+         1     5    9   13   17   21     25   29     8   9    10   11   12   13     14   15    1    6   11   16   21   26   31   36
+         2     6   10   14   18   22     26   30    16   17   18   19   20   21     22   23    2    7   12   17   22   27   32   37
+         3     7   11   15   19   23     27   31    24   25   26   27   28   29     30   31    3    8   13   18   23   28   33   38
+                   (a) Col-Major                              (b) Row-Major                          (c) Col-Major Padded
+                       (4, 8) : (1, 4)                            (4, 8) : (8, 1)                        (4, 8) : (1, 5)
+
+         0     1    2   3    16   17     18   19     0   2     4   6    16   18     20   21    0    0    4    4    8    8   12   12
+        4      5    6   7    20   21     22   23     1   3     5   7    17   19     22   23    0    0    4    4    8    8   12   12
+        8      9   10   11   24   25     26   27     8   10   12   14   24   26     28   30    2    2    6    6   10   10   14   14
+        12    13   14   15   28   29     30   31     9   11   13   15   25   27     29   31    2    2    6    6   10   10   14   14
+             (d) Col-Major Interleave              (e) Mixed                                  (f) Blocked Broadcast
+                 (4, (4, 2)) : (4, (1, 16))            ((2, 2), (4, 2)) : ((1, 8), (2, 16))       ((2, 2), (2, 4)) : ((0, 2), (0, 4))
+Figure 3: Examples of layouts compatible with shape (4, 8) plotted as 4×8 matrices. These layouts use integer strides
+and hierarchical shapes to define functions useful for data tensors. The light line follows the general order of the layout
+offsets.
+
+Figure 3 illustrates examples of data layouts commonly encountered in dense linear algebra libraries, such as CUT-
+LASS. Each layout is represented as a mapping from logical coordinates (m, n) ∈ Z(4,8) to an offset k ∈ Z. These
+offsets can, for instance, be used to index elements within a data array. The common row-major, column-major, and
+padded layouts are trivially represented by C U T E layouts, while the interleaved and mixed layouts demonstrate that
+the representation set of layouts is strictly expanded by using nested shapes and strides. In particular, it is clear that
+grids-of-tiles-of-data are immediately representable with C U T E layouts.
+Figure 4 illustrates examples of layouts constructed with integer-semimodule strides rather than integer strides. Fig-
+ures 4a and 4b demonstrate layouts that generate coordinates. In future sections, we will discover that these coordinate
+layouts transform symmetrically to their data layout counterparts and often serve as utilities for detecting and predicat-
+ing out-of-bounds accesses into data tensors. Additionally, coordinate tensors have proven very useful for instructions
+like TMA in Hopper and Blackwell that consume coordinates as instruction arguments rather than addresses. Figure 4c
+
+
+                                                                     13
+          (0,0)   (0,1)   (0,2)   (0,3)   (0,4)   (0,5)   (0,6)    (0,7)              (0,0)     (1,0)   (2,0)     (3,0)   (0,6)   (1,6)   (2,6)   (3,6)
+          (1,0)   (1,1)   (1,2)   (1,3)   (1,4)   (1,5)   (1,6)    (1,7)              (0,1)     (1,1)   (2,1)     (3,1)   (0,7)   (1,7)   (2,7)   (3,7)
+          (2,0)   (2,1)   (2,2)   (2,3)   (2,4)   (2,5)   (2,6)    (2,7)              (0,2)     (1,2)   (2,2)     (3,2)   (0,8)   (1,8)   (2,8)   (3,8)
+          (3,0)   (3,1)   (3,2)   (3,3)   (3,4)   (3,5)   (3,6)    (3,7)              (0,3)     (1,3)   (2,3)     (3,3)   (0,9)   (1,9)   (2,9)   (3,9)
+                          (a) Identity Coordinate                                                (b) Transposed Block Coordinate
+                              (4, 8) : (e0 , e1 )                                                    (4, (4, 2)) : (e1 , (e0 , 6e1 ))
+                                                  0   5   10      15   16   21   26   31   32    37     42   47
+                                                  1   4   11      14   17   20   27   30   33    36     43   46
+                                                  2   7   8       13   18   23   24   29   34    39     40   45
+                                                  3   6   9       12   19   22   25   28   35    38     41   44
+
+                                                           (c) Binary Swizzle
+                                                               (4, (4, 3)) : (f1 , (f5 , f16 ))
+                                                               fi ∈ F2 = (Z, XOR, ·)
+Figure 4: Examples of layouts plotted with two-dimensional coordinates. These layouts use strides from integer-
+semimodules to define functions that are useful in tracking coordinates and “swizzling" offsets in non-affine patterns.
+
+
+uses an integer-semimodule where group addition is replaced with binary XOR. This can be used to generate so-called
+swizzle patterns of data which are useful to prevent bank conflicts in read and write access patterns to shared memory.
+These examples highlight the uniformity of C U T E’s layout concept and the generality of functions it can be used to
+represent.
+
+2.4.3   Completeness
+Every function f with f (0) = 0 and finite domain ZN can be represented as the functional composition of the finite
+sequence of C U T E layouts. This means that C U T E layouts are a generating set under functional composition. Such a
+function f can be represented as sequence of compositions
+  f ≡ (2, 2, 2, . . .) : (f (1), f (2), f (3), . . .) ◦ (3, 1) : (1, 4) ◦ (4, 1) : (1, 6) ◦ · · · ◦ (N − 1, 1) : (1, 2(N − 2)).
+
+For all i ∈ ZN /{0}, the rightmost N − 3 layouts map i → 2i−1 and the leftmost layout maps 2i−1 → f (i). Note
+that we’ve used the extended domain, Z, rather than the in-bounds domain, ZN , to evaluate the intermediate layouts
+above.
+
+2.4.4   Semi-Linearity
+The shape-stride definition, L = D ◦ S, along with generalized integer-module strides yield a particularly useful
+linear-algebraic view of layout functions,
+                                                   L(c) = (D ◦ S)(c) = d · S(c) = d · e
+                                                                                      c.                                                                  (7)
+
+The shape function is a convenient semi-affine bijection into the natural coordinates, e  c ∈ ZS , and the stride function
+                                                                                          c1 ∈ ZS , the layout function is
+                                                                                     c0 , e
+is a linear function of the natural coordinates. Indeed, for two natural coordinates e
+linear,
+                      L(αe     c1 ) = d · (αe
+                         c0 + βe                  c1 ) = α(d · e
+                                            c0 + βe            c0 ) + β(d · e
+                                                                            c1 ) = αL(e
+                                                                                      c0 ) + βL(e
+                                                                                                c1 ),
+because the shape function is the identity and the stride function is linear. Note that for arbitrary coordinates c0 , c1 ∈
+Z(S), the layout is not linear because the shape function is not linear,
+                                              c = S(c0 + c1 ) ̸= S(c0 ) + S(c1 ) = e
+                                              e                                    c0 + e
+                                                                                        c1 .
+
+                                                                       c ∈ ZS , but nonlinear in the arbitrary coordinates,
+As a result, the layout function is linear in the natural coordinates, e
+c ∈ Z(S).
+In the natural coordinates, d · e
+                                c can be interpreted as a generalized matrix-vector product,
+                                                                  L(c) = d · e
+                                                                             c=De
+                                                                                c
+
+
+                                                                             14
+                             L                            Linear Form: r = D e  c              Comment
+                                                                            c0
+                                                                           
+                                                                            e
+                                                                            c         Integer strides are columns
+           ((2, 2), (4, 2)) : ((1, 8), (2, 16))           r = [1 8 2 16]  1 
+                                                                          e
+                                                                            c2
+                                                                            e               of 1×n Z-matrix
+                                                                            c3
+                                                                            e
+                                                                          "ec0
+                                                                             #
+                                                           r0      0 1 0            Coordinate strides are columns
+               (4, (4, 2)) : (e1 , (e0 , 6e1 ))                =             c1
+                                                           r1      1 0 6                 of m×n Z-matrix
+                                                                             e
+                                                                        c2 
+                                                                             e
+                                                          r0         1 0 1 0   c0
+                                                                               e
+                    (4, 4) : (f1 , f5 )                  r1  0 1 0 1 e c1        Binary strides are columns
+        ≡ ((2, 2), (2, 2)) : ((f1 , f2 ), (f5 , f10 ))   r2  = 0 0 1 0 e
+                                                                            c2           of m×n F2 -matrix
+                                                          r3         0 0 0 1   c3
+                                                                               e
+                                      Table 1: Layouts and their associated linear forms.
+
+
+where D is a matrix with elements selected from an integer-semimodule D. In the most common case with integer
+strides, D = Z, this is a matrix-vector product with D ∈ Z1×n . When strides are selected from the coordinate integer-
+semimodule, D = (ZS , +, ·), this is a matrix-vector product with D ∈ Zm×n . When strides are binary sequences,
+D = F2m = (Z2m , XOR, ·), this is a matrix-vector product with D ∈ Fm×n2    .
+For instance, Table 1 shows the linear forms of an integer layout, a coordinate layout, and a binary layout. Well-
+studied transformations of the F2 linear forms include the Bit Permute Complement (BCP) and Bit Matrix Multiply
+Complement (BMMC) transforms [14, 15, 16], which have recently found significant application to SIMT GPU pro-
+gramming [12]. In those works, the transforms under consideration are
+                                                         f (v) = Av + b                                               (8)
+where A is an m×n matrix of binary elements, v is a binary vector of length n, b is a binary vector of length m, and
+all arithmetic is performed modulo 2 (in the finite field with two elements, F2 ).
+Subsequent sections of this paper define algebraic operations on C U T E layouts that are generalized from linear algebra.
+Group composition on C U T E layouts can be interpreted as a generalization of matrix-multiplication. Right-inverses
+and left-inverses of C U T E layouts can be interpreted as Moore-Penrose pseudo-inverses in linear algebra. Indeed,
+similar linear algebraic expressions can be found in BCP and BMMC analysis [14, 15, 16, 12], which all use factor-
+izations, inverses, and matrix products in analysis of algorithms. The C U T E layout algebra can be interpreted as a
+generalization of the linear algebraic BCP and BMMC operations beyond the F2 field. In particular, the C U T E layout
+algebra was principally motivated by the general integer strides found in exotic data layouts for tensors. In this work,
+we aim to demonstrate that more general functional definitions of these operations are often computable for C U T E
+layouts and useful for a broad range of analyses and applications.
+
+2.5   Tensor
+
+Finally, we define tensors which are the central object of C U T E by binding a layout to an accessor. The accessor is
+effectively a random-access, pointer-like object for the layout.
+Definition 2.18. An accessor is an object that supports offset and dereference operations:
+               e + d → e′ ,                         offset accessor e by d ∈ D to produce another accessor e′ ;
+                  ∗e → v,                           dereference accessor e to produce value v;
+                 e[d] → ∗(e + d),                   subscript operator as a common convenience.
+
+When D = Z, common implementations of an accessor include raw pointers (e.g., T*), arrays (e.g. T[N]), and
+random-access iterators (e.g. thrust::counting_iterator and thrust::transform_iterator, etc). When D
+is a more exotic integer-semimodule, the accessor must be compatible with the semigroup’s addition operation.
+Definition 2.19. A tensor is defined by the composition of an accessor, e, with a layout, L, expressed as T = e ◦ L.
+A tensor evaluates the layout by mapping a coordinate c ∈ Z(L) to the codomain D, offsets the accessor accordingly,
+and dereferences the result to obtain the tensor’s value. Formally,
+                                         T (c) = (e ◦ L)(c) = ∗(e + L(c)) = e[L(c)],                                  (9)
+yields the value of the tensor at coordinate c.
+
+
+                                                                15
+Most tensors are data layouts that use a memory address as an accessor. For instance, a memory address p can be used
+as a pointer accessor {p} with normal offset and dereference operations to construct a data tensor,
+                                                  {p} + b → {p + b}
+                                                    ∗{p} → ∗p
+                                                       T = {p} ◦ L.
+In addition, all layouts illustrated in Figure 3 can be transformed into implicit tensors by composing them with a
+counting iterator {a} which dereferences to a stored offset a ∈ Z,
+                                                  {a} + b → {a + b}
+                                                    ∗{a} → a
+                                                       T = {a} ◦ L.
+Similarly, the coordinate layouts illustrated in Figure 4a and 4b can be transformed into implicit tensors by composing
+them with an accessor {(a, b)} that offsets with coordinates and dereferences to a stored coordinate (a, b) ∈ Z(⋆,⋆) ,
+                                         {(a, b)} + (c, d) → {(a + c, b + d)}
+                                                ∗{(a, b)} → (a, b)
+                                                        T = {(a, b)} ◦ L.
+
+2.5.1   Slicing
+A tensor may be either fully evaluated or partially evaluated through slicing. As a C U T E Tensor can be thought of as
+a Layout with an offset, arbitrary slicing can be performed along any mode(s) of a natural coordinate.
+
+        • Full evaluation: Applying Eq. (9) with a complete coordinate c results in a value.
+        • Partial evaluation (Slicing): When slicing with an incomplete coordinate c = c′ + c∗ , where c∗ represents
+          the unspecified portion of c, the result is a new tensor. The operation is expressed as:
+                            T (c) = (e ◦ L)(c′ + c∗ ) = (e + L(c′ )) ◦ L(c∗ ) = e′ ◦ L(c∗ ) = T ′ (c∗ ),          (10)
+
+where L(c′ ) can be fully evaluated and accumulated into e and L(c∗ ) is the sublayout of L that remains unevaluated.
+Slicing creates a sub-tensor that can be further evaluated or manipulated.
+Figure 5 illustrates examples of slicing into a 6×12 matrix to extract rows, columns, and submatrices. These use a
+counting-iterator accessor denoted by {a} to indicate an offset of a ∈ Z. Slicing involves accumulating into the tensor
+offset and determining the unevaluated portion of the layout.
+In many tensor libraries like numpy.ndarray, torch.tensor, and MATLAB, slicing is supported with notation
+similar to above: write my_matrix[2,:] to extract the second row of a matrix and my_matrix[:,4] to extract the
+fourth column of a matrix. These libraries also support ranged slicing, such as my_matrix[2:4,1:3] to extract the
+submatrix from the second to the fourth row and the first to the third column. C U T E does not support ranged slicing
+as it finds ranged slicing to be problematic for several reasons:
+        • Ranged slicing can’t express all of the slices demonstrated in Figure 5. The last slice example cannot be
+          expressed with ranged slicing on only the rows and columns of a matrix.
+        • Ranged slicing promotes patterns like
+          # Extract a TILE_SIZE of data for each thr_id
+          thr_data = my_data [ thr_id * TILE_SIZE : ( thr_id + 1 ) * TILE_SIZE ]
+
+          to retrieve a “tile” of data local to each thread. This pattern conflates the TILE_SIZE, which is very often
+          a static constant that a program wants to optimize over, with a thr_id, which is a fundamentally dynamic
+          index local to each thread. Instead, C U T E prefers a two-stage permute-and-slice approach like
+          # Permute and reshape my_data tensor into shape ( TILE_SIZE , NumTiles )
+          # This is a wrapper around the more general composition ( my_data ,
+                                                       Transform_Layout )
+          tiled_data = logical_divide ( my_data , TILE_SIZE ) # ( TILE_SIZE , NumTiles )
+          assert size [ 1 ] ( tiled_data ) = = NumThrs         # Verify NumTiles ==
+                                                       NumThrs
+          # Slice tiled tensor to retrieve TILE_SIZE local to thr_id
+          thr_data = thr_tile_data [ None , thr_id ]           # TILE_SIZE
+
+
+                                                           16
+                             0     1      2     3   4   5        6   7   8   9   10 11
+                         0   0     2     15 17 30 32 100 102 115 117 130 132
+                         1   4     6     19 21 34 36 104 106 119 121 134 136
+                         2   8     10 23 25 38 40 108 110 123 125 138 140
+                         3   1     3     16 18 31 33 101 103 116 118 131 133
+                         4   5     7     20 22 35 37 105 107 120 122 135 137
+                         5   9     11 24 26 39 41 109 111 124 126 139 141
+
+             Tensor A = {0} ◦ ((3, 2), ((2, 3), 2)) : ((4, 1), ((2, 15), 100))
+        Slice                                 Sliced Tensor                                Slice Diagram
+                                                                                 0   2   15 17 30 32 100 102 115 117 130 132
+                                                                                 4   6   19 21 34 36 104 106 119 121 134 136
+
+      A(2, _)                {8} ◦ ((2, 3), 2) : ((2, 15), 100)                  8   10 23 25 38 40 108 110 123 125 138 140
+                                                                                 1   3   16 18 31 33 101 103 116 118 131 133
+                                                                                 5   7   20 22 35 37 105 107 120 122 135 137
+                                                                                 9   11 24 26 39 41 109 111 124 126 139 141
+
+
+
+                                                                                 0   2   15 17 30 32 100 102 115 117 130 132
+                                                                                 4   6   19 21 34 36 104 106 119 121 134 136
+
+      A(_, 5)                           {32} ◦ (3, 2) : (4, 1)                   8   10 23 25 38 40 108 110 123 125 138 140
+                                                                                 1   3   16 18 31 33 101 103 116 118 131 133
+                                                                                 5   7   20 22 35 37 105 107 120 122 135 137
+                                                                                 9   11 24 26 39 41 109 111 124 126 139 141
+
+
+
+                                                                                 0   2   15 17 30 32 100 102 115 117 130 132
+                                                                                 4   6   19 21 34 36 104 106 119 121 134 136
+
+  A(2, ((0, _), _))                    {8} ◦ (3, 2) : (15, 100)                  8   10 23 25 38 40 108 110 123 125 138 140
+                                                                                 1   3   16 18 31 33 101 103 116 118 131 133
+                                                                                 5   7   20 22 35 37 105 107 120 122 135 137
+                                                                                 9   11 24 26 39 41 109 111 124 126 139 141
+
+
+
+                                                                                 0   2   15 17 30 32 100 102 115 117 130 132
+                                                                                 4   6   19 21 34 36 104 106 119 121 134 136
+
+  A((_, 1), (_, 0))              {1} ◦ (3, (2, 3)) : (4, (2, 15))                8   10 23 25 38 40 108 110 123 125 138 140
+                                                                                 1   3   16 18 31 33 101 103 116 118 131 133
+                                                                                 5   7   20 22 35 37 105 107 120 122 135 137
+                                                                                 9   11 24 26 39 41 109 111 124 126 139 141
+
+
+
+                                                                                 0   2   15 17 30 32 100 102 115 117 130 132
+                                                                                 4   6   19 21 34 36 104 106 119 121 134 136
+
+A((_, 0), ((0, _), 1))                 {100} ◦ (3, 3) : (4, 15)                  8   10 23 25 38 40 108 110 123 125 138 140
+                                                                                 1   3   16 18 31 33 101 103 116 118 131 133
+                                                                                 5   7   20 22 35 37 105 107 120 122 135 137
+                                                                                 9   11 24 26 39 41 109 111 124 126 139 141
+
+
+
+                                                                                 0   2   15 17 30 32 100 102 115 117 130 132
+                                                                                 4   6   19 21 34 36 104 106 119 121 134 136
+
+A((1, _), ((_, 0), _))           {4} ◦ (2, (2, 2)) : (1, (2, 100))               8   10 23 25 38 40 108 110 123 125 138 140
+                                                                                 1   3   16 18 31 33 101 103 116 118 131 133
+                                                                                 5   7   20 22 35 37 105 107 120 122 135 137
+                                                                                 9   11 24 26 39 41 109 111 124 126 139 141
+
+
+
+
+        Figure 5: A 6×12 tensor sliced along logical subboundaries to extract subtensors.
+
+
+
+
+                                                            17
+           which separates the distinct parameters TILE_SIZE and thr_id, is easier for a compiler to reason about
+           and propagate static information for (e.g. thr_data has size TILE_SIZE), and is equally as flexible. See
+           Section 3.3.4 for details and examples on generic partitioning and Section 3.5.2 for details and examples on
+           logical divide.
+         • Ranged slicing can express slices that are impossible to represent with a C U T E layout. For instance, with A
+           as in Figure 5, the slice A(0,0:2:12) could result in {0} ◦ (3, 2) : (15, 100) while the slice A(0:2:6,0)
+           cannot be represented due to the incompatibility of the requested slice with the layout of A. This is principally
+           due to an incompatibility of the requested tile and the layout of the tensor and, therefore, we prefer this error
+           to be detected and exposed at the permute-and-reshape stage (composition) rather than the slicing stage.
+           See Section 3.3.2 for details and examples on admissibility conditions for layout group composition.
+
+
+2.6     Applications
+
+C U T E provides a compact representation for a set of layouts that is strictly larger than can be represented with tradi-
+tional flat shapes and strides. In contrast, libraries like CUTLASS v2 [24] and Thunderkittens [11] implement each
+layout individually and manually. This approach is labor-intensive, error-prone, and requires significant development
+time. To illustrate the complexity, the CUTLASS v2 code base contains nearly 300 separately implemented layouts
+spread across 87 files, collectively amounting to approximately 55,000 lines of code. Furthermore, many algorithms
+in CUTLASS v2 are designed to operate with only a limited subset of these layouts, exacerbating maintenance and
+scalability challenges. By comparison, C U T E’s core layout representation, along with the associated algebra for ma-
+nipulating layouts, requires only 3,000 lines of code and is capable of representing all 300 layouts found in CUTLASS
+v2 and more. Algorithms implemented in C U T E can enforce constraints on the rank or shape of their input, but remain
+compatible with any layout that satisfies these preconditions. This decoupling of algorithm logic from specific data or
+thread layouts results in more flexible and composable code.
+The benefits above were recognized and C U T E now forms the basis of CUTLASS v3, CUTLASS v4, and CuTe DSL,
+which are all built on top of C U T E’s core layout representation and algebra. The complex data layouts and partitioning
+patterns required by modern tensor instructions are represented and manipulated with C U T E’s single, consistent, and
+composable representation that has been robust across multiple generations of NVIDIA’s instruction set architecture.
+In this section, we detail the use of only the layout and tensor representation to provide powerful generic implemen-
+tations of two of the most fundamental algorithms: COPY and GEMM. These algorithms are implemented with C U T E
+tensors and are used to illustrate logical implementations being applicable to a wide range of applications. These
+algorithms, though often optimal on their own, serve as excellent generic reference implementations for optimized
+versions. The layout algebra in Section 3 provides methods for inspecting and manipulating layouts to perform these
+optimizations.
+
+
+2.6.1    COPY
+
+A generic COPY algorithm written with C U T E tensors is
+
+// @pre size ( src ) == size ( dst )                                       # @pre size ( src ) == size ( dst )
+t e m p l a t e < c l a s s TS , c l a s s SLayout ,                       def copy ( src : Tensor ,     # N
+                  c l a s s TD , c l a s s DLayout >                                   dst : Tensor ) : # N
+void                                                                         for i in range ( size ( dst ) ) :
+copy ( Tensor < TS , SLayout > c o n s t & src , // N                          dst [ i ] = src [ i ]
+         Tensor < TD , DLayout >              & dst ) // N
+{
+    f o r ( i n t i = 0; i < size ( dst ); ++ i ) {
+        dst ( i ) = src ( i );
+    }
+}
+
+where the precondition specifies that the size of the tensors is equal. Equivalently written in the tensor argument
+comments, both tensors are compatible with a shape N .
+This simple implementation of COPY accommodates a wide range of applications by varying the layouts of the source
+and destination tensors. Table 2 provides examples of common applications and their associated source and destination
+layouts.
+
+
+                                                             18
+                           Application           Source Layout          Destination Layout
+                            1D Arrays                   8:1                      8:1
+                            ND Arrays          (8, 2, 3) : (1, 16, 32)  (8, 2, 3) : (1, 16, 32)
+                              Gather          (2, 3, 2) : (42, 1, 128)          12 : 1
+                              Scatter                  12 : 1          (2, 3, 2) : (42, 1, 128)
+                            Broadcast                   7:0                      7:1
+                             Constant                   7:0                      7:0
+                            Transpose              (8, 3) : (1, 8)          (8, 3) : (3, 1)
+                        Tensor Transpose (8, (3, 5)) : (1, (57, 8))        (8, 15) : (1, 8)
+                     Table 2: Applications of COPY with example source and destination layouts.
+
+
+
+
+Any tensor of any rank can be copied to any tensor of any other rank. In that sense, COPY is a rank-1 algorithm
+regardless of the arguments’ ranks. This is a version of rank-agnostic programming.
+When the idx2crd function for the source and destination tensors is computationally inexpensive to evaluate (e.g.,
+when the tensor shapes are statically known), the above implementation never actually generates dynamic coordinate
+transformations. In such cases, the loop can be unrolled, idx2crd can be statically applied to the loop index i, and the
+inner_product computation incurs minimal overhead in computing offsets. This is a version of static analysis and
+optimization since the layout shape and/or strides are often known at compile-time and available to the compiler. If
+idx2crd does incur a runtime cost, the provided implementation still serves as a robust reference to validate optimized
+versions that may further inspect domains and transform layouts using operations detailed in Section 3.
+
+
+2.6.2   GEMM
+
+A generic GEMM algorithm written with C U T E tensors is
+
+// @pre M : size <0 >( A ) == size <0 >( C )                        # @pre M : size [ 0 ]( A ) == size [ 0 ]( C )
+// @pre N : size <0 >( B ) == size <1 >( C )                        # @pre N : size [ 0 ]( B ) == size [ 1 ]( C )
+// @pre K : size <1 >( A ) == size <1 >( B )                        # @pre K : size [ 1 ]( A ) == size [ 1 ]( B )
+t e m p l a t e < c l a s s TA , c l a s s ALayout ,                def gemm ( A : Tensor ,          # (M , K )
+                   c l a s s TB , c l a s s BLayout ,                          B : Tensor ,          # (N , K )
+                   c l a s s TC , c l a s s CLayout >                          C : Tensor ) : # (M , N )
+void                                                                  for k in range ( size [ 1 ] ( B ) ) :
+gemm ( Tensor < TA , ALayout > c o n s t & A , // (M , K )              for n in range ( size [ 0 ] ( B ) ) :
+          Tensor < TB , BLayout > c o n s t & B , // (N , K )             for m in range ( size [ 0 ] ( A ) ) :
+          Tensor < TC , CLayout >              & C ) // (M , N )             C [m , n ] + = A [m , k ] * B [n , k ]
+{
+    f o r ( i n t k = 0; k < size <1 >( B ); ++ k ) {
+        f o r ( i n t n = 0; n < size <0 >( B ); ++ n ) {
+            f o r ( i n t m = 0; m < size <0 >( A ); ++ m ) {
+                C (m , n ) += A (m , k ) * B (n , k );
+    } } }
+}
+
+where the precondition specifies the logical constraints of the GEMM algorithm. In the comments of each tensor param-
+eter, we write the shape that each tensor must be compatible with.
+This simple implementation of GEMM (and a batched-GEMM extension) can encompass a variety of applications by
+varying the layouts of the tensors. In Table 3, some common applications and example layouts are shown. These
+include all of the N-T variants of the BLAS GEMM and the generically strided (dm*, dn*, dk*) variants of the BLIS
+GEMM. This also functions as a fully generic tensor-tensor contraction (GETT) where the tensors are folded into the
+appropriate matrix shape by grouping logical row modes, column modes, reduction modes, and batched modes [9].
+Creating a layout (as a functional composition of C U T E layouts) that implements the im2col transformation [28] also
+allows GEMM to implement CONV, which is core to many modern machine learning applications.
+By abstracting the fused-multiply-add operation and providing sufficiently powerful tiling utilities, this algorithm can
+be adapted and applied recursively at each level of an architectural hierarchy.
+
+
+                                                           19
+      Application             A-Layout                             B-Layout                           C-Layout
+       NT GEMM             (M, K) : (1, lda)                   (N, K) : (1, ldb)                  (M, N ) : (1, ldc)
+       TN GEMM             (M, K) : (lda, 1)                   (N, K) : (ldb, 1)                  (M, N ) : (1, ldc)
+      NTT GEMM             (N, K) : (1, ldb)                   (M, K) : (1, lda)                  (N, M ) : (1, ldc)
+      BLIS GEMM          (M, K) : (dma, dka)                 (N, K) : (dnb, dkb)                 (M, N ) : (dmc, dnc)
+         GETT        ((M1 , M2 ), K) : ((1, W ), X)             (N, K) : (K, 1)               ((M1 , M2 ), N ) : ((1, Y ), Z)
+         GETT        (M, (K1 , K2 )) : (1, (W, X))        (N, (K1 , K2 )) : (Y, (1, Z))             (M, N ) : (1, M )
+        CONV            (K, (C, T, R, S)) : DA         ((N, Z, P, Q), (C, T, R, S)) : DB        (K, (N, Z, P, Q)) : DC
+                                  Table 3: Applications of GEMM with example layouts.
+
+
+
+3     Layout Algebra
+While C U T E layouts are only a subset of the space of all possible functions, they are capable of representing a strictly
+larger set of layout functions than the traditional flat-shape and flat-stride representations found in libraries like BLAS,
+torch.tensor, and numpy.ndarray.
+Beyond their representational power, a key utility of C U T E layouts lies in their ability to be manipulated and combined
+to create new layouts. This is achieved through a core set of algebraic operations defined over layouts, which can be
+further used to construct higher-level operations.
+In this section, we define layout homomorphisms – operations that take C U T E layout(s) and produce a C U T E layout
+that satisfies some functional properties.
+
+3.1   Concatenate
+
+A layout can be expressed as the concatenation of its sublayouts,
+                                       L=S:D
+                                        = (S0 , S1 , . . . , Sn ) : (D0 , D1 , . . . , Dn )
+                                        = (S0 : D0 , S1 : D1 , . . . , Sn : Dn )
+                                        = (L0 , L1 , . . . , Ln )
+such that
+                      ∀c = (c0 , c1 , . . . , cn ) ∈ Z(L), L(c) = L0 (c0 ) + L1 (c1 ) + · · · + Ln (cn ).                       (11)
+For concatenation admissibility, the functional property (11) implies that the codomain of all sublayouts must be
+contained in the same integer-semimodule. For instance, any two layouts with integer strides may be concatenated,
+but the layouts 4 : 2 and 3 : e0 cannot be concatenated.
+Noting that every sublayout of a layout is also a layout, it is useful to observe that any algebraic operation that
+manipulates a layout can also be applied to any individual sublayout. We often call these “by-mode operations," and
+every operation that is defined in this section (coalesce, composition, complement, logical divide, etc) can also be
+applied by-mode. This approach is expressed with the combinator
+                                A ⋆ ⟨B, C⟩ = (A0 , A1 ) ⋆ ⟨B, C⟩ = (A0 ⋆ B, A1 ⋆ C),                                            (12)
+where the ⋆ is some operation on two layouts and the ⟨⟩ notation represents a tuple of layouts, distinguishing it from a
+concatenation of layouts.
+
+3.2   Coalesce
+
+Given a layout A, a coalesced layout R is a layout that satisfies:
+                       Consistent integral domain:                                          |R| = |A| ,                         (13)
+                       Flattened or integral shape:                                   depth(R) ≤ 1,                             (14)
+                     Consistent integral evaluation:                           ∀c ∈ Z|A| , R(c) = A(c).                         (15)
+
+The coalesce operation “simplifies" the layout A by treating it as a function over integers and potentially collapsing
+its shape to a shallower representation. While this process may remove rank and hierarchical information, modify
+
+
+                                                               20
+coordinate sets, and merge multiple modes of A, it guarantees that the layout remains functionally equivalent as a
+mapping over its integral coordinates.
+In practice, when referencing a coalesced layout, we typically mean the coalesced layout that achieves minimal rank.
+As an example, the coalesced layout of (2, (1, 6)) : (1, (6, 2)) is 12 : 1. Alternatively, this layout can be coalesced
+by-mode with Eq. (12), where we apply coalesce to each mode independently:
+           coalesce((2, (1, 6)) : (1, (6, 2)), ⟨∗, ∗⟩) = coalesce((2 : 1, (1, 6) : (6, 2)), ⟨∗, ∗⟩)
+                                                       = (coalesce(2 : 1, ∗), coalesce((1, 6) : (6, 2), ∗))
+                                                       = (coalesce(2 : 1), coalesce((1, 6) : (6, 2)))
+                                                       = (2 : 1, 6 : 2)
+                                                       = (2, 6) : (1, 2).
+Similarly, the rank-2 layout ((4, 3), 5) : ((15, 1), 3) coalesces to (4, 15) : (15, 1) and the by-mode coalesced layout is
+((4, 3), 5) : ((15, 1), 3) because the row and column layouts remain unchanged when individually coalesced. The rank-
+2 layout (4, (3, 5)) : (15, (1, 3)) also coalesces to (4, 15) : (15, 1) and the by-mode coalesced layout is (4, 15) : (15, 1)
+because the second mode can be coalesced individually to 15 : 1.
+
+3.3     Composition
+
+Given layouts A and B, the group composition layout R = A ◦ B satisfies:
+                       Domain compatibility:                                             B ⪯ R,                         (16)
+                      Functional composition:                               ∀c ∈ Z(B), R(c) = A(B(c)).                  (17)
+
+In this formulation, B determines the shape and coordinate sets of the resulting layout by defining the domain of
+R, while A determines the codomain of R. The compatibility condition ensures that all coordinates of B can also
+be used as coordinates of R. For admissibility of both group and functional composition, the codomain of B must
+be compatible with the domain of A, which typically means that the codomain of B is a set of coordinates that are
+congruent to one of the coordinate sets in Z(A).
+
+3.3.1    Composition Properties
+Identity Layouts.     For any shape S, an identity layout IS satisfies
+                                                     ∀c ∈ ZS , IS (c) = c.
+Note that IS may actually take on any shape P so long as S ⪯ P . For example, the following are all identity layouts
+I24 and satisfy L(i) = i for all i ∈ Z24 :
+                                    24 : 1,    (4, 6) : (1, 4),        (3, (4, 2)) : (1, (3, 12)).
+Similarly, the following are both identity layouts I(4,6) and satisfy L(i, j) = (i, j) for all (i, j) ∈ Z(4,6) :
+                                      (4, 6) : (e0 , e1 ),     (4, (3, 2)) : (e0 , (e1 , 3e1 )).
+For a layout B with codomain ZD , any ID serves as a group composition left identity,
+                                                             ID ◦ B = B.
+For a layout A with domain ZS , the layout IS with shape S serves as a group composition right identity,
+                                                             A ◦ IS = A.
+
+Associative Property.     Given layouts A, B, and C, and the condition
+                                     image(C) ⊆ Z(B)             and      image(B) ⊆ Z(A),                              (18)
+then
+                                               A ◦ (B ◦ C) = (A ◦ B) ◦ C.
+Note that composition is still often possible when Eq. (18) is not satisfied, but associativity may be lost. For instance,
+              (5, 3) : (1, 7) ◦ [4 : 1 ◦ 2 : 5]                    = (5, 3) : (1, 7) ◦ 2 : 5           =2:7
+              [(5, 3) : (1, 7) ◦ 4 : 1] ◦ 2 : 5                             =4:1 ◦ 2:5                 =2:5
+yield different results because the range of 2 : 5 is not contained in the domain of 4 : 1. However, both expressions do
+evaluate properly given the out-of-bounds behavior of idx2crd and inner_product.
+
+
+                                                                  21
+3.3.2   Evaluation and Restrictions
+The evaluation of group composition can be constructively derived from the layout evaluation operations in Eq. (4)
+and Eq. (6). In this section, we determine a set of admissibility conditions on layouts A and B that are required to
+successfully compute group composition.
+First, we require functional compatibility between A and B: the codomain of B must be weakly congruent with the
+shape of A. Most commonly, B’s codomain is the integers and because all layouts A accept integral coordinates
+the layouts are functionally compatible. More generally, when B produces coordinates, those coordinates must be
+congruent to some coordinate in Z(A).
+A general approach would equate the evaluations of (A ◦ B)(i) and R(i). In practice, we have found it sufficient to
+analyze a base case with the simplest possible B = s : d and reduce other evaluations to that case.
+
+Base Case. Let B = s : d with s ∈ Z+ and d ∈ N. Let A = S : D = (S0 , S1 , . . . , SR ) : (D0 , D1 , . . . , DR ) be a
+layout with Sr ∈ Z+ and Dr ∈ D. Define the exclusive prefix-product of S = (S0 , S1 , . . . , SR ) as
+                                                                  r−1
+                                                                  Y
+                                                           Sr =         Sk .
+                                                                  k=0
+
+Then, the composition R = A ◦ B for each i = 0, 1, . . . , s − 1 is evaluated as follows:
+              R(i) = (A ◦ B)(i) = (D ◦ S ◦ d ◦ s)(i)
+                                = D(S(d(s(i))))
+                                = inner_product(idx2crdS (inner_product(idx2crds (i), d)), D)
+                                = inner_product(idx2crdS (inner_product(i, d)), D)
+                                = inner_product(idx2crdS (i · d), D)
+                                  R−1
+                                  X  i · d                      
+                                                                i·d
+                                =               mod Sr · Dr +           · DR                                                   (19)
+                                  r=0
+                                          Sr                    SR
+                                  R−1
+                                        $ %            !     $      %
+                                  X        i         ′    ′      i         ′
+                                =           ′  mod Sr · Dr +      ′   · DR   .
+                                  r=0     S r                  S  R
+
+The result R, if it exists, is defined as the layout R = S ′ : D′ = (S0′ , S1′ , . . . , SR
+                                                                                          ′
+                                                                                            ) : (D0′ , D1′ , . . . , DR
+                                                                                                                      ′
+                                                                                                                        ). We aim to
+            ′    ′
+determine S , D , and the conditions under which they exist.
+First, because the codomain of B is the integers, we can assume that the layout A has been coalesced. By definition,
+this cannot change the evaluation of the composition.
+                                                       
+Next, observe that if (s − 1) · d < S r , then i · d/S q = 0 for all i < s and q > r. That is, all of the modes q > r of A
+have no contribution to the result. Without loss of generality, we proceed under the assumption that (s − 1) · d ≥ S R ,
+which can always be achieved through truncation or extension of the shape of A. This assumption does not alter
+Eq. (19) but simplifies the analysis by removing redundant cases.
+We impose the stride divisibility condition
+                                           S r | d or d | S r for each r = 0, . . . , R,                                       (20)
+and define
+                                                                             
+                                                                               
+                                                      d                     Sr
+                                                 δr =      ,           ρr =      .
+                                                      Sr                    d
+Then,
+           R−1
+           X                                     R−1
+                                                       X  δr                     
+                    i·d                   i·d                                      δR
+                          mod Sr · Dr +         · DR =     i·    mod Sr · Dr + i ·      · DR .
+           r=0
+                    Sr                    SR           r=0
+                                                              ρr                   ρR
+Using the identity (ab) mod (nb) = (a mod n) · b, and noting that δr | Sr , we have:
+                            R−1
+                             X  1                                       
+                                                Sr                        1
+                          =        i·    mod          · (Dr · δr ) + i ·       · (DR · δR ).
+                             r=0
+                                      ρr        δr                       ρR
+
+
+                                                                  22
+Once we verify that
+                 & Qr−1 '   & Qr−1 '          r−1
+                                                      &          ' r−1  
+                 Sr   k=0 Sk   S0  k=1 Sk                  Sk
+                                                  Y                 Y Sk      ′
+         ρr =       =        =            = ··· =               =        = Sr,
+                 d     d       d  ⌈d/S0 ⌉                 d/S k         δk
+                                                                          k=0                  k=0
+the resulting shape and strides can be identified as
+                                                             Sr
+                                                       Sr′ =    ,
+                                                             δr
+                                                       Dr′ = Dr · δr .
+                                                                                   ′
+To satisfy the compatibility condition (16), the shape must also satisfy |S ′ | = S R+1 = s. To accomplish this, we also
+impose the shape divisibility condition:
+                                            
+                                             Sr
+                                                   | s for each r = 0, . . . , R,                                   (21)
+                                              d
+and modify the shape to
+                                                        Sr            s
+                                                 Sr′ =     , SR ′
+                                                                  =       ,
+                                                        δr           ρR
+                                                Dr′ = Dr · δr ,
+where the term s/ρR is imposed to truncate or extend the resulting shape to size s.
+Thus, we have computed the shape and strides of the result, R = S ′ : D′ , provided that the stride divisibility
+condition (20) and shape divisibility condition (21) are satisfied by A and B.
+
+Reductive Case: Distributive. To express more general compositions in terms of the base case, we use a distributive
+property of the composition operation over concatenation of sublayouts of B,
+                                A ◦ B = A ◦ (B0 , B1 , . . .) = (A ◦ B0 , A ◦ B1 , . . .).                     (22)
+This is satisfied when the shape S of A distributes over the sum of the sublayouts of B,
+      (A ◦ B)(c) = D(S(B(c)))
+                   = D(S(B0 (c0 ) + B1 (c1 ) + · · · ))           concatenation of B = (B0 , B1 , . . .)
+                   ?
+                   = D(S(B0 (c0 )) + S(B1 (c1 )) + · · · )          conditioned on distributivity of S over Bi     (23)
+                   = D(S(B0 (c0 ))) + D(S(B1 (c1 ))) + · · ·        linearity of D
+                   = (A ◦ B0 , A ◦ B1 , . . .)(c)
+Either of the following two conditions are sufficient to satisfy Eq (23):
+       • The codomain of B is congruent to the shape S. In this case, the application of S is the identity transform,
+         which distributes.
+       • When S is not the identity transform, then it must be the case that
+                      P                           X  ci · d i 
+                           i ci · di
+                                       mod Sr =                    mod Sr for each r = 0, . . . , R − 1, and
+                            Sr                      i
+                                                          Sr
+                                 P               X            
+                                      i ci · d i        ci · d i
+                                                  =
+                                       SR           i
+                                                         SR
+         which occurs when
+          1. All base sublayouts strides, di , satisfy the stride divisibility condition (20), and
+          2. All base sublayouts si : di have mutually segregated images,
+                                                 ∀i, j, si · di ≤ dj or sj · dj ≤ di
+
+Reductive Case: Coordinate. When B produces coordinates, those coordinates must be congruent to some co-
+ordinate in Z(A) and the strides of B must each be a scaled basis element of a coordinate integer-semimodule:
+                ′
+d = a · ei ∈ ZS with S ′ ⪯ A. When these conditions are met, then we observe
+                                 A ◦ B = A ◦ (a · ei ) ◦ s = Ai ◦ a ◦ s = Ai ◦ B′ ,
+which returns to the base case where B′ = s : a is a rank-1, depth-0 layout with an integral codomain. For B’s with
+other integer-semimodule strides, special care must be taken to map B’s codomain to the domain of A, and additional
+restrictions on A and B may be required.
+
+
+                                                               23
+3.3.3   Intuition and Divisibility
+Compositions with rank-1 left-hand layouts A are trivial because SR does not appear in Eq. (19):
+                                        (S0 ) : (D0 ) ◦ s : d = s : D0 · d.
+In this case, there are no non-trivial divisibility checks because R = 0, S 0 = 1, δ0 = d, and ρ0 = 1. Note that this
+means group composition is still possible even when image(B) ̸⊆ Z(A),
+                                                  7 : 11 ◦ 3 : 4 = 3 : 44,
+and B does not need to be mutually disjoint in order to be distributive,
+                                        7 : 11 ◦ (3, 5) : (6, 3) = (3, 5) : (66, 33).
+For compositions with layouts A of greater rank, the intuitive strategy involves two steps:
+        • Determine an intermediate layout that produces every dth element of A by “dividing out” the first d elements
+          from A.
+        • Fix the size of the intermediate strided layout to s by “keeping” the first s elements.
+For example,
+                                              (4, 6, 8, 10) : (2, 3, 5, 7) ◦ 6 : 12
+is equivalent to
+                         (4, 6, 8, 10) : (2, 3, 5, 7) ◦ 6 : 12 = (1, 2, 8, 10) : (X, 9, 5, 7) ◦ 6 : 1,
+where the first 12 elements of A are “divided out,” and the strides are scaled accordingly. Then, the first 6 elements of
+the modified layout are “kept,” resulting in:
+                                     (1, 2, 8, 10) : (X, 9, 5, 7) ◦ 6 : 1 = (2, 3) : (9, 5).
+Alternatively, we can “keep” the first 6 · 12 elements and then “divide out” the first 12, as follows:
+                   (4, 6, 8, 10) : (2, 3, 5, 7) ◦ 6 : 12 = (4, 6, 3) : (2, 3, 5) ◦ 6 : 12 = (2, 3) : (9, 5).
+The divisibility conditions ensure that the progressive divisions in the “divide out” and “keep” steps always yield
+integers for the resulting shape.
+
+Violations of Divisibility Conditions.       Certain compositions violate the stride or shape divisibility conditions. For
+example,
+                                                  (4, 6, 8) : (2, 3, 5) ◦ 6 : 3
+violates the stride divisibility condition (20) because S 1 = 4 and d = 3 are not divisible. There is no layout that can
+represent every third element of the layout (4, 6, 8) : (2, 3, 5).
+Similarly, the composition
+                                                (4, 6, 8) : (2, 3, 5) ◦ 6 : 1
+                                                        l m  
+violates the shape divisibility condition (21), since: Sd1 = 41 = 4 does not divide s = 6. There is no layout that
+can represent the first 6 elements of (4, 6, 8) : (2, 3, 5).
+Ultimately, this means C U T E layouts are not strictly closed under group composition. However, in practice, violations
+of divisibility conditions are often due to conceptual application errors, layout/hardware incompatibilities, programmer
+error, and other such issues. These errors can very often be caught at compile time and thereby contribute to program
+safety and development velocity.
+
+Apparent Violations.       Consider the composition
+                                            (4, 2, 8) : (3, 12, 97) ◦ 3 : 3,
+which seemingly violates the stride divisibility condition because S 1 = 4 and d = 3 are not divisible. This issue can
+be resolved by coalescing A (as described in Sec. 3.3.2) and truncating A (as addressed in the (s − 1) · d < S r case).
+The equivalent composition produces the result
+                 (4, 2, 8) : (3, 12, 97) ◦ 3 : 3 = (8, 8) : (3, 97) ◦ 3 : 3 = (8) : (3) ◦ 3 : 3 = 3 : 9.
+However, the following compositions fail divisibility conditions:
+                    (4, 2, 8) : (3, 12, 97) ◦ 4 : 3                    (4, 2, 8) : (3, 15, 97) ◦ 3 : 3.
+The example on the left cannot be sufficiently truncated, while the example on the right cannot be coalesced.
+
+
+                                                               24
+3.3.4   Application: Partitioning Example
+Composition lies at the heart of the C U T E layout algebra, enabling operations such as reshaping, restriding, per-
+muting, partitioning, tiling, and extracting sublayouts. This section demonstrates the application of composition for
+partitioning a data tensor using an arbitrary thread-value pattern.
+
+                                             0     1     2     3     4     5       6     7
+                                             T0    T0    T1    T1    T2    T2      T3    T3
+                                         0   V0    V1    V0    V1    V0    V1      V0    V1
+                                             T4    T4    T5    T5    T6    T6      T7    T7
+                                         1   V0    V1    V0    V1    V0    V1      V0    V1
+                                             T8    T8    T9    T9    T10   T10     T11   T11
+                                         2   V0    V1    V0    V1    V0    V1      V0    V1
+                                             T12   T12   T13   T13   T14   T14     T15   T15
+                                         3   V0    V1    V0    V1    V0    V1      V0    V1
+                                             T16   T16   T17   T17   T18   T18     T19   T19
+                                         4   V0    V1    V0    V1    V0    V1      V0    V1
+                                             T20   T20   T21   T21   T22   T22     T23   T23
+                                         5   V0    V1    V0    V1    V0    V1      V0    V1
+                                             T24   T24   T25   T25   T26   T26     T27   T27
+                                         6   V0    V1    V0    V1    V0    V1      V0    V1
+                                             T28   T28   T29   T29   T30   T30     T31   T31
+                                         7   V0    V1    V0    V1    V0    V1      V0    V1
+
+
+        Figure 6: The thread-value partitioning of an 8×8 C-matrix required by the Ampere FP64 Tensor Core.
+
+Consider a layout of data that refines shape (8, 8). We aim to partition this data using the thread-value pattern shown
+in Figure 6, which is the logical partitioning pattern of a specific Ampere Tensor Core. The thread-value partitioning
+pattern for this instruction can be represented by the layout
+                                    ThrValLayoutC:             ((4, 8), 2) : ((16, 1), 8),
+which acts as a map from (thread_idx, value_idx) to the 1D coordinate within the 8×8 matrix. As illustrated,
+Figure 6 actually plots the inverse for human interpretability as it displays the mapping from 2D coordinates within
+the 8×8 matrix to the (thread_idx, value_idx) pair. This ThrValLayoutC is considered static metadata of the
+Ampere Tensor Core instruction – it is intrinsic to the instruction and hardware’s function and, prior to C U T E, was
+only described in the instruction set architecture (ISA) with images similar to Figure 6.
+Any 8×8 data layout can be permuted by composing it with the thread-value ThrValLayoutC. Each composition
+produces a layout compatible with shape (32, 2) and defines the mapping between (thread_idx, value_idx) and
+data offsets. For example, Table 4 shows examples of data layouts being transformed via composition by the above
+ThrValLayoutC.
+
+    Data Name           Data Layout 8×8 (A)            TV Layout 32×2 (B)               Result 32×2 (R)
+    ColMajor                (8, 8) : (1, 8)           ((4, 8), 2) : ((16, 1), 8)     ((4, 8), 2) : ((16, 1), 8)
+    RowMajor                (8, 8) : (8, 1)           ((4, 8), 2) : ((16, 1), 8)      ((4, 8), 2) : ((2, 8), 1)
+     Padded                 (8, 8) : (1, 9)           ((4, 8), 2) : ((16, 1), 8)     ((4, 8), 2) : ((18, 1), 9)
+ ColInterleaved ((4, 2), (2, 4)) : ((2, 16), (1, 8)) ((4, 8), 2) : ((16, 1), 8) ((4, (4, 2)), 2) : ((8, (2, 16)), 1)
+    Swizzled               (8, 8) : (f1 , f9 )        ((4, 8), 2) : ((16, 1), 8)   ((4, 8), 2) : ((f18 , f1 ), f9 )
+   Coordinate              (8, 8) : (e0 , e1 )        ((4, 8), 2) : ((16, 1), 8)   ((4, 8), 2) : ((2e1 , e0 ), e1 )
+            Table 4: Examples of data layouts being transformed via composition by a TV Layout.
+
+
+The following code demonstrates a common pattern that uses thread-value partitioning:
+smem_data = Tensor ( MyAccessor , MyLayout8x8 )                                #   Tensor :          Coord -> Offset
+tv_layout      = Layout ((( 4 , 8 ) ,2 ) , (( 16 , 1 ) ,8 ) )                  #   TV Layout : ( Thr , Val ) -> Coord
+smem_tv        = composition ( smem_data , tv_layout )                         #   Compose :   ( Thr , Val ) -> Offset
+smem_v         = smem_tv [ thr_id , None ]                                     #   Slice by thread to get subtensor
+copy ( smem_v , rmem_data )                                                    #   Copy to register tensor / array
+
+This pattern occurs extremely often in SIMD programming, where each processing element receives a symmetric
+partition of some parent data. In general, C U T E recognizes that arbitrary partitioning can be defined as composition
+(permutation and/or reshaping) followed by slicing. As mentioned in Section 2.5.1, this compose-and-slice pattern
+
+
+                                                               25
+separates out the partitioning pattern (the ThrValLayoutC) from the realized slice of data (the slice with thr_id).
+Since the partitioning pattern is very often compile-time metadata related to instructions or optimization parameters
+and the slice is very often a runtime program identifier index, this pattern is much more capable of propagating static
+information and reducing runtime overhead.
+
+3.3.5    By-mode Composition and Tilers
+Group composition can be applied by-mode, enabling operations on subdomains of layouts. For instance, it is often
+desirable to apply composition on the rows of a matrix and the columns of a matrix independently. We use the
+combinator in Eq (12) with the ⋆ operator identified as group composition ◦ to apply individual compositions to
+independent sublayouts of a layout.
+We call the tuples of layouts in Eq (12) a Tiler.
+Definition 3.1. A Tiler is an HTuple(Tile), where each Tile is
+         • a Layout S : D, or
+         • a Integer S, treated equivalently to the layout S : 1.
+This definition means that all layouts are tilers, all integers are tilers, and it provides for shapes like (4, 8) to be used
+as tilers. This common case is exemplified in Figure 7a, where a shape serves as a convenient tiler for extracting and
+working with sublayouts.
+
+
+
+
+      (a) ⟨4 : 1, 8 : 1⟩ ≡ ⟨4, 8⟩   (b) ⟨(2, 2) : (1, 4), 8 : 1⟩        (c) ⟨(2, 2) : (1, 4), 8 : 2⟩   (d) ⟨4 : 2, 8 : 2⟩
+         Figure 7: Examples of tilers T that extract a 4×8 sublayout from an arbitrary 8×16 layout L via L ◦ T.
+
+Figure 7 illustrates how tilers can be applied via composition to any layout. The figure demonstrates taking an arbi-
+trary layout compatible with shape (8, 16) and applying various tilers to extract elements from the columns and rows
+individually to produce a sublayout compatible with shape (4, 8). For instance, the tiler ⟨4 : 1, 8 : 1⟩ extracts the first
+4 elements from each column and the first 8 elements from each row, producing a sublayout compatible with shape
+(4, 8).
+Additionally, there is an equivalence between composition of tilers and composition of coordinate layouts. For a layout
+L = (M, N ) : (X, Y ) and a tiler T = ⟨T0 , T1 ⟩, we note that
+                                          L ◦ T ≡ L ◦ (M, N ) : (e0 , e1 ) ◦ T
+meaning that (M, N ) : (e0 , e1 ) ◦ T has the same action on L that T does. Here, (M, N ) : (e0 , e1 ) is an identity layout,
+mapping it’s 2D natural coordinates to 2D coordinates. This formulation of tilers cements the notion that shapes can be
+considered maps from coordinates to natural coordinates as used in the definition of Layout in Section 2.4. Specifically,
+all of the following objects should be considered equivalent when used in composition:
+                                     (4, 8) ≡ ⟨4, 8⟩ ≡ (4 : 1, 8 : 1) ≡ (4, 8) : (e0 , e1 )
+
+3.4     Inverse
+
+Layouts may be injective, surjective, or bijective and admit right-, left-, full-, and quasi-inverses. When layouts are
+interpreted as functions from coordinates to offsets, inverse layouts may be interpreted as functions from offsets to
+coordinates. Layout inverses are very useful in determining where within a layout certain offsets exist, extracting
+groups of specific offsets, or determining the common sublayout of two individual layouts.
+In this section, we define the generalized left- and right-inverses of a layout and provide application examples for their
+use.
+
+3.4.1    Right-Inverse
+A right-(pseudo)inverse of a layout L : Z|L| → D is an injective layout L‡ : DL‡ → Z|L| that satisfies
+                                            ∀k ∈ DL‡ , L‡ (L(L‡ (k))) = L‡ (k)                                              (24)
+
+
+                                                                   26
+The above general definition is useful in determining properties of L‡ in the case that L has a general integer-
+semimodule codomain D. In the common case D = Z, the canonical right-inverse definition is recovered,
+                                                  ∀k ∈ Z|L‡ | , L(L‡ (k)) = k,
+but with more general codomains like D = Z(∗,∗) , we can conclude from (24) that D ≲ L‡ , the right-inverse’s domain
+coarsens the profile of the codomain of L so it can accept offsets from L.
+If a layout L has a right-inverse layout L‡ , then L‡ ≤ |L|. In practice, when referencing the right-inverse of a layout,
+we typically mean the right-inverse with the maximum size. For instance, the right-inverses of the largest size of the
+layouts in Figure 3 and 4 are shown in Table 5.
+
+                      L                                  L‡                                     Comments
+               (4, 8) : (1, 4)                         32 : 1
+               (4, 8) : (8, 1)                    (8, 4) : (4, 1)
+           (3, 7, 5) : (5, 15, 1)                (5, 21) : (21, 1)             Non-power-of-two sizes/strides are fine.
+               (4, 8) : (1, 5)                         4:1                    Smaller result for non-contiguous images.
+         (4, (4, 2)) : (4, (1, 16))           (4, 4, 2) : (4, 1, 16)          Result domain congruent with codomain Z.
+    ((2, 2), (4, 2)) : ((1, 8), (2, 16))    (2, 4, 2, 2) : (1, 4, 2, 16)
+     ((2, 2), (2, 4)) : ((0, 1), (0, 2))          (2, 4) : (2, 8)                  Stride-0 modes do not contribute.
+     ((2, 2), (2, 4)) : ((0, 2), (0, 4))               1:0                                Trivial right-inverse.
+              (4, 8) : (e0 , e1 )                 (4, 8) : (1, 4)           Result domain congruent with codomain Z(∗,∗) .
+       (4, (4, 2)) : (e1 , (e0 , 6e1 ))           (4, 4) : (4, 1)               Smaller result and domain compatible.
+       (4, (4, 3)) : (f1 , (f5 , f16 ))      (4, 4, 3) : (f1 , f5 , f16 )    Possible to define for integer-module strides.
+                                           Table 5: Examples of layout right-inverses.
+
+
+When the layout L is a bijection on Z|L| , then the right-inverse is also the inverse, L−1 , of the layout L and satisfies
+                                           ∀k ∈ Z|L| , L(L−1 (k)) = k = L−1 (L(k))
+If a layout L has a full-inverse L−1 we call that layout compact.
+
+3.4.2     Application: Vectorization Example
+
+
+   0 4 8 12                  0 2 4 6                                         0 4 1 5                             0 8 1 9
+   1 5 9 13                  1 3 5 7                                         8 12 9 13                           4 12 5 13
+   2 6 10 14                 8 10 12 14                                      2 6 3 7                             2 10 3 11
+   3 7 11 15                 9 11 13 15                                      10 14 11 15                         6 14 7 15
+   (4, 4) : (1, 4)       ((2, 2), 4) : ((1, 8), 2)                  ((2, 2), (2, 2)) : ((8, 2), (4, 1)) ((2, 2), (2, 2)) : ((4, 2), (8, 1))
+       Source                  Destination                                        Source                           Destination
+        (a) A 2-element common subvector.                                        (b) A 4-element common subvector.
+                               Figure 8: Examples of common subvectors between layouts.
+
+Right inverses are extremely useful in inspecting data layouts and determining if and where contiguous elements exist.
+As an immediate example, the right-inverse of the layouts (4, 8) : (1, 4) and (4, 8) : (8, 1) are 32 : 1 and (8, 4) : (4, 1)
+respectively. This means that both layouts, because their right-inverses have size-32, index into 32 contiguous physical
+elements.
+As a more involved example, a common pattern for copy, called a vectorizing-copy in C U T E, attempts to find the
+maximum number of elements that can be copied at once between two tensors. The right-inverse allows C U T E to
+determine the maximum common sublayout between two layouts and, with additional information regarding hardware
+capabilities and physical alignment of pointers and strides, can algebraically determine the number and location of
+elements that can be safely vectorized to perform the copy.
+Two examples of vectorization are shown in Figure 8. In the first image 8a, the coordinates of the source and desti-
+nation layouts match for element offsets k ∈ {0, 1} with coordinates c ∈ {0, 1}. Provided the accessor, data types,
+
+
+                                                                  27
+and alignments allow for it, the copy width could be expanded to accommodate two elements per instruction. In the
+second image 8b, the coordinates of the source and destination layouts match for element offsets k ∈ {0, 1, 2, 3} with
+coordinates c = {0, 2, 8, 10}. The copy width could be expanded to accommodate four elements per instruction.
+In general, for layout A : Z(A) → Zα and B : Z(B) → Zβ with |A| = |B|, we wish to find the largest integer K
+such that the coordinates match
+                                                 ∀ k ∈ ZK , A‡ (k) = B‡ (k)
+and this can be computed efficiently via finding K such that
+           ∀ k ∈ ZK , k = A(B‡ (k)) = (A ◦ B‡ )(k)               or   ∀ k ∈ ZK , k = B(A‡ (k)) = (B ◦ A‡ )(k)
+
+which is simply the size of the identity portion (the stride-1 mode) of A ◦ B‡ = (IK , X) or B ◦ A‡ = (IK , Y).
+Moreover, the integral coordinates of these mutually contiguous elements is given by
+                              A‡ ◦ B ◦ A‡ K = A‡ ◦ IK = A‡ K : ZK → Z|A|
+                                                              
+
+                               B‡ ◦ A ◦ B‡ K = B‡ ◦ IK = B‡ K : ZK → Z|B|
+                                                              
+                                                                                                                          (25)
+
+where ⌊·⌋K is a truncated-at-size-K operation. This layout yields the logical coordinates of the first K physical
+elements in the data and could be used to extract out the common subvectors from each via logical divide or zipped
+divide (Section 3.5.2).
+In practice, consider the reference function COPY in Section 2.6.1. The implementation may internally permute the
+iteration order without altering the observable behavior. Permuting the iteration order is equivalent to applying a
+consistent permutation to the layouts of the source and destination tensors. By selecting the permutation to match the
+layout defined in Eq. (25), all contiguous elements can be permuted to the first mode, enabling special handling by
+vectorized instructions. Furthermore, this procedure can not only detect if and where the elements to be vectorized are
+located, but also the maximum number of elements that can be safely vectorized as well. This provides a framework
+for the AutoVectorization optimization opportunity.
+
+3.4.3   Left-Inverse
+A left-(pseudo)inverse of a layout L : Z|L| → D is a layout L† : DL† → Z|L| that satisfies
+
+                                             ∀k ∈ Z|L| , L(L† (L(k))) = L(k)                                              (26)
+The left inverse may not be unique and may take any values for inputs that are not in the image of L. The above general
+definition is useful in determining properties of L† in the case that L has a general integer-semimodule codomain D.
+In the common case where L is injective, the canonical left-inverse definition is recovered,
+                                                 ∀k ∈ Z|L| , L† (L(k)) = k.
+
+The left-inverses of the layouts in Figure 3 and 4 are shown in Table 6.
+
+                     L                                 L†                                   Comment
+              (4, 8) : (1, 4)                        32 : 1
+              (4, 8) : (8, 1)                   (8, 4) : (4, 1)            Same as right-inverse for contiguous images.
+          (3, 7, 5) : (5, 15, 1)               (5, 21) : (21, 1)             Non-power-of-two sizes/strides are fine.
+              (4, 8) : (1, 5)                   (5, 8) : (1, 4)              Larger result for non-contiguous images.
+        (4, (4, 2)) : (4, (1, 16))          (4, 4, 2) : (4, 1, 16)         Result domain congruent with codomain Z.
+   ((2, 2), (4, 2)) : ((1, 8), (2, 16))   (2, 4, 2, 2) : (1, 4, 2, 16)
+    ((2, 2), (2, 4)) : ((0, 2), (0, 4))      (2, 2, 4) : (0, 2, 8)           Result is not unique – any mode-0 stride.
+    ((2, 2), (2, 4)) : ((0, 1), (0, 2))         (2, 4) : (2, 8)
+             (4, 8) : (e0 , e1 )                (4, 8) : (1, 4)           Result domain congruent with codomain Z(∗,∗) .
+      (4, (4, 2)) : (e1 , (e0 , 6e1 ))    (4, (6, 2)) : (4, (1, 16))          Larger result and domain compatible.
+      (4, (4, 3)) : (f1 , (f5 , f16 ))     (4, 4, 3) : (f1 , f5 , f16 )    Possible to define for integer-module strides.
+                                          Table 6: Examples of layout left-inverses.
+
+
+
+                                                                28
+        (a) tcgen05{.ld,.st}.32x32b.{x1,x2}                                  (b) tcgen05{.ld,.st}.16x256b.x1
+    Figure 9: TMEM load/store instructions access specific offsets and assigns data to thread-local registers [29].
+
+
+3.4.4      Application: Admissibility Example
+Left-inverses are useful for determining the existence and location of specific offsets produced by a data layout.
+Loading and storing data to and from Blackwell “tensor memory” (TMEM) uses instructions that access TMEM at a
+predefined set of very specific offsets, as shown in Figure 9. The physical TMEM addressing is a 2D grid of up to
+512 “cols" and 128 “lanes". The images show the access pattern for one warp of each instruction, but each instruction
+actually uses four warps and the patterns above repeat every 32 lanes four times. In addressing physical TMEM,
+striding across the 32-bit “cols" increments the TMEM address by 1 and striding down the “lanes” increments the
+TMEM address by 16384. With the physical addressing in mind, we define a layout that records all physical offsets
+that each instruction accesses:
+                            Instruction                     (InstrCOL, InstrLANE) → TMEM Offset
+                    tcgen05{.ld,.st}.32x32b.x1                 (1, 128):(1, 16384)
+                    tcgen05{.ld,.st}.32x32b.x2                 (2, 128):(1, 16384)
+                    tcgen05{.ld,.st}.16x256b.x1             (8, (16, 4)):(1, (16384, 32 · 16384))
+These layouts are instruction-specific and can be used to determine exactly which offsets within TMEM each instruc-
+tion will access.
+Despite the 2D addressing and the use of TMEM as the accumulators of MMAs with shape (M, N ), the TMEM
+“lanes" and “cols" do not always correspond to logical matrix rows and columns. Like any addressing, the physical
+offsets can be wrapped and folded into any shape via an arbitrary C U T E layout. Thus, given a data layout and a TMEM
+instruction, we wish to determine
+        1. whether the data layout contains all offsets that the instruction will access, and
+        2. where, in logical coordinates, the offsets accessed by the instruction are located within the data layout.
+In general, for a data layout A : Z(A) → Zα that maps logical coordinates to data offsets, and an instruction layout
+T : Z(T) → Zβ that maps instruction coordinates to data offsets, we wish to determine the existence and location of
+all offsets T(i) in the image of A. This is stated as
+                                         ∀i ∈ Z|T| , ∃c ∈ Z(A) s.t. T(i) = A(c)
+and can be computed efficiently by computing the left-inverse of A and checking
+                                                   A(A† (T(i))) = T(i)
+That is,
+         • All offsets T(i) are in the domain of A† .
+         • All coordinates A† (T(i)) are unique and in the domain of A.
+With these conditions, we can say that each offset T(i) appears in the image of A and is located at the coordinate
+A† (T(i)). The layout A† ◦ T is a layout that maps instruction coordinates to logical data coordinates and can be
+used via zipped_divide, for example, to partition the data layout A into sublayouts that correspond to the offsets
+accessed by the instruction.
+
+
+                                                             29
+3.5     Complement
+
+The complement of a layout L : Z(L) → D is a layout L∗ : Z(L∗ ) → D that satisfies the following conditions
+          Weak congruence with codomain:                                D ≲ L∗ ,                                             (27)
+                                                                                      L∗                  ∗
+                             Disjoint images:             ∀b ∈ Z(L), ∀a ∈ Z /{0}, L(b) ̸= L (a),                   (28)
+                                                                                          ∗           ∗
+                              Ordered image:                          ∀a ∈ Z|L∗ | /{0}, L (a − 1) < L (a).         (29)
+The complement of a layout is a layout that generates elements in the codomain of the original layout but not in the
+image. In composition, a layout L is often used as an indirection into another layout, so the complement L∗ is a layout
+that points to elements omitted by L. The complement operation enables the splitting of a layout via logical divide
+(Section 3.5.2) and enables repetition and extension of a layout via logical product (Section 3.5.1).
+In this section, we are only concerned with layouts that have a codomain D that is an HTuple(Z): the integers or
+coordinates with D = ZD for some profile D. This enables the weak congruence condition Eq. 27. The disjoint
+images condition, Eq. 28, ensures that the complement generates distinct values from the original layout. Note that the
+                                                                                            ∗
+finite domain Z(L) of the original layout is used, while the infinite extended domain ZL of the complement is used.
+This provides that whether the complement shape is truncated or extended (e.g. through composition with a layout on
+the right), it will always generate distinct values. Finally, the ordered image condition, Eq. 29, establishes uniqueness
+of the complement layout.
+Examples of complements in Table 7.
+
+                  L                                    L∗                                       Comment
+           (4, 8) : (1, 4)                           1 : 32                    Note that ∀i ∈ Z , L∗ (i) > maxj∈ZL L(j).
+                                                                                                 +
+
+           (4, 8) : (8, 1)                           1 : 32                           Order of input doesn’t matter.
+     (4, (4, 2)) : (4, (1, 16))                      1 : 32                        Hierarchy of input doesn’t matter.
+           (4, 8) : (1, 5)                           1 : 40
+           (4, 8) : (1, 8)                      (2, 1) : (4, 64)             Still disjoint, but “filling holes" in the codomain.
+ ((2, 2), (2, 4)) : ((0, 1), (0, 2))                  1:8                             Stride-0 modes do not contribute.
+ ((2, 2), (2, 4)) : ((0, 2), (0, 4))            (2, 1) : (1, 16)
+          (4, 8) : (e0 , e1 )                 (1, 1) : (4e0 , 8e1 )          Result domain congruent with codomain Z(∗,∗) .
+   (4, (4, 2)) : (e1 , (e0 , 12e1 ))   (1, (3, 1)) : (4e0 , (4e1 , 24e1 ))     Weak congruence and disjoint and ordered.
+                                         Table 7: Examples of layout complements.
+
+
+3.5.1    Application: Logical Product
+The logical product of two layouts A and B is a layout R where “each element of layout B has been replaced with a
+uniquely shifted version of the layout A.”
+Concretely, we define the logical product as a function of two layouts to produce a rank-2 layout
+                                                 A ⊗ B = (A, A∗ ◦ B)
+where A∗ is the complement of A. Note that the first mode of the result is exactly the input layout A and the second
+mode is compatible with the input layout B in shape and order of elements. The first mode, the A layout, is typically
+referred to as the “tile" which is repeated across the “grid" layout B.
+Consider the example of a row-major layout (3, 4) : (4, 1) tile to be reproduced in a col-major layout (2, 5) : (1, 2)
+grid:
+                                                                     
+                    (3, 4)     (2, 5)       (3, 4) 1           (2, 5)       ((3, 4), (2, 5))
+                            ⊗          =            ,      ◦             =
+                    (4, 1)     (1, 2)       (4, 1) 12          (1, 2)       ((4, 1), (12, 24))
+where the layout 1 : 12 is the complement of (3, 4) : (4, 1). In the first mode of the result, the original tile is available
+and the second mode of the result repeats the original tile uniquely 10 times in a 2 × 5 col-major order.
+As another example, consider layout (4, 8) : (20, 2) tile to be reproduced in a row-major layout (3, 2) : (2, 1) grid:
+                                                                           
+                  (4, 8)      (3, 2)          (4, 8) (2, 1)          (3, 2)        ((4, 8), (3, 2))
+                          ⊗           =               ,           ◦            =
+                 (20, 2)      (2, 1)         (20, 2) (1, 80)         (2, 1)       ((20, 2), (80, 1))
+where the layout (2, 1) : (1, 80) is the complement of (4, 8) : (20, 2). Note that the grid is now interleaving the tiles
+to produce the smallest codomain of the result. The complement layout tells the result how to stride the layout B and
+layout B is telling the result how to order and shape the complement layout.
+
+
+                                                                 30
+Related Products The logical product produces a rank-2 layout, where the first mode is the original tile and the
+second mode is interpreted as the grid, or "tiling", of that tile.
+While the logical product has no restrictions on the rank or compatibility of A and B, the operation blocked_product
+is often a more intuitive version which uses the rank of the inputs to construct the shape of the result. We might expect
+the product of a 3×4 layout with a 2×5 layout to produce a 6×20 layout. The blocked_product requires the rank
+of A and B to be the same,
+                                                              rank(A) = rank(B)
+so that it can apply a zip operation to combine logical row-modes with row-modes and logical col-modes with col-
+modes. For instance, rearranging the modes of the example above
+                                          ((3, 4), (2, 5))      ((3, 2), (4, 5))
+                                                             =⇒
+                                          ((4, 1), (12, 24))    ((4, 12), (1, 24))
+results in a 6×20 layout. Figure 10 plots the resulting layout with each 3×4 tile shaded. This is considered “blocked”
+because each 3×4 block of the resulting layout are precisely shifted versions of our original 3×4 tile.
+
+                           0    1    2    3    4     5    6     7   8    9     10 11 12 13 14 15 16 17 18 19
+                       0   0    1    2    3    24    25   26   27   48   49    50   51   72   73   74    75   96   97   98   99
+
+                       1   4    5    6    7    28    29   30   31   52   53    54   55   76   77   78    79   100 101 102 103
+
+                       2   8    9    10   11   32    33   34   35   56   57    58   59   80   81   82    83   104 105 106 107
+
+                       3   12   13   14   15   36    37   38   39   60   61    62   63   84   85   86    87   108 109 110 111
+
+                       4   16   17   18   19   40    41   42   43   64   65    66   67   88   89   90    91   112 113 114 115
+
+                       5   20   21   22   23   44    45   46   47   68   69    70   71   92   93   94    95   116 117 118 119
+
+
+        Figure 10: The blocked_product of row-major (3, 4) : (4, 1) tile with col-major (2, 5) : (1, 2) tiling.
+
+The operation raked_product is similar to the blocked product except the modes are zipped in reverse:
+                                          ((3, 4), (2, 5))       ((2, 3), (5, 4))
+                                                             =⇒
+                                          ((4, 1), (12, 24))    ((12, 4), (24, 1))
+which results in the 3×4 tile being “raked” over the 2×5 tile rather than “blocked”. Figure 11 plots the resulting layout
+with each 3×4 tile shaded.
+
+                           0    1    2    3    4     5    6     7   8    9     10 11 12 13 14 15 16 17 18 19
+                       0   0    24   48   72   96    1    25   49   73   97    2    26   50   74   98    3    27   51   75   99
+
+                       1   12   36   60   84   108   13   37   61   85   109   14   38   62   86   110   15   39   63   87   111
+
+                       2   4    28   52   76   100   5    29   53   77   101   6    30   54   78   102   7    31   55   79   103
+
+                       3   16   40   64   88   112   17   41   65   89   113   18   42   66   90   114   19   43   67   91   115
+
+                       4   8    32   56   80   104   9    33   57   81   105   10   34   58   82   106   11   35   59   83   107
+
+                       5   20   44   68   92   116   21   45   69   93   117   22   46   70   94   118   23   47   71   95   119
+
+
+         Figure 11: The raked_product of row-major (3, 4) : (4, 1) tile with col-major (2, 5) : (1, 2) tiling.
+
+Many other versions of logical product can be produced that additionally group and rearrange modes to produce a
+convenient result.
+
+3.5.2   Application: Logical Divide
+The logical division of two layouts A and B is a layout R where “layout A is split into two: the elements that are
+pointed to by B and those elements that are not pointed to by B.”.
+Concretely, we define logical division as a function of two layouts to produce a rank-2 layout
+                                               A ⊘ B = A ◦ (B, B∗|A| ) = A ◦ B⋆
+
+
+                                                                         31
+where B∗|A| is the complement of B taken with respect to the size of layout A. Because this operation intends to
+preserve all elements of A and simply split layout A into two, we require that B⋆ = (B, B∗|A| ) is surjective onto
+Z|A| . This often involves an extension of the size of B∗ so that B⋆ ≥ |A|. Furthermore, we require the complement
+B∗ to “complete” the layout B in the sense that B⋆ = (B, B∗|A| ) has a reflexive generalized inverse B+ which
+satisfies:
+                                                          B⋆ B+ B⋆ = B⋆                                                            (30)
+                                                             +   ⋆    +        +
+                                                          B B B =B                                                                 (31)
+
+In analogy with the logical product operation, the first mode of the result layout A ◦ B is typically referred to as the
+“tile" which is repeated across the “grid", or “tiling", layout A ◦ B∗|A| . The B argument is referred to as the “tiler",
+which can be extended beyond simply being a layout as in Section 3.3.5.
+As an immediate example, it is common to ask for some set of logical elements from another layout. For example, to
+extract every third element from a layout we can use composition:
+                                                         24   8   8
+                                                            ◦   =
+                                                          3   3   9
+                                                 (6, 2, 2)    8   (2, 2, 2)
+                                                            ◦   =
+                                                 (2, 1, 20)   3   (6, 1, 20)
+In both cases above, a layout of 24 elements is composed with the layout 8 : 3, which yields a layout of every third
+element. But what about the "rest" of the elements from the left-hand side layout? Logical divide splits the left-hand
+side layout into two pieces: the part that gets “hit" by the right-hand side and the “rest":
+                       24   8                                    24   (8, 3)                                      (8,   3)
+                          ⊘   =                                     ◦        =
+                       3    3                                     3   (3, 1)                                      (9,   3)
+               (6, 2, 2)    8                            (6, 2, 2)    (8, 3)                             ((2, 2, 2),    3)
+                          ⊘   =                                     ◦        =
+               (2, 1, 20)   3                            (2, 1, 20)   (3, 1)                             ((6, 1, 20),   2)
+where 3 : 1 is the complement of 8 : 3 under the size of 24. The first mode of the result again contains every third
+element of the left-hand side layout as requested and the second mode of the result is the number of those “tiles“ that
+are contained in the original layout (3 in this case) and the strides between those tiles. The complement is used to
+determine which elements are missing and in what order to keep them.
+
+Related Divides Similar to composition, it is very common to want to apply logical divide by-mode. The same
+notation and strategy is used
+                                   A ⊘ ⟨B, C⟩ = (A0 , A1 ) ⊘ ⟨B, C⟩ = (A0 ⊘ B, A1 ⊘ C).
+The intuition for this is to be able to perform these operations across columns and rows independently and then
+potentially rearrange those modes to construct new layouts, similar to the layout products. For example, returning to
+the tilers in Section 3.3.5, using the same tilers with logical divide rather than composition yields the 2×2 layout of
+the 4×8 sublayouts that the tilers point to. This is shown in Figure 12 where one could imagine a 2×2 layout which
+maps to each individually shaded tile of data.
+
+
+
+
+     (a) ⟨4, 8⟩ ≡ ⟨4 : 1, 8 : 1⟩      (b) ⟨(2, 2) : (1, 4), 8 : 1⟩        (c) ⟨(2, 2) : (1, 4), 8 : 2⟩        (d) ⟨4 : 2, 8 : 2⟩
+                Figure 12: Examples of tilers that split an 8×16 layout into 4×8 tiles with a 2×2 tiling.
+
+For instance, given a layout (8, 16) : (20, 1), we would like to extract a “tile" where we want 4 consecutive elements
+down each column and every other element across each row. The by-mode logical divide produces:
+                                                                           
+                  (8, 16)         4 8           (8, 16)      (4, 2) (8, 2)           ((4, 2), (8, 2))
+                           ⊘       ,      =             ◦            ,            =
+                 (20, 1)          1 2          (20, 1)       (1, 4) (2, 1)          ((20, 80), (2, 1))
+
+
+                                                                     32
+where the “tile" modes are colored blue and the “rest" modes are colored black. Note that the resulting layout remains
+8×16 and the elements pointed to by the tiler have been permuted to first 4×8block.
+The operation zipped_divide performs by-mode logical divide then zips together like-modes:
+                                                     ((4, 8), (2, 2))
+                                                    ((20, 2), (80, 1))
+which creates a “tile" mode (blue) that is precisely the sublayout pointed to by the tiler and a “rest" mode (black) that
+is the sublayout that iterates over tiles. The operation zipped_divide will always return a rank-2 layout result where
+the first mode is precisely the composition with the tiler and the second is the composition with the complement.
+A very common pattern in software is tiling a data layout into a grid of tiles and then selecting a particular tile for each
+processing element. In the Python reference implementation (PyCuTe) [1], this looks like
+data        =   Tensor ( MyPtr , MyLayoutMxN )            #   Tensor :                   Crd -> Offset
+tiler       =   (4 , 8 )                                  #   Tiler :             TileCoord -> Crd
+data_vt     =   zipped_divide ( data , tiler )            #   Compose : ( TileCrd , GridCrd ) -> Offset
+tile        =   data_vt [ : , blk_id ]                    #   Slice for a 1D block id
+tile        =   data_vt [ : , ( blk_x , blk_y ) ]         #   Slice for a 2D block id , equivalently
+
+As is evident, this pattern is very similar to the thread-value partitioning of Section 3.3.4, but only the tile-mode is
+actually specified and the missing “Grid" mode is computed as the complement of the tiler. This “completed” tiler
+with shape (Tile, Grid) is then composed with the data to produce the grid of tiles, which can be sliced in the second
+mode by a block identifier to extract a particular tile for a processing element.
+Many other versions of logical divide can be produced that additionally group and rearrange modes to produce a
+convenient result.
+
+4   Conclusion
+This paper has presented C U T E, a mathematical framework for representing and manipulating tensor layouts that
+addresses the increasing complexity of modern GPU architectures. Through its hierarchical layout representation,
+C U T E provides a generic approach to writing and managing the intricate data layouts and partitioning patterns required
+by specialized tensor instructions on contemporary hardware. Through its rich algebraic operations, C U T E provides
+a principled approach to manipulating layouts and generating new layouts in the development of high-performance
+linear algebra kernels. Together, the representation and algebra enable support for complex layouts and partitioning,
+separation of concerns, and static analysis and optimization.
+The expressiveness of C U T E’s layout representation has proven instrumental in several key applications. C U T E facil-
+itates representing diverse algorithms such as general tensor-tensor contractions (GETT) and convolutions (CONV) as
+instances of general matrix multiplication (GEMM), promoting code reuse and algorithmic uniformity. For instance,
+C U T E provides for matrices to be indexed using (m, n) coordinates regardless of their concrete data layout and al-
+lows generic algorithms to remain orthogonal to specific layouts, while algorithms or instructions that require specific
+layouts can statically inspect, verify, and reason about their tensor arguments.
+The C U T E layout algebra enables the static analysis and transformation of tensor layouts to implement and validate
+generic algorithms. For instance, it enables the derivation of maximal vectorization opportunities for COPY operations,
+validation of input and output layouts for matrix multiply-accumulate (MMA) and COPY instructions, and derivation of
+optimal shared memory layouts complete with bank conflict-avoiding swizzling patterns. These capabilities transform
+layout management from an error-prone manual process into a systematic, verifiable methodology. To support study,
+experimentation, and verification of the definitions in this paper, a pure-Python reference implementation, PyCuTe [1],
+is publicly available at https://github.com/NVlabs/CuTe.
+The practical impact of C U T E is evidenced by its successful deployment in production systems, most notably as the
+foundation of NVIDIA’s CUTLASS v3 and v4 libraries. Performance evaluations in CUTLASS and applications such
+as FlashAttention demonstrate that C U T E’s abstractions introduce no performance overhead while significantly accel-
+erating software development. The framework’s adoption has validated its dual promise: maintaining the performance
+characteristics of hand-optimized code while substantially reducing development complexity and time.
+Looking forward, C U T E’s mathematical foundations and algebraic approach position it as a sustainable framework
+for adapting to future architectural innovations. By separating layout concerns from algorithmic logic and providing
+powerful compile-time reasoning capabilities, C U T E establishes a methodology for tensor-centric programming that
+can accommodate the demands of a wide range of computing systems and applications.
+
+
+                                                              33
+References
+ [1] NVIDIA. PyCuTe: A pure-Python reference implementation of CuTe. https://github.com/NVlabs/CuTe,
+     2026. Accessed: 2026-07-28.
+ [2] NVIDIA.    Volta Architecture Whitepaper, 2017. URL: https://images.nvidia.com/content/
+     volta-architecture/pdf/volta-architecture-whitepaper.pdf.
+ [3] NVIDIA.      Turing Architecture Whitepaper, 2018.   URL: https://images.nvidia.com/
+     aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/
+     NVIDIA-Turing-Architecture-Whitepaper.pdf.
+ [4] NVIDIA. Ampere Architecture Whitepaper, 2021. URL: https://images.nvidia.com/aem-dam/en-zz/
+     Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf.
+ [5] NVIDIA.     Hopper Architecture Whitepaper, 2023.                URL: https://resources.nvidia.com/
+     en-us-hopper-architecture/nvidia-h100-tensor-c.
+ [6] NVIDIA. Blackwell Architecture Whitepaper, 2025. URL: https://images.nvidia.com/aem-dam/
+     Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf.
+ [7] L Susan Blackford, Antoine Petitet, Roldan Pozo, Karin Remington, R Clint Whaley, James Demmel, Jack
+     Dongarra, Iain Duff, Sven Hammarling, Greg Henry, et al. An updated set of basic linear algebra subprograms
+     (blas). ACM Transactions on Mathematical Software, 28(2):135–151, 2002.
+ [8] Field G. Van Zee and Robert A. van de Geijn. Blis: A framework for rapidly instantiating blas functionality.
+     ACM Trans. Math. Softw., 41(3), June 2015. doi:10.1145/2764454.
+ [9] Yang Shi, U. N. Niranjan, Animashree Anandkumar, and Cris Cecka. Tensor Contractions with Extended BLAS
+     Kernels on CPU and GPU. In 2016 IEEE 23rd International Conference on High Performance Computing
+     (HiPC), pages 193–202, 2016. doi:10.1109/HiPC.2016.031.
+[10] Ehud Aharoni, Allon Adir, Moran Baruch, Nir Drucker, Gilad Ezov, Ariel Farkash, Lev Greenberg, Ramy
+     Masalha, Guy Moshkowich, Dov Murik, Hayim Shaul, and Omri Soceanu. Helayers: A tile tensors
+     framework for large neural networks on encrypted data. Proceedings on Privacy Enhancing Technologies,
+     2023(1):325âĂŞ342, January 2023. doi:10.56553/popets-2023-0020.
+[11] Benjamin F. Spector, Simran Arora, Aaryan Singhal, Daniel Y. Fu, and Christopher RÃl’. Thunderkittens:
+     Simple, fast, and adorable ai kernels, 2024. arXiv:2410.20399.
+[12] Keren Zhou, Mario Lezcano, Adam Goucher, Akhmed Rakhmati, Jeff Niu, Justin Lebar, Pawel Szczerbuk, Peter
+     Bell, Phil Tillet, Thomas Raoux, and Zahi Moudallal. Linear layouts: Robust code generation of efficient tensor
+     computation using F2 , 2025. URL: https://arxiv.org/abs/2505.23819, arXiv:2505.23819.
+[13] Philippe Tillet, Hsiang-Tsung Kung, and David D. Cox. Triton: an intermediate language and compiler for
+     tiled neural network computations. Proceedings of the 3rd ACM SIGPLAN International Workshop on Machine
+     Learning and Programming Languages, 2019.
+[14] A. Edelman, S. Heller, and S. Lennart Johnsson. Index transformation algorithms in a linear algebra framework.
+     IEEE Transactions on Parallel and Distributed Systems, 5(12):1302–1309, 1994. doi:10.1109/71.334903.
+[15] T.H. Cormen. Fast permuting on disk arrays. Journal of Parallel and Distributed Computing, 17(1):41–57, 1993.
+     doi:10.1006/jpdc.1993.1004.
+[16] Mathis Bouverot-Dupuis and Mary Sheeran. Efficient gpu implementation of affine index permutations on ar-
+     rays. In Proceedings of the 11th ACM SIGPLAN International Workshop on Functional High-Performance and
+     Numerical Computing, FHPNC 2023, page 15âĂŞ28, New York, NY, USA, 2023. Association for Computing
+     Machinery. doi:10.1145/3609024.3609411.
+[17] NVIDIA. CUTLASS: CUDA Templates for Linear Algebra Subroutines and Solvers, 2023. URL: https:
+     //github.com/NVIDIA/cutlass/tree/v3.0.0.
+[18] Somashekaracharya G. Bhaskaracharya, Aravind Acharya, Bastian Hagedorn, and Vinod Grover. Modeling
+     layout abstractions using integer set relations, 2025. arXiv:2511.10374.
+[19] Amir Mohammad Tavakkoli, Cosmin Oancea, and Mary Hall. Lego: Layout expression for generating one-to-
+     one mapping, 2025. arXiv:2505.08091.
+[20] Jack Carlisle, Jay Shah, Reuben Stern, and Paul VanKoughnett. Categorical foundations for CuTe layouts, 2026.
+     URL: https://arxiv.org/abs/2601.05972, arXiv:2601.05972.
+
+
+                                                        34
+[21] NVIDIA. CuTe DSL: Python APIs for CUTLASS. https://docs.nvidia.com/cutlass/latest/media/
+     docs/pythonDSL/cute_dsl.html, 2025. Accessed: 2026-03-01.
+[22] Bastian Hagedorn, Bin Fan, Hanfeng Chen, Cris Cecka, Michael Garland, and Vinod Grover. Graphene: An
+     ir for optimized tensor computations on gpus. In Proceedings of the 28th ACM International Conference on
+     Architectural Support for Programming Languages and Operating Systems, Volume 3, ASPLOS 2023, page
+     302âĂŞ313, New York, NY, USA, 2023. Association for Computing Machinery. doi:10.1145/3582016.
+     3582018.
+[23] Muhammad Osama, Duane Merrill, Cris Cecka, Michael Garland, and John D. Owens. Stream-K: Work-
+     Centric Parallel Decomposition for Dense Matrix-Matrix Multiplication on the GPU. In Proceedings of the
+     28th ACM SIGPLAN Annual Symposium on Principles and Practice of Parallel Programming, PPoPP ’23, page
+     429âĂŞ431, New York, NY, USA, 2023. Association for Computing Machinery. doi:10.1145/3572848.
+     3577479.
+[24] Andrew Kerr, Duane Merrill, Julien Demouth, and John Tran. CUTLASS: Fast Linear Algebra in CUDA C++,
+     2017. URL: https://developer.nvidia.com/blog/cutlass-linear-algebra-cuda.
+[25] Tri Dao, Dan Fu, Stefano Ermon, Atri Rudra, and Christopher Ré. FlashAttention: Fast and Memory-Efficient
+     Exact Attention with IO-Awareness. In S. Koyejo, S. Mohamed, A. Agarwal, D. Belgrave, K. Cho, and A. Oh, ed-
+     itors, Advances in Neural Information Processing Systems, volume 35, pages 16344–16359. Curran Associates,
+     Inc., 2022.
+[26] Tri Dao. FlashAttention-2: Faster Attention with Better Parallelism and Work Partitioning, 2023. arXiv:
+     2307.08691.
+[27] Jay Shah, Ganesh Bikshandi, Ying Zhang, Vijay Thakkar, Pradeep Ramani, and Tri Dao. Flashattention-3: Fast
+     and accurate attention with asynchrony and low-precision. In A. Globerson, L. Mackey, D. Belgrave, A. Fan,
+     U. Paquet, J. Tomczak, and C. Zhang, editors, Advances in Neural Information Processing Systems, volume 37,
+     pages 68658–68685. Curran Associates, Inc., 2024. doi:10.52202/079017-2193.
+[28] Sharan Chetlur, Cliff Woolley, Philippe Vandermersch, Jonathan Cohen, John Tran, Bryan Catanzaro, and Evan
+     Shelhamer. cuDNN: Efficient primitives for deep learning, 2014. arXiv:1410.0759.
+[29] NVIDIA Corporation. PTX ISA 9.0 Documentation. Technical report, NVIDIA Corporation, 2025. URL:
+     https://docs.nvidia.com/cuda/parallel-thread-execution/index.html.
+
+
+
+
+                                                       35
+
