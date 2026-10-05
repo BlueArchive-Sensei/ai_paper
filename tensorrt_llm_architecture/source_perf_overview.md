@@ -1,6 +1,6 @@
-(perf-overview)=
-
 # Overview
+
+<a id="perf-overview"></a>
 
 This document summarizes performance measurements of TensorRT-LLM on a number of GPUs across a set of key models.
 
@@ -12,8 +12,7 @@ Not all configurations were tested for all GPUs.
 We attempted to keep commands as simple as possible to ease reproducibility and left many options at their default settings.
 Tuning batch sizes, parallelism configurations, and other options may lead to improved performance depending on your situation.
 
-
-For DeepSeek R1 performance, please check out our [performance guide](../blogs/Best_perf_practice_on_DeepSeek-R1_in_TensorRT-LLM.md)
+For DeepSeek R1 performance, please check out our [performance guide](https://github.com/NVIDIA/TensorRT-LLM/blob/main/docs/source/blogs/Best_perf_practice_on_DeepSeek-R1_in_TensorRT-LLM.md)
 
 For more information on benchmarking with `trtllm-bench` see this NVIDIA [blog post](https://developer.nvidia.com/blog/llm-inference-benchmarking-performance-tuning-with-tensorrt-llm/).
 
@@ -28,9 +27,10 @@ Testing was performed on models with weights quantized using [ModelOpt](https://
 
 RTX 6000 Pro Blackwell Server Edition data is now included in the perf overview. RTX 6000 systems can benefit from enabling pipeline parallelism (PP) in LLM workloads, so we included several new benchmarks for this GPU at various TP x PP combinations. That data is presented in a separate table for each network.
 
-
 ### Hardware
+
 The following GPU variants were used for testing:
+
 - H100 SXM 80GB (DGX H100)
 - H200 SXM 141GB (DGX H200)
 - B200 180GB (DGX B200)
@@ -58,34 +58,35 @@ nvidia/Llama-3.3-70B-Instruct-FP8
 nvidia/Llama-4-Maverick-17B-128E-Instruct-FP8
 ```
 
-# Performance Summary - All Networks
+## Performance Summary - All Networks
 
-## Units
+### Units
 
 All performance values are measured in `output tokens per second per GPU`, where `output tokens` includes the first and all subsequent generated tokens (input tokens are not included).
 
 Data in these tables is taken from the `Per GPU Output Throughput (tps/gpu)` metric reported by `trtllm-bench`.
-The calculations for metrics reported by trtllm-bench can be found in the dataclasses [reporting.py](../../../tensorrt_llm/bench/dataclasses/reporting.py#L570) and [statistics.py](../../../tensorrt_llm/bench/dataclasses/statistics.py#L188).
+The calculations for metrics reported by trtllm-bench can be found in the dataclasses [reporting.py](https://github.com/NVIDIA/TensorRT-LLM/blob/main/tensorrt_llm/bench/dataclasses/reporting.py#L570) and [statistics.py](https://github.com/NVIDIA/TensorRT-LLM/blob/main/tensorrt_llm/bench/dataclasses/statistics.py#L188).
 
-
-## Table of Contents
+### Table of Contents
 
 - [Deepseek R1 0528](#deepseek-r1-0528)
 - [GPT-OSS 120B](#gpt-oss-120b)
 - [GPT-OSS 20B](#gpt-oss-20b)
 - [LLaMA v3.3 70B](#llama-v33-70b)
   - [LLaMA v3.3 70B - RTX 6000 Pro Blackwell Server Edition](#llama-v33-70b-rtx-configurations)
+
 - [LLaMA v4 Maverick](#llama-v4-maverick)
 - [Qwen3 235B A22B](#qwen3-235b-a22b)
   - [Qwen3 235B A22B - RTX 6000 Pro Blackwell Server Edition](#qwen3-235b-a22b-rtx-configurations)
+
 - [Qwen3 30B A3B](#qwen3-30b-a3b)
   - [Qwen3 30B A3B - RTX 6000 Pro Blackwell Server Edition](#qwen3-30b-a3b-rtx-configurations)
 
 ---
 
-(deepseek-r1-0528)=
+<a id="deepseek-r1-0528"></a>
 
-# Deepseek R1 0528
+## Deepseek R1 0528
 
 | Sequence Length (ISL/OSL) | B200<br/>DEP4 (FP4) | GB200<br/>DEP4 (FP4) | H200<br/>DEP8 (FP8) |
 |---|---|---|---|
@@ -99,9 +100,9 @@ unit: `output tokens per second per GPU`
 
 ---
 
-(gpt-oss-120b)=
+<a id="gpt-oss-120b"></a>
 
-# GPT-OSS 120B
+## GPT-OSS 120B
 
 | Sequence Length (ISL/OSL) | B200<br/>DEP2 (FP4) | GB200<br/>TP1 (FP4) | H200<br/>TP1 (FP8) | H100<br/>DEP4 (FP8) |
 |---|---|---|---|---|
@@ -116,9 +117,9 @@ unit: `output tokens per second per GPU`
 
 ---
 
-(gpt-oss-20b)=
+<a id="gpt-oss-20b"></a>
 
-# GPT-OSS 20B
+## GPT-OSS 20B
 
 | Sequence Length (ISL/OSL) | B200<br/>TP1 (FP4) | GB200<br/>TP1 (FP4) | H200<br/>TP1 (FP8) | H100<br/>TP1 (FP8) |
 |---|---|---|---|---|
@@ -133,9 +134,9 @@ unit: `output tokens per second per GPU`
 
 ---
 
-(llama-v33-70b)=
+<a id="llama-v33-70b"></a>
 
-# LLaMA v3.3 70B
+## LLaMA v3.3 70B
 
 | Sequence Length (ISL/OSL) | B200<br/>TP1 (FP4) | GB200<br/>TP1 (FP4) | H200<br/>TP2 (FP8) | H100<br/>TP2 (FP8) |
 |---|---|---|---|---|
@@ -149,9 +150,9 @@ unit: `output tokens per second per GPU`
 
 ---
 
-(llama-v33-70b-rtx-configurations)=
+<a id="llama-v33-70b-rtx-configurations"></a>
 
-# LLaMA v3.3 70B - RTX 6000 Pro Blackwell Server Edition
+## LLaMA v3.3 70B - RTX 6000 Pro Blackwell Server Edition
 
 *Shows Tensor Parallel (TP) and Pipeline Parallel (PP) configurations*
 
@@ -166,9 +167,9 @@ unit: `output tokens per second per GPU`
 
 ---
 
-(llama-v4-maverick)=
+<a id="llama-v4-maverick"></a>
 
-# LLaMA v4 Maverick
+## LLaMA v4 Maverick
 
 | Sequence Length (ISL/OSL) | B200<br/>DEP4 (FP4) | GB200<br/>DEP4 (FP4) | H200<br/>DEP8 (FP8) |
 |---|---|---|---|
@@ -183,9 +184,9 @@ unit: `output tokens per second per GPU`
 
 ---
 
-(qwen3-235b-a22b)=
+<a id="qwen3-235b-a22b"></a>
 
-# Qwen3 235B A22B
+## Qwen3 235B A22B
 
 | Sequence Length (ISL/OSL) | B200<br/>DEP4 (FP4) | GB200<br/>DEP4 (FP4) | H200<br/>DEP4 (FP8) | H100<br/>DEP8 (FP8) |
 |---|---|---|---|---|
@@ -200,9 +201,9 @@ unit: `output tokens per second per GPU`
 
 ---
 
-(qwen3-235b-a22b-rtx-configurations)=
+<a id="qwen3-235b-a22b-rtx-configurations"></a>
 
-# Qwen3 235B A22B - RTX 6000 Pro Blackwell Server Edition
+## Qwen3 235B A22B - RTX 6000 Pro Blackwell Server Edition
 
 *Shows Tensor Parallel (TP) and Pipeline Parallel (PP) configurations*
 
@@ -217,9 +218,9 @@ unit: `output tokens per second per GPU`
 
 ---
 
-(qwen3-30b-a3b)=
+<a id="qwen3-30b-a3b"></a>
 
-# Qwen3 30B A3B
+## Qwen3 30B A3B
 
 | Sequence Length (ISL/OSL) | B200<br/>TP1 (FP4) | GB200<br/>TP1 (FP4) |
 |---|---|---|
@@ -234,9 +235,9 @@ unit: `output tokens per second per GPU`
 
 ---
 
-(qwen3-30b-a3b-rtx-configurations)=
+<a id="qwen3-30b-a3b-rtx-configurations"></a>
 
-# Qwen3 30B A3B - RTX 6000 Pro Blackwell Server Edition
+## Qwen3 30B A3B - RTX 6000 Pro Blackwell Server Edition
 
 *Shows Tensor Parallel (TP) and Pipeline Parallel (PP) configurations*
 
@@ -252,29 +253,26 @@ unit: `output tokens per second per GPU`
 
 ---
 
-
-
 ## Reproducing Benchmarked Results
 
-```{note}
-Only the models shown in the table above are supported by this workflow.
-```
+> [!NOTE]
+> Only the models shown in the table above are supported by this workflow.
 
-The following tables are references for commands that are used as part of the benchmarking process. For a more detailed description of this benchmarking workflow, see the [benchmarking suite documentation](./perf-benchmarking.md).
+The following tables are references for commands that are used as part of the benchmarking process. For a more detailed description of this benchmarking workflow, see the [benchmarking suite documentation](https://github.com/NVIDIA/TensorRT-LLM/blob/main/docs/source/performance/perf-benchmarking.md).
 
 ### Command Overview
 
 Testing was performed using the PyTorch backend - this workflow does not require an engine to be built.
 
 | Stage | Description | Command |
-| :- | - | - |
+| :--- | --- | --- |
 | [Dataset](#preparing-a-dataset) | Create a synthetic dataset | `trtllm-bench --model $model_name prepare-dataset --output $dataset_file token-norm-dist --num-requests=$num_requests --input-mean=$isl --output-mean=$osl --input-stdev=0 --output-stdev=0` |
 | [Run](#running-the-benchmark) | Run a benchmark with a dataset | `trtllm-bench --model $model_name throughput --dataset $dataset_file --backend pytorch --config $llm_options` |
 
 ### Variables
 
 | Name | Description |
-| :- | - |
+| :--- | --- |
 | `$isl` | Benchmark input sequence length. |
 | `$osl` | Benchmark output sequence length. |
 | `$tp_size` | Tensor parallel mapping degree to run the benchmark with |
@@ -300,12 +298,10 @@ input/output sequence length combinations. The script works by using the tokeniz
 randomly sample token IDs from it to create entirely random sequences. In the command above, all requests will be uniform
 because the standard deviations for both input and output sequences are set to 0.
 
-
 For each input and output sequence length combination, the table below details the `$num_requests` that were used. For
 shorter input and output lengths, a larger number of messages were used to guarantee that the system hit a steady state
 because requests enter and exit the system at a much faster rate. For longer input/output sequence lengths, requests
 remain in the system longer and therefore require less requests to achieve steady state.
-
 
 | Input Length | Output Length | Number of Requests |
 |--------------|---------------|---------------------|
@@ -319,15 +315,18 @@ remain in the system longer and therefore require less requests to achieve stead
 
 To run the benchmark with the generated data set, simply use the `trtllm-bench throughput` subcommand. The benchmarker will
 run an offline maximum throughput scenario such that all requests are queued in rapid succession. You simply need to provide
-a model name (HuggingFace reference or path to a local model), a [generated dataset](#preparing-a-dataset), and a file containing any desired extra options to the LLM APIs (details in [tensorrt_llm/llmapi/llm_args.py:LlmArgs](source:tensorrt_llm/llmapi/llm_args.py)).
+a model name (HuggingFace reference or path to a local model), a [generated dataset](#preparing-a-dataset), and a file containing any desired extra options to the LLM APIs (details in [tensorrt_llm/llmapi/llm_args.py:LlmArgs](https://github.com/NVIDIA/TensorRT-LLM/blob/main/tensorrt_llm/llmapi/llm_args.py)).
 
 For dense / non-MoE models:
+
 ```shell
 trtllm-bench --tp $tp_size --pp $pp_size --model $model_name throughput --dataset $dataset_file --backend pytorch --config $llm_options
 ```
+
 Llama 3.3
 
 `llm_options.yml`
+
 ```yaml
 cuda_graph_config:
   enable_padding: true
@@ -343,6 +342,7 @@ trtllm-bench --tp $tp_size --pp $pp_size --ep $ep_size --model $model_name throu
 GPT-OSS:
 
 `llm_options.yml`
+
 ```yaml
 cuda_graph_config:
   enable_padding: true
@@ -359,6 +359,7 @@ moe_config:
 DeepSeek R1:
 
 `llm_options.yml`
+
 ```yaml
 attention_dp_config:
   batching_wait_iters: 0
@@ -377,6 +378,7 @@ kv_cache_config:
 Qwen3 MoE, Llama4 Maverick:
 
 `llm_options.yml`
+
 ```yaml
 enable_attention_dp: true
 cuda_graph_config:

@@ -1,0 +1,1305 @@
+                                        SpecInfer: Accelerating Large Language Model Serving
+                                        with Tree-based Speculative Inference and Verification
+                                                           Xupeng Miao∗                                      Gabriele Oliaro∗                             Zhihao Zhang∗
+                                                    Carnegie Mellon University                          Carnegie Mellon University                  Carnegie Mellon University
+                                                       Pittsburgh, PA, USA                                 Pittsburgh, PA, USA                          Pittsburgh, PA, USA
+                                                        xupeng@cmu.edu                                     goliaro@cs.cmu.edu                       zhihaoz3@andrew.cmu.edu
+
+                                                          Xinhao Cheng∗                                          Zeyu Wang                              Zhengxin Zhang
+                                                    Carnegie Mellon University                         Carnegie Mellon University                      Tsinghua University
+                                                       Pittsburgh, PA, USA                                 Pittsburgh, PA, USA                            Beijing, China
+arXiv:2305.09781v4 [cs.CL] 1 Apr 2024
+
+
+
+
+                                                    xinhaoc@andrew.cmu.edu                             zeyuwang@alumni.cmu.edu                  zhang-zx21@mails.tsinghua.edu.cn
+
+                                                       Rae Ying Yee Wong                                          Alan Zhu                                   Lijie Yang
+                                                         Stanford University                            Carnegie Mellon University                  Carnegie Mellon University
+                                                         Stanford, CA, USA                                 Pittsburgh, PA, USA                          Pittsburgh, PA, USA
+                                                       raewong@stanford.edu                              aczhu@andrew.cmu.edu                        lijiey@andrew.cmu.edu
+
+                                                           Xiaoxiang Shi                                         Chunan Shi                              Zhuoming Chen
+                                                  Shanghai Jiao Tong University                              Peking University                      Carnegie Mellon University
+                                                        Shanghai, China                                        Beijing, China                          Pittsburgh, PA, USA
+                                                    lambda7shi@sjtu.edu.cn                              spirited_away@pku.edu.cn                    zhuominc@andrew.cmu.edu
+
+                                                          Daiyaan Arfeen                                    Reyna Abhyankar                                  Zhihao Jia
+                                                    Carnegie Mellon University                     University of California, San Diego              Carnegie Mellon University
+                                                       Pittsburgh, PA, USA                                San Diego, CA, USA                           Pittsburgh, PA, USA
+                                                    marfeen@andrew.cmu.edu                               vabhyank@ucsd.edu                              zhihao@cmu.edu
+
+                                        Abstract                                                                          evaluation shows that SpecInfer outperforms existing LLM
+                                        This paper introduces SpecInfer, a system that accelerates                        serving systems by 1.5-2.8× for distributed LLM inference
+                                        generative large language model (LLM) serving with tree-                          and by 2.6-3.5× for offloading-based LLM inference, while
+                                        based speculative inference and verification. The key idea                        preserving the same generative performance. SpecInfer is
+                                        behind SpecInfer is leveraging small speculative models to                        publicly available at https://github.com/flexflow/FlexFlow/
+                                        predict the LLM’s outputs; the predictions are organized as                       Keywords: large language model serving, speculative decod-
+                                        a token tree, whose nodes each represent a candidate token                        ing, token tree verification
+                                        sequence. The correctness of all candidate token sequences
+                                        represented by a token tree is verified against the LLM in par-                   ACM Reference Format:
+                                        allel using a novel tree-based parallel decoding mechanism.                       Xupeng Miao, Gabriele Oliaro, Zhihao Zhang, Xinhao Cheng, Zeyu
+                                        SpecInfer uses an LLM as a token tree verifier instead of an                      Wang, Zhengxin Zhang, Rae Ying Yee Wong, Alan Zhu, Lijie Yang,
+                                        incremental decoder, which significantly reduces the end-to-                      Xiaoxiang Shi, Chunan Shi, Zhuoming Chen, Daiyaan Arfeen, Reyna
+                                        end latency and computational requirement for serving gen-                        Abhyankar, and Zhihao Jia. 2024. SpecInfer: Accelerating Large
+                                                                                                                          Language Model Serving with Tree-based Speculative Inference and
+                                        erative LLMs while provably preserving model quality. Our
+                                                                                                                          Verification. In 29th ACM International Conference on Architectural
+                                        ∗ Equal   contribution.                                                           Support for Programming Languages and Operating Systems, Volume
+                                                                                                                          3 (ASPLOS ’24), April 27-May 1, 2024, La Jolla, CA, USA. ACM, New
+                                        Permission to make digital or hard copies of part or all of this work for         York, NY, USA, 18 pages. https://doi.org/10.1145/3620666.3651335
+                                        personal or classroom use is granted without fee provided that copies are
+                                        not made or distributed for profit or commercial advantage and that copies
+                                        bear this notice and the full citation on the first page. Copyrights for third-   1    Introduction
+                                        party components of this work must be honored. For all other uses, contact        Generative large language models (LLMs), such as Chat-
+                                        the owner/author(s).
+                                        ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+                                                                                                                          GPT [3] and GPT-4 [33], have proven to be powerful in
+                                        © 2024 Copyright held by the owner/author(s).                                     various application domains, including question answering,
+                                        ACM ISBN 979-8-4007-0386-7/24/04.                                                 program synthesis, and task automation [26, 56]. However,
+                                        https://doi.org/10.1145/3620666.3651335                                           it is challenging to quickly and cheaply serve these LLMs
+due to their large volume of parameters, complex architec-              approaches) to maximize speculative performance. These
+tures, and high computational requirements. For example,                candidates are organized as a token tree, whose nodes each
+the largest GPT-3 architecture has 175 billion parameters,              represents a sequence of speculated tokens. The correctness
+which requires more than eight NVIDIA 40GB A100 GPUs                    of all candidate token sequences is verified against the LLM
+to store in half-precision floating points, and takes several           in parallel, which allows SpecInfer to significantly increase
+seconds to serve a single inference request [3].                        the number of generated tokens in an LLM decoding step.
+   An LLM generally takes as input a sequence of tokens,                Compared with sequence-based speculative inference, lever-
+called prompt, and generates subsequent tokens one at a time,           aging tree structures can significantly improve the success
+as shown in Figure 1a. The generation of each token in the              rate of verifying a token (e.g., from 52-57% to 96-97% for
+sequence is conditioned on the input prompt and previously              stochastic decoding as shown in Table 1). However, realizing
+generated tokens and does not consider future tokens. This              this improvement requires addressing two unique challenges.
+approach is also called autoregressive decoding because each            Next, we elaborate on these challenges and the main ideas
+generated token is also used as input for generating future             SpecInfer uses to address them.
+tokens. This dependency between tokens is crucial for many                 First, SpecInfer must explore an extremely large search
+NLP tasks that require preserving the order and context of              space of candidate token sequences to maximize speculative
+the generated tokens, such as text completion [55].                     performance. While the idea of speculative execution has
+   Existing LLM systems generally use an incremental decod-             been widely deployed in a variety of optimization tasks in
+ing approach to serving a request where the system computes             computer architecture and systems, including branch pre-
+the activations for all prompt tokens in a single step and then         diction in modern pipelined processors and value prediction
+iteratively decodes one new token using the input prompt                for pre-fetching memory and files [13, 42], the search space
+and all previously generated tokens [27]. This approach re-             considered by SpecInfer is significantly larger due to two
+spects data dependencies between tokens, but achieves sub-              reasons: (1) modern LLMs generally involve very large vocab-
+optimal runtime performance and limited GPU utilization,                ularies, and (2) maximizing speculative performance requires
+since the degree of parallelism within each request is greatly          predicting multiple future tokens (instead of just the next
+limited in the incremental phase. In addition, the attention            token). For example, all LLMs in the OPT model family con-
+mechanism of Transformer [48] requires accessing the keys               sider 50,272 different possible tokens in their vocabulary,
+and values of all previous tokens to compute the attention              while SpecInfer can correctly predict the next 4 tokens on
+output of a new token. To avoid recomputing the keys and                average. Achieving this goal requires considering a search
+values for all preceding tokens, today’s LLM systems use a              space of 502724 ≈ 6 × 1018 different combinations of tokens.
+caching mechanism to store their keys and values for reuse                 SpecInfer leverages existing distilled, quantized, and/or
+in future iterations. For long-sequence generative tasks (e.g.,         pruned variants of an LLM, which we call small specula-
+GPT-4 supports up to 32K tokens in a request), caching keys             tive models (SSMs), to guide speculation. A key challenging
+and values introduces significant memory overhead, which                of using SSMs for speculative inference is that the align-
+prevents existing systems from serving a large number of re-            ment between an SSM and an LLM is inherently bounded
+quests in parallel due to the memory requirement of caching             by the model capacity gap, since an SSM is generally 100-
+their keys and values.                                                  1000× smaller than an LLM. Instead of using a single SSM
+   Motivated by the idea of speculative execution in proces-            for sequence-based speculation, SpecInfer maximizes spec-
+sor optimizations [13, 42], recent work introduces sequence-            ulative performance by simultaneously considering a vari-
+based speculative inference, which leverages a small specula-           ety of token sequences organized in a tree structure for a
+tive model (SSM) to generate a sequence of tokens and uses an           given input prompt. SpecInfer introduces an expansion- and
+LLM to examine their correctness in parallel [5, 22, 25, 44, 51].       a merge-based mechanism for constructing token trees by
+These attempts only consider a token sequence generated by              exploiting diversity within a single SSM and across multiple
+a single SSM for speculation, which cannot align well with              SSMs, respectively.
+an LLM due to the model capacity gap between them, since                   A second challenge SpecInfer must address is verifying the
+SSMs are generally orders of magnitude smaller than the                 speculated tokens. Many LLM applications perform stochas-
+LLM to maintain low memory and runtime overheads.                       tic decoding, which samples the next token from a probability
+   This paper introduces SpecInfer, a system that improves              distribution instead of deterministically generating a token.
+the end-to-end latency and computational efficiency of LLM              To preserve an LLM’s generative performance, SpecInfer
+serving with tree-based speculative inference and verifica-             must guarantee that its tree-based speculative inference and
+tion. Figure 1b illustrates a comparison between existing               verification mechanism generates the next token by follow-
+incremental decoding, sequence-based speculative inference,             ing the exact same probability distribution as incremental
+and our tree-based speculative inference. A key insight be-             decoding. To achieve this goal, we propose multi-step spec-
+hind SpecInfer is to simultaneously consider a diversity of             ulative sampling, a new sampling approach for SSMs that
+speculation candidates (instead of just one as in existing              guarantees equivalence while maximizing the number of
+                                                                    2
+                                                                        !!$$                         !!""
+
+                                                                         Spec
+                                                                         Spec SeqVerify
+                                                                              SeqVerify                     Spec
+                                                                                                            Spec SeqVerify
+                                                                                                                 SeqVerify              ...
+                                                                                                                                        ...           ...
+                                                                                                                                                      ...
+
+                                                                                               !!!! →
+                                                                                                    →!!""                  !!## →
+                                                                                                                                →!!%%
+
+
+
+
+                                                                                                 Incremental
+                                                                                                  IncrementalDecoding
+                                                                                                             DecodingTimeline
+                                                                                                                      Timeline
+                            Incremental
+                             IncrementalDecoding
+                                        Decoding                        !!$$
+                                                                               IncDecode
+                                                                                IncDecode       IncDecode
+                                                                                                 IncDecode          IncDecode
+                                                                                                                     IncDecode          IncDecode
+                                                                                                                                         IncDecode      ...
+                                                                                                                                                        ...
+                    !!$$           !!!!         !!""        !!##                        !!!!                 !!""          !!##                !!%%
+                 machine
+                  machine       learning
+                                 learning     system
+                                               system   optimization
+                                                         optimization
+
+      Iterations:
+       Iterations: 00                                                                  Sequence-based
+                                                                                       Sequence-basedSpeculative
+                                                                                                         SpeculativeInference
+                                                                                                                     InferenceTimeline
+                                                                                                                              Timeline
+                                   11           22           33                                   !!""
+                                                                        !!$$
+                                                                               Spec
+                                                                                Spec SequenceVerify
+                                                                                      SequenceVerify Spec    SequenceVerify ...
+                                                                                                       Spec SequenceVerify    ...      ...
+                                                                                                                                       ...
+                                                                                                  !!!! →
+                                                                                                       →!!""                  !!## →
+                                                                                                                                   →!!%%
+                                          LLM
+                                          LLM
+                                                                                           Tree-based
+                                                                                           Tree-basedSpeculative
+                                                                                                        SpeculativeInference
+                                                                                                                    InferenceTimeline
+                                                                                                                             Timeline
+                                                                        !!$$                        !!%%
+                                                                               Spec
+                                                                                Spec                     Spec
+                                                                                                          Spec                 ...
+                                                                                                                               ...
+       Outputs:
+        Outputs: learning
+                  learning                  optimization
+                                             optimization   is
+                                                             is
+                                 system
+                                  system
+                                                                               Spec
+                                                                                Spec    TreeVerify
+                                                                                         TreeVerify      Spec
+                                                                                                          Spec  TreeVerify
+                                                                                                                 TreeVerify    ...
+                                                                                                                               ...                     ...
+                                                                                                                                                       ...
+                                                                               Spec
+                                                                                Spec                     Spec
+                                                                                                          Spec                 ...
+                                                                                                                                ...
+
+                                                                                               !!!! →
+                                                                                                    →!!""→
+                                                                                                         →!!##→
+                                                                                                              →!!%%        !!&& →
+                                                                                                                                →!!''→
+                                                                                                                                     →!!((→
+                                                                                                                                          →!!))
+
+                           (a) Incremental decoding.                                                  (b) Timeline Comparison.
+
+Figure 1. Comparing the incremental decoding approach used by existing LLM serving systems, the sequence-based speculative
+inference approach, and the tree-based speculative inference approach used by SpecInfer.
+
+speculated tokens that can be verified. To minimize the to-                            Algorithm 1 The incremental decoding algorithm used in
+ken tree verification cost, SpecInfer introduces a tree-based                          existing LLM serving systems.
+parallel decoding mechanism, simultaneously verifying all                               1: Input: A sequence of input tokens ℐ
+tokens of a token tree against the LLM’s output in a single                             2: Output: A sequence of generated tokens
+LLM decoding step.                                                                      3: 𝒮=ℐ
+   By leveraging tree-based speculative inference and verifi-                           4: while true do
+cation, SpecInfer accelerates both distributed LLM inference                            5:    𝑡 = Decode(LLM, 𝒮)
+across multiple GPUs and offloading-based LLM inference on                              6:    𝒮.append(𝑡)
+one GPU. Our evaluation shows that SpecInfer outperforms                                7:    if 𝑡 = ⟨EOS⟩ then
+existing LLM serving systems by 1.5-2.8× for distributed                                8:         Return 𝒮
+LLM inference and by 2.6-3.5× for offloading-based LLM
+inference, while preserving the same generative accuracy.
+   To summarize, we make the following contributions:                                     There are several ways to prepare SSMs for speculative
+                                                                                       inference. First, modern LLMs generally have many smaller
+    • We present SpecInfer, a tree-based speculative infer-
+                                                                                       architectures pre-trained together with the LLM using the
+      ence and verification system for LLM serving.
+                                                                                       same datasets. For example, in addition to the OPT-175B
+    • To maximize speculative performance, we propose a
+                                                                                       model with 175 billion parameters, the OPT model family
+      merge- and an expansion-based method to construct
+                                                                                       also includes OPT-125M and OPT-350M, two variants with
+      token trees by exploiting diversity within and across
+                                                                                       125 million and 350 million parameters, which were pre-
+      SSMs, respectively.
+                                                                                       trained using the same datasets as OPT-175B [57]. These pre-
+    • To minimize verification cost, we introduce a tree-
+                                                                                       trained small models can be directly used as SSMs. Second,
+      based parallel decoding mechanism to simultaneously
+                                                                                       to improve the coverage of speculated tokens from SSMs,
+      verify all tokens of a token tree.
+                                                                                       SpecInfer takes an expansion-based and a merge-based spec-
+    • We evaluate SpecInfer and show that it outperforms
+                                                                                       ulation method as shown at the top of Figure 2. The specu-
+      existing systems by up to 2.8× for distributed inference
+                                                                                       lated tokens are organized in a token tree structure.
+      and by up to 3.5× for offloading-based inference.
+                                                                                          SpecInfer’s usage of an LLM is also different from that of
+                                                                                       existing LLM serving systems. Instead of using the LLM as
+2   SpecInfer’s Overview                                                               an incremental decoder that predicts the next single token,
+Figure 2 shows an overview of SpecInfer, which includes a                              SpecInfer uses the LLM as a token tree verifier that verifies
+learning-based speculator that takes as input a sequence of                            a speculated token tree against the LLM’s output. For each
+tokens, and produces a speculated token tree. The goal of the                          token, SpecInfer computes its activations by considering all
+speculator is to predict the LLM’s output by maximizing the                            of its ancestors in the token tree as its preceding tokens. For
+overlap between the speculated token tree and the tokens                               example, in Figure 2, the attention output of the token 𝑡 3,0
+generated by the LLM using incremental decoding (Alg. 1).                              is calculated based on sequence (𝑡 0, 𝑡 1,0, 𝑡 2,1, 𝑡 3,0 ), where 𝑡 0 ,
+                                                                                 3
+                                                                       Learning-based Speculator (§")
+                                    Expansion-based Token Tree Construction                                        Merge-based Token Tree Construction
+             [inputs]
+                                                                               Output 0
+                                                                   Expansion
+                                                                                                   OR          SSM 0                  SSM 1              SSM 2
+                                      SSM              Expansion                    Output 1
+
+                                                                           Output 2                            Output 0            Output 1              Output 2
+
+
+                                                                                                                                            !#,!
+                                    Output 0: [machine] learning algorithm                                                               algorithm
+                                    Output 1: [machine] learning system design                                                !",!
+                                                                                                                           learning         !#,"       !$,!
+                                    Output 2: [machine] translation model                                       !!
+                                                                                                                                          system     design
+                                                                                                             machine
+                                Sequence Representation of Speculated Tokens                                                  !","          !#,#
+                                                                                                                          translation      model             Speculated
+                                                                                                                                                             Token Tree
+            Verified output: machine learning system optimization
+
+               Synchronization                                                                                                                       Linearization
+
+                                                                               Token Tree Verifier (§4)
+                                          !#,!         !$,"
+                                       algorithm     design                          [machine]      learning    algorithm    system     design   translation     model
+                            !",!                                                                               Tree-based Parallel Decoding
+                         learning                     !$,!          !%,!
+                                                    design         [EOS]
+              !!                         !#,"
+           machine                     system
+                                                         !$,#                                                             LLM
+                            !","                    optimization
+                        translation
+
+          Verified                       !#,#         !$,$
+          Subtree                       model        [EOS]
+                                                                                      learning      system      design optimization [EOS]            model      [EOS]
+
+
+
+              Figure 2. An overview of SpecInfer’s tree-based speculative inference and verification mechanism.
+
+𝑡 1,0 , and 𝑡 2,1 are 𝑡 3,0 ’s ancestors in the token tree. SpecInfer                             Reduced end-to-end inference latency. Serving LLMs
+includes a novel tree-based parallel decoding mechanism to                                     suffers from long end-to-end inference latency. For exam-
+simultaneously verify all tokens of a token tree in a single                                   ple, the GPT-3 architecture includes 175 billion parameters
+LLM decoding step.                                                                             and requires many seconds to serve a request. In the ex-
+     SpecInfer’s speculative inference and token tree verifi-                                  isting incremental decoding approach, the computation for
+cation provide two key advantages over the incremental                                         generating each token depends on the keys and values of
+decoding approach of existing LLM inference systems.                                           all previously generated tokens, which introduces sequen-
+                                                                                               tial dependencies between tokens and requires modern LLM
+                                                                                               serving systems to serialize the generation of different tokens
+                                                                                               for each request. In SpecInfer, LLMs are used as a verifier
+   Reduced memory accesses to LLM parameters. The per-
+                                                                                               that takes a speculated token tree as an input and can simul-
+formance of LLM inference is largely limited by accesses to
+                                                                                               taneously examine all tokens in the token tree by making a
+GPU memory. In the existing incremental decoding approach,
+                                                                                               single verification pass over the LLM. This approach enables
+generating a single token requires accessing all parameters
+                                                                                               parallelization across different tokens in a single request and
+of an LLM. The problem is exacerbated for offloading-based
+                                                                                               reduces the LLM’s end-to-end inference latency.
+LLM inference systems, which use limited computational
+resources such as a single commodity GPU to serve LLMs by
+utilizing CPU DRAM and persistent storage to save model                                        3        Learning-based Speculator
+parameters and loading these parameters to GPU’s high                                          Existing speculative decoding methods perform sequence-
+bandwidth memory (HBM) for computation. Compared to                                            based speculation, where an SSM predicts a single sequence
+the incremental decoding approach, SpecInfer significantly                                     of tokens to be verified by an LLM. However, a key limitation
+reduces accesses to LLM parameters whenever the overlap                                        of a single speculated sequence is that the probability of a suc-
+between a speculated token tree and the LLM’s actual out-                                      cessful alignment between the LLM and the speculated token
+put is not empty. Reduced accesses to GPU device memory                                        sequence decays exponentially with the expected alignment
+and reduced data transfers between GPU and CPU memory                                          length. This can be further exacerbated by the fact that the
+can also directly translate to decreased energy consumption,                                   speculation only includes a single candidate token to verify
+since accessing GPU HBM consumes two or three orders                                           per step, resulting in suboptimal speculative performance.
+of magnitude more energy than floating point arithmetic                                        On the other hand, by encouraging more diverse speculated
+operations.                                                                                    candidates per step, the probability of a successful match per
+                                                                                          4
+Algorithm 2 The speculation and verification algorithm                   Table 1. The success rate of verifying a token for LLaMA-7B
+used by SpecInfer. Speculate takes the current token se-                 using the top-𝑘 tokens derived from LLaMA-68M. The five
+quence 𝒮 as an input and generates a speculated token tree               prompt datasets are described in Section 6.1.
+𝒩 . TreeParallelDecode generates a token 𝒪(𝑢) for each
+node 𝑢 ∈ 𝒩 . VerifyGreedy and VerifyStochastic exam-                                     Dataset      𝑘=1 𝑘=2 𝑘=3 𝑘=4 𝑘=5
+ine 𝒩 against 𝒪 and produce a sequence of verified tokens
+𝒱 using greedy or stochastic sampling, respectively.                                     Alpaca        68%       77%      81%       84%      85%
+
+
+
+
+                                                                            decoding
+                                                                             Greedy
+                                                                                         CP            69%       79%      83%       86%      87%
+ 1:   Input: A sequence of input tokens ℐ
+                                                                                         WebQA         62%       72%      77%       80%      82%
+ 2:   Output: A sequence of generated tokens
+                                                                                         CIP           70%       81%      85%       88%      89%
+ 3:   𝒮=ℐ
+                                                                                         PIQA          63%       75%      79%       83%      85%
+ 4:   while true do
+ 5:      𝒩 = Speculate(𝒮)                                                                Alpaca        54%       81%      91%       95%      97%
+
+
+
+
+                                                                            Stochastic
+                                                                            decoding
+ 6:      𝒪 = TreeParallelDecode(LLM, 𝒩 )                                                 CP            56%       82%      92%       95%      97%
+ 7:      if use greedy decoding then                                                     WebQA         52%       80%      90%       94%      96%
+ 8:          𝒱 = VerifyGreedy(𝒪, 𝒩 )                                                     CIP           57%       84%      92%       95%      97%
+ 9:      else                                                                            PIQA          55%       82%      91%       95%      97%
+10:          𝒱 = VerifyStochastic(𝒪, 𝒩 )
+11:      for 𝑡 ∈ 𝒱 do
+12:          𝒮.append(𝑡)                                                 step (i.e., the token decoded by the LLM is in this candidate
+13:          if 𝑡 = ⟨EOS⟩ then                                           pool) can be greatly improved. To this end, SpecInfer aims
+14:               return 𝒮                                               to construct a tree of speculated candidates by exploiting
+15:                                                                      diversity within a single SSM and across multiple SSMs. In
+16: function VerifyGreedy(𝒪, 𝒩 )                                         particular, SpecInfer’s learning-based speculator aggregates
+17:    𝒱 = ∅, 𝑢 ← the root of token tree 𝒩                               the predictions of one or multiple SSMs to maximize specula-
+18:    while ∃𝑣 ∈ 𝒩 .𝑝 𝑣 = 𝑢 and 𝑡 𝑣 = 𝒪(𝑢) do                           tive performance while maintaining low memory overhead
+19:       𝒱.append(𝑡 𝑣 )                                                 and inference latency. SpecInfer uses a token tree to orga-
+20:       𝑢 =𝑣                                                           nize the tokens produced by the speculator and introduces
+21:    𝒱.append(𝒪(𝑢))                                                    two methods for constructing token trees: expansion- and
+22:    return 𝒱                                                          merge-based tree constructions.
+23:                                                                      Definition 3.1 (Token Tree). A token tree 𝒩 is a tree struc-
+24:   function VerifyStochastic(𝒪, 𝒩 )                                   ture, where each node 𝑢 ∈ 𝒩 is labeled with a token 𝑡𝑢 , and
+25:       𝒱 = ∅, 𝑢 ← the root of token tree 𝒩                            𝑝𝑢 represents 𝑢’s parent node in the token tree. For each
+26:       while 𝑢 is a non-leaf node do                                  node 𝑢, 𝑆𝑢 represents a sequence of tokens identified by
+27:            ℋ = child(𝑢)         ⊲ The set of child nodes for 𝑢       concatenating 𝑆𝑝𝑢 and {𝑡𝑢 }1 .
+28:            while ℋ is not empty do
+29:                𝑠 ∼ rand(ℋ), 𝑟 ∼ 𝑈 (0, 1), 𝑥𝑠 = ℋ[𝑠]                     Expansion-based token tree construction. One approach
+30:                if 𝑟 ≤ 𝑃 (𝑥𝑠 | 𝑢, Θ𝐿𝐿𝑀 )/𝑃 (𝑥𝑠 | 𝑢, Θ𝑆𝑆𝑀𝑠 )           to creating a token tree involves deriving multiple tokens
+      then                                                               from an SSM within a single decoding step. This approach is
+31:                    ⊲ Token 𝑥𝑠 passes verification.                   motivated by an important observation that when an SSM
+32:                    𝒱.append(𝑥𝑠 )                                     misaligns with an LLM (i.e., the two models select different
+33:                    𝑢 =𝑠                                              top-1 tokens), the token selected by the LLM is generally
+34:                    break                                             among the top-𝑘 tokens from the SSM for very small values
+35:                else                                                  of 𝑘. Table 1 shows the success rate of verifying a token using
+36:                    ⊲ Normalize the residual 𝑃 (𝑥 | 𝑢, Θ𝐿𝐿𝑀 )         the top-𝑘 tokens derived from an SSM, where a verification
+37:                    𝑃 (𝑥 | 𝑢, ΘLLM ) B norm(max(0, 𝑃 (𝑥 |             is successful if the token selected by the LLM is among the
+      𝑢, ΘLLM ) − 𝑃 (𝑥 | 𝑢, ΘSSM𝑠 )))                                    top-𝑘 tokens from the SSM. Compared to only using the top-
+38:                    ℋ.pop(𝑠)                                          1 token from an SSM, using the top-5 tokens can increase
+39:            if ℋ is empty then                                        the success rate from 70% to 89% for greedy decoding and
+40:                break                                                 from 57% to 97% for stochastic decoding.
+41:       ⊲ All SSMs fail verification; sample the next token               Directly selecting the top-𝑘 tokens at each step leads to
+42:       𝑥 next ∼ 𝑃 (𝑥 | 𝑢, Θ𝐿𝐿𝑀 )                                      an exponential increase in the number of potential token se-
+43:       𝒱.append(𝑥 next )                                              quences, which substantially elevates inference latency and
+44:       return 𝒱                                                       1 For   the root node 𝑟 , 𝑆𝑟 represents the token sequence {𝑡𝑟 }.
+                                                                     5
+                                                                               Step 0           Step 1         Step 2
+memory overhead. Consequently, we adopt a static strategy                      Width=2          Width=2        Width=1
+                                                                                                                              Sequence 1:
+                                                                                                          !&        !+
+                                                                                                                                 machine learning algorithm is
+that expands the token tree following a preset expansion con-                                       algorithm       is        Sequence 2:
+                                                                                           !$
+figuration represented as a vector of integers ⟨𝑘 1, 𝑘 2, ..., 𝑘𝑚 ⟩,                     learning         !'        !(           machine learning system design
+                                                                               !#                    system design            Sequence 3:
+where 𝑚 denotes the maximum number of speculative decod-                   machine                        !)        !,           machine translation models are
+                                                                                           !%        models        are        Sequence 4:
+ing steps, and 𝑘𝑖 indicates the number of tokens to expand for                       translation          !*        !$#
+                                                                                                      system design              machine translation system design
+each token in the 𝑖-th step. For example, Figure 3 illustrates
+                                                                            Expanded Token Tree (Depth=3)                      Speculated Token Sequences
+the expansion configuration ⟨2, 2, 1⟩, leading to four token
+sequences. Our evaluation (see Section 6.4) shows that even
+                                                                                     Figure 3. Illustration of token tree expansion.
+a simple strategy can generate highly accurate speculative
+results. We acknowledge that dynamically expanding a token
+tree from an SSM is an opening research problem beyond                        Note that, in addition to boosting, there are several other
+the scope of this paper, which we leave as future work.                    ensemble learning methods (e.g., voting, bagging, and stack-
+   Merge-based token tree construction. In addition to us-                 ing) [14] that can be used to combine the outputs from mul-
+ing a single SSM, SpecInfer can also combine multiple SSMs                 tiple SSMs, and we leave the exploration as future work.
+to jointly predict an LLM’s output. SpecInfer uses an unsu-
+pervised method to collectively boost-tune a pool of SSMs                  4        Token Tree Verifier
+to align their outputs with that of the LLM by leveraging                  This section introduces SpecInfer’s token tree verifier, which
+adaptive boosting [12]. SpecInfer uses SSMs to predict the                 takes as input a token tree generated by the speculator and
+next few tokens that an LLM will generate, and uses gen-                   verifies the correctness of its tokens against an LLM’s output.
+eral text datasets (e.g., the OpenWebText corpus [15] in our               A key idea behind the design of SpecInfer is simultaneously
+evaluation) to adaptively align the aggregated output of mul-              verifying all sequences of a token tree against the original
+tiple SSMs with the LLM in a fully unsupervised fashion. In                LLM’s output by making a single pass over the LLM’s parame-
+particular, SpecInfer converts a text corpus into a collection             ters. This functionality allows SpecInfer to opportunistically
+of prompt samples and use the LLM to generate a token se-                  decode multiple tokens (instead of a single token in incre-
+quence for each prompt. SpecInfer first fine-tunes one SSM at              mental decoding), resulting in reduced memory accesses to
+a time to the fullest and marks all prompt samples where the               the LLM’s parameters. A challenge SpecInfer must address
+SSM and LLM generate identical subsequent tokens. Next,                    in token tree verification is efficiently computing the atten-
+SpecInfer filters all marked prompt samples and uses all re-               tion scores for all sequences of a token tree. To this end,
+maining samples in the corpus to fine-tune the next SSM to                 we introduce tree attention, which generalizes the attention
+the fullest.                                                               mechanism [48] from sequence to tree structure. In addition,
+   By repeating this process for every SSM in the pool, SpecIn-            we develop a tree-based parallel decoding mechanism that
+fer obtains a diverse set of SSMs whose aggregated output                  can decode all tokens in a token tree in parallel.
+largely overlaps with the LLM’s output on the training cor-                   §4.1 and §4.2 describe tree attention and tree-based parallel
+pus. All SSMs have identical inference latency, and therefore              decoding. §4.3 introduces the mechanism to verify a token
+running all SSMs on different GPUs in parallel does not in-                tree against the LLM’s output.
+crease the latency of speculative inference compared to using
+a single SSM. In addition, SpecInfer uses data parallelism to              4.1      Tree Attention
+serve SSMs across multiple GPUs, and therefore using multi-                Transformer-based language models use the attention mech-
+ple SSMs does not increase the memory overhead on each                     anism to reason about sequential information [48]. LLMs
+GPU. In the case where multiple SSMs are employed, the out-                generally use decoder-only, multi-head self-attention, which
+put of each SSM is considered as a token tree, and SpecInfer               takes a single input tensor 𝑋 and computes an output tensor
+performs token tree merge to aggregate all speculated tokens               𝑂 via scaled multiplicative formulations as follows.
+in a single tree structure.                                                                                               𝑄
+                                                                                                          𝑄𝑖 = 𝑋 × 𝑊𝑖 ,             𝐾𝑖 = 𝑋 × 𝑊𝑖𝐾 ,             (1)
+Definition 3.2 (Token Tree Merge). ℳ is the tree merge                                                                                     (𝑄𝑖 ×𝐾𝑖𝑇   )
+                                                                                             𝑉𝑖 = 𝑋 × 𝑊𝑖𝑉 ,    𝐴𝑖 =             ,             √                (2)
+of 𝑚 token trees {𝒩𝑖 } (1 ≤ 𝑖 ≤ 𝑚) if and only if ∀1 ≤ 𝑖 ≤                                             
+                                                                                                                            𝑑
+𝑚, ∀𝑢 ∈ 𝒩𝑖 , ∃𝑣 ∈ ℳ such that 𝑆 𝑣 = 𝑆𝑢 and vice versa.                           𝐻𝑖 = softmax mask(𝐴𝑖 ) 𝑉𝑖 , 𝑂 = (𝐻 1, ..., 𝐻ℎ )𝑊 𝑂                            (3)
+  Intuitively, each token tree represents a set of token se-               where 𝑄𝑖 , 𝐾𝑖 , and 𝑉𝑖 denote the query, key, and value tensors
+                                                                                                                      𝑄
+quences. Merging multiple token trees produces a new tree                  of the 𝑖-th attention head (1 ≤ 𝑖 ≤ ℎ), 𝑊𝑖 , 𝑊𝑖𝐾 , and 𝑊𝑖𝑉 are
+that includes all token sequences of the original trees. For               the corresponding weight matrices. 𝐴𝑖 is an 𝑙 × 𝑙 matrix that
+example, Figure 3 shows the token tree derived by merging                  represents the attention scores between different tokens in
+four sequences of tokens. Each token sequence is identified                the input sequence, where 𝑙 is the sequence length. To pre-
+by a node in the merged token tree.                                        serve causality when generating tokens (i.e., a token in the
+                                                                       6
+sequence should not affect the hidden states of any preceding                        and involves redundant computation, since two token se-
+tokens), the following causal mask function is applied:                              quences sharing a common prefix have the same attention
+                              (                                                      outputs for the common prefix due to the causal mask in
+                                𝐴 𝑗𝑘 𝑗 ≥ 𝑘                                           Equation 3. In addition, launching one kernel for each token
+                 mask(𝐴) 𝑗𝑘 =                .             (4)
+                                −∞ 𝑗 < 𝑘                                             sequence introduces additional kernel launch overhead.
+                                                                                       SpecInfer introduces two key techniques to realize tree-
+Intuitively, when computing the attention output of the 𝑗-th
+                                                                                     based parallel decoding.
+token in the sequence, all subsequent tokens should have
+an attention score of −∞ to indicate that the subsequent                                Depth-first search to update key-value cache. Instead
+tokens will not affect the attention output of the 𝑗-th token2 .                     of caching the keys and values for individual token sequences
+In Equation 3, 𝐻𝑖 represents the output of the 𝑖-th attention                        of a token tree, SpecInfer reuses the same key-value cache
+head, and 𝑊𝑂 is a weight matrix used for computing the final                         across all token sequences by leveraging a depth-first search
+output of the attention layer.                                                       mechanism to traverse the token tree, as shown in Figure 4,
+   Note that the attention mechanism described above ap-                             where SpecInfer visits 𝑡 2, 𝑡 3, ..., 𝑡 9 by following a depth-first
+plies only to a sequence of tokens. We generalize the atten-                         order to traverse the token tree and update the shared key-
+tion mechanism to arbitrary tree structures.                                         value cache. This approach allows SpecInfer to maintain
+Definition 4.1 (Tree Attention). For a token tree 𝒩 and an                           the correct keys and values for all preceding tokens when
+arbitrary node 𝑢 ∈ 𝒩 , its tree attention is defined as the out-                     computing the attention output of a new token.
+put of computing the original Transformer-based sequence
+                                                                                         Topology-aware causal mask. A straightforward ap-
+attention on 𝑆𝑢 (i.e., the token sequence represented by 𝑢):
+                                                                                     proach to computing tree attention is calculating the tree
+         TreeAttention(𝑢) = Attention(𝑆𝑢 )∀𝑢 ∈ 𝒩                          (5)        attention output for individual tokens by following the depth-
+                                                                                     first order described earlier. However, this approach would
+   For a given set of token sequences, since each sequence 𝑆                         result in high GPU kernel launch overhead since each kernel
+is covered by a node of the merged token tree, performing                            only computes tree attention for one token sequence. In ad-
+tree attention on the token tree allows SpecInfer to obtain                          dition, executing these kernels in parallel requires additional
+the attention output for all token sequences.                                        GPU memory to store their key-value caches separately due
+                                                                                     to cache conflict. A key challenge that prevents SpecInfer
+4.2      Tree-based Parallel Decoding
+                                                                                     from batching multiple tokens is that the attention computa-
+This section describes SpecInfer’s tree-based parallel decoding                      tion for different tokens requires different key-value caches
+mechanism for computing tree attention for all tokens in a to-                       and therefore cannot be processed in parallel.
+ken tree in parallel. A key challenge SpecInfer must address                             We introduce topology-aware casual mask to fuse tree at-
+in computing tree attention is managing key-value cache.                             tention computation of all tokens in a single kernel. To batch
+In particular, the attention mechanism of Transformer [48]                           attention computation, SpecInfer uses a tree topology in-
+requires accessing the keys and values of all preceding to-                          stead of the original sequence topology to store the keys and
+kens to compute the attention output of each new token,                              values of all tokens in a token tree in the key-value cache. For
+as shown in Equation 3. To avoid recomputing these keys                              example, to compute tree attention for the speculated token
+and values, today’s LLM inference systems generally cache                            tree shown in Figure 4, SpecInfer takes both verified tokens
+the keys and values of all tokens for reuse in future iter-                          (i.e., 𝑡 2 ) and all speculated tokens (i.e., 𝑡 3, 𝑡 4, ..., 𝑡 9 ) as inputs.
+ations, since the causal relation guarantees that a token’s                          This approach allows SpecInfer to fuse the attention compu-
+key and value remain unchanged in subsequent iterations                              tation into a single kernel but also results in attention scores
+(i.e., mask(A)jk = −∞ for any 𝑗 < 𝑘). However, when com-                             that violate the causal dependency (e.g., 𝑡 7 ’s attention com-
+puting tree attention, different sequences in a token tree                           putation uses all previous tokens, including 𝑡 5 which is not
+may include conflicting key-value caches. For example, for                           in 𝑡 7 ’s token sequence). To fix the attention scores for these
+the speculated token tree in Figure 4, two token sequences                           pairs, SpecInfer updates the causal mask based on the token
+(𝑡 2, 𝑡 3, 𝑡 4, 𝑡 5 ) and (𝑡 2, 𝑡 3, 𝑡 8, 𝑡 9 ) have different keys and values       tree’s topology. This approach computes the exact same at-
+for the third and fourth positions.                                                  tention output as incremental decoding, while resulting in
+    A straightforward approach to supporting key-value cache                         much fewer kernel launches compared to sequence-based
+is employing the sequence-based decoding of existing LLM                             decoding.
+inference systems and using a different key-value cache for
+each sequence of a token tree, as shown on the left of Figure 4.                     4.3    Token Verification
+However, this approach is computationally very expensive
+                                                                                     For a given speculated token tree 𝒩 , SpecInfer uses tree-
+2 Note that we use −∞ (instead of 0) to guarantee that the softmax’s output          based parallel decoding (see Section 4.2) to compute its tree
+is 0 for these positions.                                                            attention and generate an output tensor 𝒪 that includes a
+                                                                                 7
+                                                                           𝑡$                         𝑡)   Verified tokens                       Verified tokens’ KV-cache
+                                                                     𝑡#
+                            Speculated
+                                                           𝑡"              𝑡%     𝑡&
+                            Token Tree              𝑡!                                                     Available KV-cache slots              Speculated tokens’ KV-cache
+                                                                     𝑡'    𝑡(
+                                           Sequence-based Parallel Decoding                                                               Tree-based Parallel Decoding
+          Kernel 1: 𝑡! → 𝑡" → 𝑡# → 𝑡$ Kernel 2: 𝑡! → 𝑡" → 𝑡' → 𝑡( Kernel 3: 𝑡! → 𝑡" → 𝑡# → 𝑡% → 𝑡&                                        Kernel 1: 𝑡! , 𝑡" , 𝑡# , 𝑡$ , 𝑡% , 𝑡& , 𝑡' , 𝑡(
+        KV-cache t2 t3 t4 t5 …                                  t2 t3 t8 t9 …                         t2 t3 t4 t6 t7 …                KV-cache     t2   t3   t4   t5   t6   t7   t8   t9    …
+
+
+                            t2 t3 t4 t5                               t2 t3 t8 t9                          t2 t3 t4 t6 t7                               t2 t3 t4 t5 t6 t7 t8 t9
+                                                                t2 ✓ ✓ ✓ ✓                            t2 ✓ ✓ ✓ ✓ ✓
+           Causal t2 ✓ ✓ ✓ ✓                                                                                                                       t2 ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓
+            Mask t3    ✓ ✓ ✓                                    t3         ✓ ✓ ✓                      t3        ✓ ✓ ✓ ✓               Topology- t3           ✓ ✓ ✓ ✓ ✓ ✓ ✓
+                       t4               ✓ ✓                     t8              ✓ ✓                   t4          ✓ ✓ ✓                  Aware t4                 ✓ ✓ ✓ ✓
+                       t5                    ✓                  t8                     ✓              t6             ✓ ✓                Causal t5                      ✓
+                                                                                                      t7                ✓
+                                                                                                                                          Mask                              ✓ ✓
+                                                                                                                                                   t6
+                                                                                                                                                   t7                            ✓
+                                                                                                                                                   t8                                 ✓ ✓
+                                                                                                                                                   t9                                       ✓
+
+
+             Figure 4. Comparing SpecInfer’s tree-based parallel decoding with existing sequence-based decoding.
+
+                                                                                                                 VerifyGreedy function in Algorithm 2 shows how SpecIn-
+                               Stochastic Decoding                                                               fer verifies a speculated token tree 𝒩 with greedy decoding.
+        SSM 1                                                                          LLM
+                                                                                                                 SpecInfer starts from the root of 𝒩 and iteratively exam-
+   P(ui ∣ U, ΘSSM1)                                                             P(ui ∣ U, ΘLLM)                  ines a node’s speculated results against the LLM’s original
+                                     Verification                                                                output. For a node 𝑢 ∈ 𝒩 , SpecInfer successfully specu-
+                                     P(ui ∣ U, ΘLLM)
+           With probability min(1,                    ):                        Normalized residual              lates its next token if 𝑢 includes a child node 𝑣 (i.e., 𝑝 𝑣 = 𝑢)
+                                     P(ui ∣ U, ΘSSM1)           Verified
+                                                                                   distribution
+                                                                                                                 whose token matches the LLM’s output (i.e., 𝑡 𝑣 = 𝒪(𝑢)). In
+                                         else                                                                    this case, SpecInfer finishes its verification for node 𝑢 and
+        SSM 2
+                                                                                                                 moves on to examine its child 𝑣. When the node 𝑢 does not
+   P(ui ∣ U, ΘSSM2)                                                                                              include a child that contains the LLM’s output, SpecInfer
+                                     Verification                                                                adds 𝒪(𝑢) as a verified node in 𝒩 and terminates the verifi-
+                                     P(ui ∣ U, ΘLLM)                            Normalized residual
+           With probability min(1,                    ):        Verified                                         cation process. Finally, all verified nodes are appended to the
+                                     P(ui ∣ U, ΘSSM2)                              distribution
+                                                                                                                 current generated token sequence 𝒱. Token tree verification
+                                         else                                                                    allows SpecInfer to opportunistically decode multiple tokens
+        SSM 3
+                                                                                                                 (instead of a single token in the incremental decoding ap-
+   P(ui ∣ U, ΘSSM3)                                                                                              proach), while preserving the same generative performance
+                                     Verification                                                                as incremental decoding.
+                                     P(ui ∣ U, ΘLLM)
+           With probability min(1,                    ):        Verified
+                                     P(ui ∣ U, ΘSSM3)
+                                                                                                                    Stochastic decoding. To improve the diversity of gener-
+                                         else                                                                    ated tokens, many LLM applications perform stochastic de-
+                                         Failed
+                                                                                                                 coding, which samples a token from a probability distribution
+                                                                                                                 𝑃 (𝑢𝑖 |𝑢 0, ..., 𝑢𝑖 −1 ; Θ𝐿𝐿𝑀 ), where 𝑈 = 𝑢 0, ..., 𝑢𝑖 −1 are previously
+                                                                                                                 generated tokens, 𝑢𝑖 is the next token to generate, and Θ𝐿𝐿𝑀
+Figure 5. Illustrating the multi-step speculative sampling                                                       represents a parameterized LLM.
+mechanism for verifying LLMs with stochastic sampling.                                                              To verify a speculated token tree with stochastic decod-
+                                                                                                                 ing, we introduce a multi-step speculative sampling (MSS)
+                                                                                                                 algorithm to conduct verification, whose pseudocode code
+token for each node 𝑢 ∈ 𝒩 . Next, SpecInfer’s token tree veri-                                                   is shown in the VerifyStochastic function in Algorithm 2
+fier examines the correctness of speculated tokens against                                                       and illustrated in Figure 5. Our method provably preserves
+the LLM. SpecInfer supports both greedy and stochastic sam-                                                      an LLM’s generative performance as incremental decoding
+pling as shown in Algorithm 2.                                                                                   while optimizing the number of speculated tokens that can
+                                                                                                                 be verified. Theorem 4.2 proves its correctness.
+  Greedy decoding. Many LLM applications generate to-
+kens using greedy decoding, which greedily selects the to-                                                       Theorem 4.2. For a given 𝐿𝐿𝑀 and 𝑚 SSMs (i.e., 𝑆𝑆𝑀1 ,...,𝑆𝑆𝑀𝑚 ,
+ken with the highest likelihood in each decoding step. The                                                       let 𝑃 (𝑢𝑖 |𝑈 ; Θ𝐿𝐿𝑀 ) be the probability distribution of sampling
+                                                                                                            8
+a token using stochastic decoding, where 𝑈 = 𝑢 0, ..., 𝑢𝑖 −1 are                                                                     Request Manager                                                                    CPU
+                                                                                Request                                                          Token Tree                                                    Token Tree
+previously generated tokens, 𝑢𝑖 is the next token to generate,                 Scheduling                                                          Merge                                                       Verification
+Θ𝐿𝐿𝑀 represents the parameterized LLM.
+                                                                                                                                                                                                                        GPU1
+   Let 𝑃SpecInfer (𝑢𝑖 |𝑈 ; Θ𝐿𝐿𝑀 , {Θ𝑆𝑆𝑀 𝑗 }) be the probability dis-                                           r1, r2
+                                                                                                                        SSM1
+
+
+
+
+                                                                                                                                                          Speculative Token Trees
+                                                                                                                               SSM-generated Tokens
+
+
+
+
+                                                                                                                                                                                                 LLM-generated Tokens
+                                                                                       Distributing Requests
+tribution of sampling token 𝑢𝑖 using SpecInfer’s multi-step
+                                                                                                               r3, r4                                                                                                   GPU2
+speculative sampling (see the VerifyStochastic function in                                                              SSM1                                                           LLM
+Algorithm 2), where Θ𝑆𝑆𝑀 𝑗 is the 𝑗-th parameterized SSM.                                                                                                                           Tree-based
+                                                                                                                                                                                      Parallel                          GPU3
+                                                                                                               r1, r2
+Then ∀𝑈 , 𝑢𝑖 , Θ𝐿𝐿𝑀 , Θ𝑆𝑆𝑀 𝑗 we have                                                                                    SSM2                                                         Decoding
+
+
+    𝑃 (𝑢𝑖 | 𝑈 ; Θ𝐿𝐿𝑀 ) = 𝑃SpecInfer (𝑢𝑖 | 𝑈 ; Θ𝐿𝐿𝑀 , {Θ𝑆𝑆𝑀 𝑗 })   (6)                                          r3, r4
+                                                                                                                        SSM2
+                                                                                                                                                                                                                        GPU4
+
+
+   A proof of this theorem is presented in [28].
+   We acknowledge that a more straightforward approach to
+                                                                            Figure 6. SpecInfer’s workflow for one iteration of specu-
+preserving the probability distribution of stochastic decoding
+                                                                            lative inference and verification. SpecInfer uses data paral-
+is directly sampling the next token 𝑥 ∼ 𝑃 (𝑢𝑖 | 𝑈 ; Θ𝐿𝐿𝑀 ) and
+                                                                            lelism to serve SSMs, and combine tensor model parallelism
+examining whether 𝑥 is a child node of 𝑢𝑖 −1 in the speculated
+                                                                            and pipeline model parallelism for serving an LLM.
+token tree. We call this approach naive sampling (NS) and
+show that SpecInfer’s multi-step speculative sampling has a
+uniformly lower rejection probability than naive sampling.
+                                                        
+Theorem 4.3. Let 𝑃 reject | MSS, 𝑈 , ΘLLM, {ΘSSM 𝑗 } denote
+                                                                            of speculative inference and token tree verification for the se-
+the probability of rejecting speculation following multi-step               lected requests. Since SSMs are small and can fit in one GPU,
+speculative
+            sampling with abbreviation
+                                           𝑃 (reject | MSS), and           SpecInfer equally distributes GPUs across SSMs and serves
+𝑃 reject | NS, 𝑈 , ΘLLM, {ΘSSM 𝑗 } the probability of rejecting             these SSMs using data parallelism. For example, Figure 6
+speculation following Naive Sampling (NS) with abbreviation                 shows how SpecInfer serves two SSMs and four requests
+𝑃 (reject | NS). Then ∀𝑈 , ΘLLM, {ΘSSM 𝑗 }, we have                         (i.e., 𝑟 1 , 𝑟 2 , 𝑟 3 , and 𝑟 4 ) on four GPUs. The SSM-generated to-
+                                                                            kens are sent back to the request manager, which produces a
+                  𝑃 (reject | MSS) ≤ 𝑃 (reject | NS)
+                                                                            speculated token tree for each request using the tree merge
+   We present a proof of Theorem 4.3 in [28].                               algorithm introduced in §4.
+   Note that prior work has introduced single-step specula-                     SpecInfer serves an LLM using the hybrid parallelization
+tive sampling for sequence-based speculative inference [5,                  strategy introduced in Megatron-LM [41], which uses tensor
+25]. Different from these approaches, SpecInfer leverages                   model parallelism for parallelizing each Transformer layer
+token trees for improving speculative performance, which                    across GPUs within a node, and uses pipeline model paral-
+requires a different verification algorithm. As a result, SpecIn-           lelism for partitioning Transformer layers across nodes. All
+fer performs multi-step verification (see VerifyStochastic                  GPUs perform the tree-based parallel decoding (see §4.2) to
+in Algorithm 2) across all branches of a token to maximize                  compute tree attention scores and send the LLM-generated
+the success rate while preserving equivalence as incremental                tokens back to the request manager, which finally verifies
+decoding. The proposed MSS algorithm not only works for                     the speculated tokens against the LLM’s output (see §4.3).
+merge-based method with multiple SSMs, but also supports                        Note that the overhead introduced by the request manager
+expansion-based method with one SSM and top-𝑘 sampling.                     (i.e., request scheduling, token tree merge, and verification) is
+                                                                            negligible compared to the execution time of LLM inference.
+5      System Design and Implementation                                     In addition, SpecInfer’s request manager and GPU workers
+This section describes the design and implementation of                     only communicate tokens and do not transfer the vector
+SpecInfer’s distributed runtime system (§5.1 and §5.2), ana-                representations of these tokens, which again introduces neg-
+lyzes the computation and memory overheads of speculation                   ligible communication overheads.
+and verification (§5.3), and introduces potential LLM appli-
+cations that can benefit from SpecInfer’s techniques (§5.4).                   Continuous batching. SpecInfer uses continuous batch-
+                                                                            ing introduced in Orca [55] to serve multiple LLM inference
+5.1     SpecInfer’s Runtime Design                                          requests in parallel. Specifically, SpecInfer schedules LLM
+Figure 6 shows the workflow for one iteration of speculative                execution at the granularity of iterations instead of requests.
+inference and verification. SpecInfer’s request manager re-                 After each LLM decoding iteration, SpecInfer checks each re-
+ceives LLM serving requests and schedules these requests for                quest’s status and sends the generated results of all finished
+serving by adapting the iteration-level scheduling policy from              requests to the client. This design also allows SpecInfer to
+Orca [55]. Specifically, SpecInfer iteratively selects requests             start processing newly arrived requests without waiting for
+from a pool of pending requests and performs one iteration                  all current requests to complete.
+                                                                        9
+5.2   SpecInfer’s Implementation                                       of decoding a single token. Therefore, additional memory
+SpecInfer was implemented on top of FlexFlow [21, 47], a dis-          is needed for caching the keys and values, and storing the
+tributed multi-GPU runtime for DNN computation. FlexFlow               attention scores for all tokens. Due to the necessity for sup-
+exposes an API that allows users to define a DNN model in              porting very long sequence length in today’s LLM serving,
+terms of its layers. It is compatible with PyTorch’s model             we observe that the memory overhead associated with token
+definition due to the alignment of underlying operators. For           tree is negligible compared to key-value cache.
+example, the open-source LLMs from HuggingFace [19] can                   Computation overhead. Similarly, the computation over-
+be directly imported into SpecInfer for serving without mod-           head introduced by speculation and verification also comes
+ification. Users can also provide a parallelization strategy,          from two aspects. First, SpecInfer needs to run SSMs in the
+specifying the degree of data, model, and pipeline parallelism         incremental-decoding mode to generate candidate tokens.
+for each layer. A DNN is represented as a computational                When multiple SSMs are employed, SpecInfer processes these
+graph where each node is a region of memory, and each                  SSMs in parallel across GPUs to minimize speculation la-
+edge is an operation on one or more regions. Operations                tency. Second, SpecInfer verifies a token tree by comput-
+can be represented using three levels of abstraction: lay-             ing the attention outputs for an entire token tree, most of
+ers, operators, and tasks. The FlexFlow compiler transforms            which do not match the LLM’s output and therefore are un-
+the computational graph from the highest abstractions (i.e.,           necessary in the incremental-decoding inference. However,
+layers) to the lowest (i.e., tasks). Tasks are also the unit of        the key-value cache mechanism of existing LLM inference
+parallelization; they are non-preemptible, and are executed            systems prevents them from serving a large number of re-
+asynchronously.                                                        quests in parallel, resulting in under-utilized computation
+   CUDA kernel optimizations. Directly launching cuBLAS                resources on GPUs when serving LLMs in incremental de-
+and cuDNN kernels for calculating attention results in high            coding. SpecInfer’s token tree verification leverages these
+kernel launch overhead and does not leverage the shared                under-utilized resources and therefore introduces negligible
+memory available on modern GPUs. To address this ineffi-               runtime overhead compared to incremental decoding.
+ciency, SpecInfer uses a customized kernel built on top of
+                                                                       5.4   Applications
+FasterTransformer [32] for computing attention. Within this
+kernel, each thread block computes a single head for a single          Our speculative inference and token tree verification tech-
+request. The process begins with loading the query tensor              niques can be directly applied to a variety of LLM applica-
+into GPU shared memory accessible by all threads within a              tions. We identify two practical scenarios where LLM infer-
+thread block. Each thread then performs a segment of the               ence can significantly benefit from our techniques.
+query/key product and broadcasts the result to other threads              Distributed LLM inference. The memory requirements
+for computing the max query/key product and exponential                of modern LLMs exceed the capacity of a single compute
+sum. To support tree-based parallel decoding, SpecInfer com-           node with one or multiple GPUs, and the current approach
+putes all tokens within a tree in parallel and leverages the           to addressing the high memory requirement is distributing
+topology-aware causal mask to preserve casuality.                      the LLM’s parameters across multiple GPUs [29]. For ex-
+                                                                       ample, serving a single inference pipeline for GPT-3 with
+5.3   Overhead of Speculation and Verification                         175 billion parameters requires more than 16 NVIDIA A100-
+SpecInfer accelerates generative LLM inference at the cost of          40GB GPUs to store the model parameters in single-precision
+additional memory and computation overheads. This section              floating points. Distributed LLM inference is largely limited
+analyzes these overheads and shows that they are generally             by the latency to transfer intermediate activations between
+one or two orders of magnitude smaller than the memory                 GPUs for each LLM decoding step. While SpecInfer’s ap-
+and computation cost of executing LLM inference.                       proach does not directly reduce the amount of inter-GPU
+                                                                       communications, its verification mechanism can increase
+   Memory overhead. The memory overhead of SpecInfer’s                 the communication granularity and reduce the number of
+speculation-verification approach comes from two aspects.              decoding steps.
+First, in addition to serving an LLM, SpecInfer also needs to
+allocate memory for saving the parameters of one or mul-                  Offloading-based LLM inference. Another practical sce-
+tiple SSMs, which collectively speculate the LLM’s output.             nario that can benefit from SpecInfer’s techniques is offloading-
+Our evaluation shows that SpecInfer can achieve signifi-               based LLM inference, which leverages CPU DRAM to store
+cant performance improvement by using SSMs 100-1000×                   an LLM’s parameters and loads a subset of these parame-
+smaller than the LLM. As a result, hosting each SSM increases          ters to GPUs for computation in a pipeline fashion [40]. By
+the overall memory requirement by less than 1%. A second               opportunistically verifying multiple tokens, SpecInfer can
+source of memory overhead comes from the token tree veri-              reduce the number of LLM decoding steps and the overall
+fication engine, which verifies an entire token tree instead           communication between CPU DRAM and GPU HBM.
+                                                                  10
+6     Evaluation                                                        by using a single pre-trained SSM and sequence-based de-
+6.1   Experimental Setup                                                coding.
+                                                                           We use prompts from the five datasets described in §6.1.
+   LLMs. To compare the runtime performance of SpecInfer
+                                                                        For each prompt, we let all systems generate up to 128 new
+with existing LLM serving systems, we evaluate these sys-
+                                                                        tokens and report the average per-token latency in Figure 7.
+tems using two publicly available LLM families: OPT [57] and
+                                                                        Note that SpecInfer may generate more than 128 new tokens
+LLaMA [46]. More specifically, we select LLaMA-7B, OPT-
+                                                                        since the verifier can verify multiple tokens in each iteration.
+13B, OPT-30B, and LLaMA-65B as the LLMs, and LLaMA-
+                                                                        In this case, we truncate SpecInfer’s output to 128 tokens.
+68M and OPT-125M as the SSMs. The pre-trained model
+                                                                        SpecInfer with incremental decoding achieves on-par perfor-
+parameters for the LLMs and SSMs were obtained from their
+                                                                        mance as existing systems. This is because all systems use
+HuggingFace repositories [19], and we describe how SpecIn-
+                                                                        the same strategies to parallelize LLM inference across GPUs
+fer collectively boost-tunes multiple SSMs in [28].
+                                                                        and use the same kernel libraries (i.e., cuDNN, cuBLAS, and
+                                                                        cuTLASS) to execute inference computation on GPUs. With
+  Datasets. We evaluate SpecInfer on five datasets: Chatbot
+                                                                        tree-based speculative inference and verification, SpecInfer
+Instruction Prompts (CIP) [34], ChatGPT Prompts (CP) [30],
+                                                                        outperforms incremental decoding systems by 1.5-2.5× for
+WebQA [1], Alpaca [36, 45], and PIQA [2]. We only use the
+                                                                        single-node, multi-GPU inference and by 2.4-2.8× for multi-
+prompts/questions from these datasets to form our input
+                                                                        node, multi-GPU inference, while generating the exact same
+prompts to simulate real-world conversation traces.
+                                                                        sequence of tokens as incremental decoding for all prompts.
+                                                                        The speedup comes from leveraging spare GPU resources to
+   Platform. The experiments were conducted on two AWS
+                                                                        perform tree-based parallel decoding while maintaining the
+g5.12xlarge instances, each of which is equipped with four
+                                                                        same per-iteration latency as incremental decoding.
+NVIDIA A10 24GB GPUs, 48 CPU cores, and 192 GB DRAM.
+                                                                           Compared to sequence-based speculative inference, SpecIn-
+Nodes are connected by 100 Gbps Ethernet.
+                                                                        fer’s tree-based approach further reduces LLM serving la-
+   Our experiments use the expansion-based method (see
+                                                                        tency by 1.2-1.5×. The improvement is achieved by (1) lever-
+Section 3) for constructing token trees and use the expan-
+                                                                        aging token trees to optimize speculative performance, (2)
+sion configuration ⟨1, 1, 3, 1, 1, 1, 1, 1⟩, which provides good
+                                                                        using tree-based parallel decoding to verify an entire token
+results for our benchmarks. We analyze the impact of ex-
+                                                                        tree in parallel, and (3) performing multi-step speculative
+pansion configurations in §6.4, evaluate tree-based parallel
+                                                                        sampling to improve verification performance. We further
+decoding and multi-step speculative sampling in §6.5 and
+                                                                        evaluates these aspects in §6.4, §6.5, and §6.6.
+§6.6, and finally compares the expansion- and merge-based
+                                                                           Note that SpecInfer’s performance improvement over ex-
+tree construction methods in [28].
+                                                                        isting systems reduces as the batch size (i.e., number of
+                                                                        concurrent requests) increases. This is because SpecInfer
+6.2   Distributed LLM Inference                                         leverages spare GPU resources to perform tree-based par-
+We compare the end-to-end distributed LLM inference perfor-             allel decoding while maintaining the same per-iteration la-
+mance among SpecInfer, vLLM [24], HuggingFace Text Gen-                 tency as incremental decoding. A larger batch size introduces
+eration Inference (TGI) [18], and FasterTransformer [32] on             more parallelizable computation for incremental decoding,
+LLaMA-7B, OPT-30B, and LLaMA-65B. For LLaMA-7B and                      and thus less spare GPU resources that can be leveraged by
+OPT-30B, all systems serve the two LLMs in half-precision               SpecInfer. On the flip side, larger batch sizes also increase
+floating points across one and four A10 GPUs using tensor               the end-to-end latency of each request, as shown in Figure 7.
+model parallelism. LLaMA-65B do not fit on four GPUs on a               Overall, SpecInfer is most beneficial for low-latency LLM
+single node, therefore both FasterTransformer and SpecInfer             inference.
+serve it on eight A10 GPUs on two nodes by combining ten-
+sor model parallelism within each node and pipeline model               6.3   Offloading-based LLM Inference
+parallelism across nodes. vLLM and HuggingFace TGI do                   Another important application of SpecInfer is offloading-
+not support pipeline model parallelism and cannot serve an              based LLM inference, where the system offloads an LLM’s
+LLM on multiple nodes.                                                  parameters to CPU DRAM and loads a subset of these param-
+   To rule out potential effects of our system implementation,          eters to GPUs for inference computation in a pipeline fashion.
+we also evaluate SpecInfer with two additional configura-               We compare the end-to-end offloading-based LLM inference
+tions. First, SpecInfer with incremental decoding evaluates the         performance between SpecInfer and FlexGen [39] using a
+runtime performance of our implementation when the spec-                single 24GB A10 GPU and two LLMs (i.e., OPT-13B and OPT-
+ulator generates empty token trees, and the verifier verifies           30B), both of which exceed the memory capacity of an A10
+exactly one token in each decoding step. Second, SpecInfer              GPU and requires offloading for serving. Both SpecInfer and
+with sequence-based speculative inference serves as a refer-            FlexGen retain all model parameters on CPU DRAM. During
+ence for existing speculative inference system and is enabled           computation, the demand weights are loaded from the CPU
+                                                                   11
+                                            vLLM                                  FasterTransformer                                                                                              SpecInfer w/ Sequence-based Speculative Inference
+                                            HuggingFace TGI                       SpecInfer w/ Incremental Decoding                                                                              SpecInfer w/ Tree-based Speculative Inference
+
+                                     40                                                                                                                                                                                   120
+                                                                                                      60
+         Per-token latency (ms)
+
+
+
+
+                                     35
+                                                                                                      50                                                                                                                  100
+                                     30
+
+                                                                                                      40                                                                                                                     80
+                                     25
+
+                                     20                                                               30                                                                                                                     60
+
+                                     15
+                                                                                                      20                                                                                                                     40
+                                     10
+                                                                                                      10                                                                                                                     20
+                                      5
+
+                                      0                                                                0                                                                                                                      0
+                                           BS=1         BS=2    BS=4      BS=8     BS=16                     BS=1    BS=2        BS=4                             BS=8                                 BS=16                        BS=1         BS=2       BS=4         BS=8    BS=16
+                                                         LLaMA-7B                                                          OPT-30B                                                                                                                    LLaMA-65B
+                                                    (1 GPU/node, 1 node)                                             (4 GPUs/node, 1 node)                                                                                                      (4 GPUs/node, 2 nodes)
+
+Figure 7. Comparing the end-to-end inference latency of SpecInfer with existing systems. Numbers in parenthesis show the
+number of GPUs and compute node used to serve each LLM. All systems parallelize LLM inference by combining tensor model
+parallelism (within a node) and pipeline parallelism (across nodes).
+
+                                                                                                                                                                                                                                                4.0
+
+                                                                                                                                  Average # verified tokens
+                                                                FlexGen            SpecInfer                                                                                           Tree            width   =   1
+                                                                                                                                                              8
+                                                                                                                                      per decoding step
+                                                                                                                                                                                       Tree            width   =   2                            3.5
+ Per-token latency (seconds)
+
+
+
+
+                               2.0
+                                                                                                                                                                                       Tree            width   =   3
+                                                                              4                                                                                                        Tree            width   =   4                            3.0
+                                                                                                                                                              6
+                               1.5                                                                                                                                                     Tree            width   =   5
+                                                                                                                                                                                                                                                2.5
+                                                                              3                                                                               4
+                                                                                                                                                                                                                                                2.0
+                               1.0
+                                                                2.7x   2.6x   2                                      2.7x                                                                                                                       1.5
+                                          3.3x   3.3x    3.1x                                         3.0x    3.0x                                            2
+                                                                                     3.5x      3.3x
+                               0.5                                                                                                                                                                                                              1.0
+                                                                              1                                                                                   0.0                            0.2       0.4         0.6        0.8     1.0         0.0   0.2    0.4     0.6    0.8    1.0
+                                                                                                                                                                                                            CDF                                                      CDF
+                                                                                                                                                                                                       Greedy decoding                                        Stochastic decoding
+                               0.0                                            0
+                                      BS=1 BS=2 BS=4 BS=8 BS=16                    BS=1 BS=2 BS=4 BS=8 BS=16
+                                               OPT-13B                                      OPT-30B
+                                                                                                                                  Figure 9. Comparing speculative performance of SpecInfer
+                                                                                                                                  with different token tree structures.
+Figure 8. Comparing the end-to-end offloading-based infer-
+ence latency of FlexGen and SpecInfer. Both FlexGen and
+                                                                                                                                                                                                                   Tree   width   =   1
+SpecInfer perform model offloading to serve OPT-13B and                                                                                                                                          40
+                                                                                                                                                                                                                   Tree   width   =   2
+                                                                                                                                                                        Per-token latency (ms)
+
+
+
+
+OPT-30B models on a single 24GB A10 GPU.                                                                                                                                                                           Tree   width   =   3
+                                                                                                                                                                                                 35
+                                                                                                                                                                                                                   Tree   width   =   4
+                                                                                                                                                                                                                   Tree   width   =   5
+                                                                                                                                                                                                 30
+
+to the GPU. Figure 8 shows the results. Compared to FlexGen,
+                                                                                                                                                                                                 25
+SpecInfer reduces the per-token latency by 2.6-3.5×. Since
+offloading-based LLM inference is mostly bottlenecked by                                                                                                                                         20
+
+the communication between CPU DRAM and GPU HBM for
+                                                                                                                                                                                                 15
+loading an LLM’s parameters, SpecInfer’s improvement over
+existing systems is achieved by opportunistically verifying
+multiple tokens, which in turn reduces the number of LLM                                                                                                                                               BS=1               BS=2             BS=4             BS=8          BS=16
+
+decoding steps and data transfers between CPU and GPU.
+                                                                                                                                  Figure 10. SpecInfer’s end-to-end inference latency with
+6.4                                  Token Tree Construction                                                                      different tree widths. We use LLaMA-7B and LLaMA-68M
+                                                                                                                                  as the LLM and SSM.
+This section evaluates the expansion-based token tree con-
+struction mechanism. We first study how token tree width
+affects SpecInfer’s speculative performance. In this experi-                                                                      step for all prompts in the Alpaca dataset [45]. Compared to
+ment, we use LLaMA-7B and LLaMA-68M as the LLM and                                                                                sequence-based speculation (i.e., tree width = 1), leveraging
+SSM, and use the expansion configuration ⟨1, 1, 𝑘, 1, 1, 1, 1, 1⟩                                                                 token trees can reduce LLM decoding steps by 1.2-1.5× for
+(i.e., expanding at the third token), where 𝑘 is the token tree                                                                   greedy decoding and by 1.3-1.4× for stochastic decoding.
+width. Figure 9 shows the cumulative distribution function                                                                           A larger token tree width reduces the LLM decoding steps
+(CDF) of the average number of verified tokens per decoding                                                                       to process a request at the cost of increased verification
+                                                                                                                            12
+Table 2. Average number of tokens verified by SpecInfer in                                     Table 3. Average number of tokens verified by SpecInfer in a
+a decoding step. We use LLaMA-7B and LLaMA-68M as the                                          stochastic decoding step with different sampling algorithms.
+LLM and SSM, and use different tree widths for constructing                                    We use LLaMA-7B and LLaMA-68M as the LLM and SSM.
+a token tree. The speculation length is 8.                                                     Each token tree has a width of 5 and a depth of 8.
+
+                                                        Token tree width                                      Naive          Multi-Step Improvement
+                                       Dataset     1      2    3     4              5                      Sampling      Spec. Sampling
+                                       Alpaca    2.95   3.07    3.21        3.33   3.43         Alpaca            1.87                2.38             1.27×
+      decoding
+
+
+
+
+                                                                                   3.69
+       Greedy
+
+
+
+
+                                       CP        2.58   3.24    3.46        3.59                CP                1.80                2.28             1.26×
+                                       WebQA     2.27   2.69    2.86        2.98   3.07         WebQA             1.73                2.21             1.28×
+                                       CIP       2.73   3.40    3.62        3.79   3.91         CIP               1.79                2.29             1.28×
+                                       PIQA      2.18   2.80    2.97        3.10   3.21         PIQA              1.73                2.21             1.28×
+                                       Alpaca    1.79   2.11    2.26        2.32   2.38
+      Stochastic
+      decoding
+
+
+
+
+                                       CP        1.69   1.99    2.15        2.23   2.28
+                                       WebQA     1.64   1.93    2.08        2.15   2.21        token tree in parallel. As a comparison, all existing LLM infer-
+                                       CIP       1.72   2.05    2.19        2.28   2.29        ence systems use sequence-based decoding, which requires
+                                       PIQA      1.67   1.93    2.08        2.15   2.21        decomposing a token tree into multiple sequences of tokens
+                                                                                               and processing these sequences using separate resources due
+                                                                                               to potential key-value cache conflicts (see §4.2). As shown in
+                                  30
+                                           Sequence-based Decoding                             Figure 11, SpecInfer’s tree-based parallel decoding achieves
+                                           Tree-based Decoding                                 on-par performance as existing sequence-based decoding
+         Per-token latency (ms)
+
+
+
+
+                                  25
+                                                                                               mechanism for small batch sizes and outperforms it by up
+                                  20                                                           to 1.8× for large batch sizes. The improvement is realized
+                                                                                               by (1) eliminating redundant attention computation for se-
+                                  15
+                                                                                               quences with a shared prefix, and (2) fusing tree attention
+                                  10                                                           of all tokens in a single kernel through the topology-aware
+                                                                                               casual mask (see §4.2).
+                                   5
+
+
+                                   0
+                                                                                               6.6   Multi-Step Speculative Sampling
+                                        BS=1     BS=2    BS=4        BS=8      BS=16
+                                            LLM: LLaMA-7B, SSM: LLaMA-68M                      This section evaluates how our multi-step speculative sam-
+                                                                                               pling (MSS) and the VerifyStochastic algorithm improves
+Figure 11. Comparing SpecInfer’s tree-based parallel decod-                                    the speculative performance of SpecInfer when performing
+ing with the sequence-based decoding mechanism employed                                        stochastic decoding. We use naive sampling as a baseline
+by existing LLM inference systems.                                                             where SpecInfer directly samples the next token from the
+                                                                                               LLM and examines whether the sampled token is included
+                                                                                               in the speculated token tree (see §4.3). Since different sam-
+overhead, since SpecInfer must verify more tokens. Figure 10                                   pling algorithms involve identical speculation and verifica-
+compares the end-to-end inference latency of SpecInfer using                                   tion overheads, we focus on the average number of tokens
+different tree widths. For small batch sizes (i.e., BS = 1 and 2),                             that can be verified in each stochastic decoding step in this
+using a large tree width can consistently reduce per-token                                     experiment. Table 3 shows the results. Compared to naive
+latency, since SpecInfer can leverage sparse GPU resources                                     sampling, MSS can consistently improve the number of veri-
+to verify more tokens in parallel while maintaining the same                                   fied tokens by 1.2-1.3× on average across a variety of prompt
+per-iteration latency. For large batch sizes (i.e., BS ≥ 4),                                   datasets, while guaranteeing the same output distribution
+using a large tree width increases the latency to verify a                                     with the LLM.
+token tree due to less sparse GPU resources that can be
+leveraged by SpecInfer, and a tree width of 2 or 3 achieves                                    7     Related Work
+the best performance by striking a perfect balance between                                     Transformer-based LLMs have demonstrated significant po-
+speculative performance and verification latency.                                              tential in numerous human-level language modeling tasks by
+                                                                                               continuously increasing their sizes [7, 9, 37, 43, 48]. As GPT-
+6.5   Tree-based Parallel Decoding                                                             3 becomes the first model to surpass 100B parameters [3],
+We now evaluate the effectiveness of SpecInfer’s tree-based                                    multiple LLMs (>100B) have been released, including OPT-
+parallel decoding mechanism, which decodes all tokens of a                                     175B [57], Bloom-176B [38], and PaLM [7]. Recent work has
+                                                                                          13
+proposed a variety of approaches to accelerating generative            more parallelizable way, which reduces memory accesses
+LLM inference, which can be categorized into two classes.              and inference latency at the cost of manageable memory and
+                                                                       computation overheads.
+   Lossless acceleration. Prior work has explored the idea of
+using an LLM as a verifier instead of a decoder to boost infer-
+ence. For example, Yang et al. [53] introduced inference with             Tree-structured attention. Nguyen et al. [31] introduced
+reference, which leverages the overlap between an LLM’s out-           tree-structured attention, a technique that lets a Transformer
+put and the references obtained by retrieving documents, and           model capture the hierarchical composition of input text by
+checks each reference’s appropriateness by examining the               running the model on the text’s parse tree. To process with
+decoding results of the LLM. Motivated by the idea of specula-         attention, it uses a one-on-one mapping to encode and de-
+tive execution in processor optimizations [4, 16], recent work         code the tree. There are two key differences from SpecInfer’s
+proposed speculative decoding, which uses a small language             tree-based decoding. First, SpecInfer uses a tree to combine
+model to produce a sequence of tokens and examines the                 candidate sequences to condense prefixes, whereas Nguyen
+correctness of these tokens using an LLM [5, 22, 25, 44, 51].          et al. represent a single sequence with its parse tree. SpecInfer
+There are two key differences between SpecInfer and these              does not incorporate parse tree into the LLM, but accelerates
+prior works. First, instead of only considering a single se-           inference by verifying decoded sequences in parallel. Second,
+quence of tokens, SpecInfer generates and verifies a token             SpecInfer’s attention outputs a token sequence, not a tree.
+tree, whose nodes each represent a unique token sequence.
+SpecInfer performs tree attention to compute the attention                Multi-sample decoding techniques. Like tree-based spec-
+output of these token sequences in parallel and uses a novel           ulative inference, beam search, top-k sampling, and top-p sam-
+tree-based decoding algorithm to reuse intermediate results            pling consider multiple candidate token sequences at each
+shared across these sequences. Second, prior attempts gener-           step and can prune low-probability options. However, tree-
+ally consider a single small language model for speculation,           based decoding in SpecInfer speculatively predicts and veri-
+which cannot align well with an LLM due to the model ca-               fies multiple candidates in parallel against an LLM to reduce
+pacity gap between them. SpecInfer introduces two novel                decoding iterations and latency, leveraging small specula-
+speculation methods, including 1) expanding from a single              tive models (SSMs). In contrast, beam search and top-k/top-
+SSM and 2) merging from multiple fine-tuned SSMs, and the              p sampling are decoding strategies applied directly to the
+generated token tree largely increases the coverage of the             LLM’s output probabilities to generate high-probability se-
+LLM’s output.                                                          quences without reducing decoding steps. SpecInfer supports
+   Prior work has also introduced a variety of techniques to           beam search, top-k sampling, and top-p sampling. These tech-
+optimize ML computations on modern hardware platforms.                 niques are orthogonal decoding optimizations and can be
+For example, TVM [6] and Ansor [58] automatically gen-                 combined with tree-based speculative decoding.
+erate kernels for a given tensor program. TASO [20] and
+PET [50] automatically discover graph-level transformations
+to optimize the computation graph of a DNN. SpecInfer’s                8   Conclusion
+techniques are orthogonal and can be combined with these               This paper introduces SpecInfer, a system that accelerates
+systems to accelerate generative LLM computation, which                generative LLM inference with tree-based speculative in-
+we believe is a promising avenue for future work.
+                                                                       ference and verification. A key insight behind SpecInfer is
+   Lossy acceleration. BiLD [23] is a speculative decoding             to simultaneously consider a diversity of speculation can-
+framework that uses a single SSM to accelerate LLM decod-              didates to efficiently predict the LLM’s outputs, which are
+ing. Unlike the systems mentioned above, the acceleration              organized as a token tree and verified against the LLM in
+is lossy: speed comes at the cost of a possible degradation            parallel using a tree-based parallel decoding mechanism.
+in the generated tokens. Another line of research leverages            SpecInfer significantly reduces the memory accesses to the
+model compression to reduce LLM inference latency while                LLM’s parameters and the end-to-end LLM inference latency
+compromising the predictive performance of the LLM. For                for both distributed and offloading-based LLM inference.
+example, prior work proposed to leverage weight/activation
+quantization of LLMs to reduce the memory and computa-
+tion requirements of serving these LLMs [8, 11, 35, 52, 54].           Acknowledgement
+Recent work further explores a variety of structured prun-             We thank Tianqi Chen, Bohan Hou, Hongyi Jin, the anony-
+ing techniques for accelerating Transformer-based architec-            mous ASPLOS reviewers, and our shepherd Shan Lu for their
+tures [10, 17, 49]. A key difference between SpecInfer and             feedback on this work. This research is partially supported by
+these prior works is that SpecInfer does not directly reduce           NSF awards CNS-2147909, CNS-2211882, and CNS-2239351,
+the computation requirement for performing LLM inference,              and research awards from Amazon, Cisco, Google, Meta,
+but instead reorganizing LLM inference computation in a                Oracle, Qualcomm, and Samsung.
+                                                                  14
+A         Artifact Appendix                                                and provide scripts and a conda environment to install all
+A.1       Abstract                                                         the remaining dependencies.
+The artifact contains the code to run SpecInfer, as well as                A.3.4 Models. We use the following LLM/SSM models for
+the datasets and scripts that can be used to reproduce the                 our experiments (for each model, we specify in parentheses
+experiments in the paper.                                                  the corresponding HuggingFace repository): LLaMA-68M
+                                                                           (JackFram/llama-68m), LLaMA-7B (huggyllama/llama-7b),
+A.2       Artifact check-list (meta-information)                           LLaMA-65B (huggyllama/llama-65b), OPT-125M (facebook/opt-
+      •   Algorithm: Tree-based Speculative Inference                      125m), OPT-13B (facebook/opt-13b), OPT-125M (facebook/opt-
+      •   Program: spec_infer.cc, incr_decoding.cc                         30b). You can download all these models with the script:
+      •   Compilation: CMake
+                                                                           ./ download_models . sh
+      •   Run-time environment: CUDA, NCCL, MPI, UCX, Python3.
+      •   Hardware: Two AWS g5.12xlarge instances, each with 4
+          NVIDIA A10 24GB GPUs, 48 CPU cores, and 192 GB DRAM.             A.4   Installation
+      •   Metrics: End to-end average latency
+      •   Output: End-to-end latency                                       To reproduce the experiments, you will need access to two
+      •   Experiments: Server-grade GPU inference, Offloading-             AWS g5.12xlarge instances (or other machines with the same
+          based inference                                                  GPU/CPU/network specs). If you are using the preconfigured
+      •   How much disk space required (approximately)?: 350GB             instances we provided, you can skip this step.
+          per node
+      •   How much time is needed to prepare workflow (ap-
+                                                                              Launching the instances. Launch two AWS g5.12xlarge
+          proximately)?: 2h                                                instances using the Deep Learning OSS Nvidia Driver
+      •   How much time is needed to complete experiments                  AMI GPU PyTorch 2.1.0 (Ubuntu 20.04) AMI. Make sure
+          (approximately)?: 6h                                             to place the instances in a placement group that utilizes the
+      •   Publicly available?: Yes                                         cluster strategy to achieve low-latency network performance.
+      •   Code licenses (if publicly available)?: Apache License           Attach the same security group to all instances and add an
+          v2.0                                                             inbound rule in the security group to allow all incoming
+      •   Data licenses (if publicly available)?: LLAMA is under           traffic from the same security group. For example, you can
+          the GNU license and OPT is under a Non-commercial license        add the following rule: Type: All TCP, Source: Anywhere-
+      •   Archived (provide DOI)?: https://doi.org/10.5281/zenodo.         IPv4.
+          10854410.
+                                                                              Installing the prerequisites. After gaining access to the
+A.3       Description                                                      AWS instances, install the prerequisites by following the
+A.3.1 How to access. The artifact is released on Github:                   steps below. First, activate the conda shell support by running
+https://github.com/goliaro/specinfer-ae. The repository con-               conda init bash, and then restarting the shell session.
+tains SpecInfer’s source code, and the instructions to build               Next, create the conda environment with all the required
+the framework. We also provide scripts to reproduce the                    dependencies by running:
+experiments from the paper. To clone the repository, use                   conda env create -f FlexFlow / conda / flexflow . yml
+the following command (make sure to pass the –recursive                    conda activate flexflow
+flag):
+
+git clone -- recursive \
+                                                                              Multinode setup. Download and build UCX by running
+https :// github . com / goliaro / specinfer - ae . git                    the install_ucx.sh script. Next, if you are running SpecIn-
+                                                                           fer on two AWS instances, you will need to configure MPI so
+                                                                           that the two instances are mutually accessible. Pick a main
+A.3.2 Hardware dependencies. We run out experiments                        node, and create a SSH key pair with:
+on two AWS g5.12xlarge instances, each with 4 NVIDIA A10                         ssh - keygen -t ed25519
+24GB GPUs, 48 CPU cores, and 192 GB DRAM. We provide
+instructions to create and setup the instances.                            Append the contents of the public key (~/.ssh/id_ed25519.pub)
+                                                                           to the ~/.ssh/authorized_keys file on BOTH the main
+A.3.3 Software dependencies. The following software                        and secondary machine. Note that if the .ssh folder or the
+is required: CUDA 12.1, NCCL, Rust, CMake and Python3.                     authorized_keys file do not exist, you will need to create
+Further, UCX and MPI are required for the multinode experi-                them manually. Finally, create a file at the path ~/hostfile
+ments. Additional Python dependencies are listed here: https:              with the following contents:
+//github.com/flexflow/FlexFlow/blob/inference/requirements.
+txt. We recommend using the Deep Learning OSS Nvidia                       < main_node_private_ip > slots =4
+Driver AMI GPU PyTorch 2.1.0 (Ubuntu 20.04) AMI,                           < secondary_node_private_ip > slots =4
+                                                                      15
+replacing <main_node_private_ip> and <secondary_node_private_ip> than the available GPU memory. In the experiment,
+with the private IP addresses of the two machines, and the         SpecInfer uses a single GPU and swaps the model’s
+number of slots with the number of GPUs available (if you          weights to and from the CPU. To run the offloading
+are using the recommended AWS instances, you will use a            evaluation, run:
+value of 4). You can find each machine’s private IP address
+                                                                   ./ offloading_experiments . sh
+by running the command (and use the first IP value that is
+printed):
+                                                                Third-party frameworks. Please follow the vLLM, Faster-
+      hostname -I                                            Transformer, and HuggingFace TGI, and FlexGen official doc-
+                                                             umentation to reproduce the performance of the third-party
+  Install SpecInfer. To install SpecInfer, run the script:   frameworks under the experiment scenarios.
+./ install_specinfer . sh
+                                                                            Output data. The scripts above will generate data at
+                                                                         the FlexFlow/inference/output path. For each scenario,
+A.5     Basic Test                                                       a .txt file contains the generated output for each prompt,
+To ensure that SpecInfer is installed correctly and is func-             and a .out file contains the stdout logs. The quality of the
+tional, run the basic_test.sh script. This script will test              generated output can be evaluated visually and compared
+the basic incremental decoding and speculative inference                 with the output from third-party inference frameworks. We
+functionalities, on both single and multi nodes. It will also            provide scripts to parse the raw output data and generate
+test the support for offloading. The test passes if it prints the        CSV files that can be used to generate the paper’s figures. The
+"Test passed!" message.                                                  README provides all details on the scripts and the mapping
+                                                                         between CSV files and figures.
+A.6     Experiment workflow
+The artifact comes with scripts to gather the data that can be           A.7    Evaluation and expected results
+used to reproduce the results from the paper. It also comes              The data from the CSV files should show similar performance
+with scripts that can be used to convert the output data into            to the figures from the paper. Some variability is to be ex-
+CSV format for plotting.                                                 pected, but overall, SpecInfer should behave according to
+                                                                         Figures 7-11 from the paper.
+  Running Experiments. We run the following two exper-
+iments to evaluate SpecInfer under different hardware setups. A.8 Experiment customization
+The output data will be saved to the FlexFlow/inference/outputUsers can edit the configuration parameters from the evalu-
+path.                                                         ation scripts to change various parameters, such as the num-
+   • Server-grade GPU evaluation. This experiment tests       ber of GPUs/CPUs, GPU/CPU memory, batch size, LLM/SSM
+      the performance of SpecInfer on server-grade GPUs.      models used, prompt dataset, full vs. half-precision, and the
+      The LLMs and SSMs are loaded in GPU memory, and         maximum number of tokens to generate.
+      we measure the end-to-end inference latency using 1
+      node, and 2 nodes. In the single node case, we measure  References
+      the performance using 1 GPU, or 4 GPUs. In the multin-   [1] Jonathan Berant, Andrew Chou, Roy Frostig, and Percy Liang. Seman-
+      ode case, we use 4GPUs per node. The experiments use         tic parsing on Freebase from question-answer pairs. In Proceedings
+      LLAMA-7B, OPT-30B and LLAMA-65B as the LLMs,                 of the 2013 Conference on Empirical Methods in Natural Language Pro-
+      and LLAMA-68M and OPT-125M as SSMs. The exper-               cessing, pages 1533–1544, Seattle, Washington, USA, October 2013.
+                                                                   Association for Computational Linguistics.
+      iment runs SpecInfer in three different modes: incre-
+                                                               [2] Yonatan Bisk, Rowan Zellers, Ronan Le Bras, Jianfeng Gao, and Yejin
+      mental decoding, sequence-based speculative decod-           Choi. Piqa: Reasoning about physical commonsense in natural lan-
+      ing, and tree-based speculative decoding. The former         guage. In Thirty-Fourth AAAI Conference on Artificial Intelligence,
+      two are used to obtain data for the ablation study, and      2020.
+      the latter is the novel inference mode proposed by       [3] Tom B. Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared
+                                                                   Kaplan, Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam,
+      SpecInfer, and will be deployed by the user. To run the
+                                                                   Girish Sastry, Amanda Askell, Sandhini Agarwal, Ariel Herbert-Voss,
+      server-grade GPU evaluation, run:                            Gretchen Krueger, Tom Henighan, Rewon Child, Aditya Ramesh,
+        ./ server_gpu_experiments . sh                                        Daniel M. Ziegler, Jeffrey Wu, Clemens Winter, Christopher Hesse,
+                                                                              Mark Chen, Eric Sigler, Mateusz Litwin, Scott Gray, Benjamin Chess,
+      • Offloading evaluation. This experiment tests the                      Jack Clark, Christopher Berner, Sam McCandlish, Alec Radford, Ilya
+        performance of SpecInfer when loading only a subset                   Sutskever, and Dario Amodei. Language models are few-shot learners,
+                                                                              2020.
+        of parameters in GPU memory, while offloading the                 [4] F Warren Burton. Speculative computation, parallelism, and functional
+        remaining ones on CPU DRAM. This technique is used                    programming. IEEE Transactions on Computers, 100(12):1190–1193,
+        to perform inference when the target model is larger                  1985.
+                                                                    16
+ [5] Charlie Chen, Sebastian Borgeaud, Geoffrey Irving, Jean-Baptiste                       https://vllm.ai/ (accessed 9 August 2023), 2023.
+     Lespiau, Laurent Sifre, and John Jumper. Accelerating large lan-                  [25] Yaniv Leviathan, Matan Kalman, and Yossi Matias. Fast inference from
+     guage model decoding with speculative sampling. arXiv preprint                         transformers via speculative decoding. arXiv preprint arXiv:2211.17192,
+     arXiv:2302.01318, 2023.                                                                2022.
+ [6] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin Zheng, Eddie Yan,              [26] Jiachang Liu, Dinghan Shen, Yizhe Zhang, Bill Dolan, Lawrence Carin,
+     Haichen Shen, Meghan Cowan, Leyuan Wang, Yuwei Hu, Luis Ceze,                          and Weizhu Chen. What makes good in-context examples for gpt-3?
+     Carlos Guestrin, and Arvind Krishnamurthy. TVM: An automated                           arXiv preprint arXiv:2101.06804, 2021.
+     end-to-end optimizing compiler for deep learning. In 13th USENIX                  [27] Xupeng Miao, Gabriele Oliaro, Zhihao Zhang, Xinhao Cheng, Hongyi
+     Symposium on Operating Systems Design and Implementation (OSDI                         Jin, Tianqi Chen, and Zhihao Jia. Towards efficient generative large
+     18), pages 578–594, 2018.                                                              language model serving: A survey from algorithms to systems. arXiv
+ [7] Aakanksha Chowdhery, Sharan Narang, Jacob Devlin, Maarten Bosma,                       preprint arXiv:2312.15234, 2023.
+     Gaurav Mishra, Adam Roberts, Paul Barham, Hyung Won Chung,                        [28] Xupeng Miao, Gabriele Oliaro, Zhihao Zhang, Xinhao Cheng, Zeyu
+     Charles Sutton, Sebastian Gehrmann, et al. Palm: Scaling language                      Wang, Rae Ying Yee Wong, Zhuoming Chen, Daiyaan Arfeen, Reyna
+     modeling with pathways. arXiv preprint arXiv:2204.02311, 2022.                         Abhyankar, and Zhihao Jia. Specinfer: Accelerating generative llm
+ [8] Tim Dettmers, Mike Lewis, Younes Belkada, and Luke Zettlemoyer.                        serving with speculative inference and token tree verification. arXiv
+     Gpt3. int8 (): 8-bit matrix multiplication for transformers at scale.                  preprint arXiv:2305.09781, 2023.
+     Advances in Neural Information Processing Systems, 35:30318–30332,                [29] Xupeng Miao, Chunan Shi, Jiangfei Duan, Xiaoli Xi, Dahua Lin, Bin
+     2022.                                                                                  Cui, and Zhihao Jia. Spotserve: Serving generative large language
+ [9] Nan Du, Yanping Huang, Andrew M Dai, Simon Tong, Dmitry Lep-                           models on preemptible instances. arXiv preprint arXiv:2311.15566,
+     ikhin, Yuanzhong Xu, Maxim Krikun, Yanqi Zhou, Adams Wei Yu,                           2023.
+     Orhan Firat, et al. Glam: Efficient scaling of language models with               [30] MohamedRashad. Chatgpt-prompts. https://huggingface.co/datasets/
+     mixture-of-experts. In International Conference on Machine Learning,                   MohamedRashad/ChatGPT-prompts, 2023.
+     pages 5547–5569. PMLR, 2022.                                                      [31] Xuan-Phi Nguyen, Shafiq Joty, Steven Hoi, and Richard Socher. Tree-
+[10] Elias Frantar and Dan Alistarh. Sparsegpt: Massive language models                     structured attention with hierarchical accumulation. In International
+     can be accurately pruned in one-shot, 2023.                                            Conference on Learning Representations, 2020.
+[11] Elias Frantar, Saleh Ashkboos, Torsten Hoefler, and Dan Alistarh. Gptq:           [32] NVIDIA.          Fastertransformer.        https://github.com/NVIDIA/
+     Accurate quantization for generative pre-trained transformers. In                      FasterTransformer. (Accessed on 08/09/2023).
+     International Conference on Learning Representations, 2023.                       [33] OpenAI. Gpt-4 technical report, 2023.
+[12] Yoav Freund, Robert Schapire, and Naoki Abe. A short introduction                 [34] Alessandro Palla. chatbot instruction prompts. https://huggingface.
+     to boosting. Journal-Japanese Society For Artificial Intelligence, 14(771-             co/datasets/alespalla/chatbot_instruction_prompts, 2023.
+     780):1612, 1999.                                                                  [35] Gunho Park, Baeseong Park, Se Jung Kwon, Byeongwook Kim,
+[13] Freddy Gabbay and Avi Mendelson. Speculative execution based on                        Youngjoo Lee, and Dongsoo Lee. nuqmm: Quantized matmul for
+     value prediction. Citeseer, 1996.                                                      efficient inference of large-scale generative language models. arXiv
+[14] Mudasir A Ganaie, Minghui Hu, AK Malik, M Tanveer, and PN Sugan-                       preprint arXiv:2206.09557, 2022.
+     than. Ensemble deep learning: A review. Engineering Applications of               [36] Baolin Peng, Chunyuan Li, Pengcheng He, Michel Galley, and Jianfeng
+     Artificial Intelligence, 115:105151, 2022.                                             Gao. Instruction tuning with gpt-4. arXiv preprint arXiv:2304.03277,
+[15] Aaron Gokaslan*, Vanya Cohen*, Ellie Pavlick, and Stefanie                             2023.
+     Tellex.       Openwebtext corpus.          http://Skylion007.github.io/           [37] Jack W Rae, Sebastian Borgeaud, Trevor Cai, Katie Millican, Jordan
+     OpenWebTextCorpus, 2019.                                                               Hoffmann, Francis Song, John Aslanides, Sarah Henderson, Roman
+[16] John L Hennessy and David A Patterson. Computer architecture: a                        Ring, Susannah Young, et al. Scaling language models: Methods, anal-
+     quantitative approach. Elsevier, 2011.                                                 ysis & insights from training gopher. arXiv preprint arXiv:2112.11446,
+[17] Itay Hubara, Brian Chmiel, Moshe Island, Ron Banner, Joseph Naor,                      2021.
+     and Daniel Soudry. Accelerated sparse neural training: A provable                 [38] Teven Le Scao, Angela Fan, Christopher Akiki, Ellie Pavlick, Suzana Ilić,
+     and efficient method to find n: m transposable masks. Advances in                      Daniel Hesslow, Roman Castagné, Alexandra Sasha Luccioni, François
+     Neural Information Processing Systems, 34:21099–21111, 2021.                           Yvon, Matthias Gallé, et al. Bloom: A 176b-parameter open-access
+[18] HuggingFace. Large language model text generation inference. https:                    multilingual language model. arXiv preprint arXiv:2211.05100, 2022.
+     //github.com/huggingface/text-generation-inference. (Accessed on                  [39] Ying Sheng, Lianmin Zheng, Binhang Yuan, Zhuohan Li, Max Ryabinin,
+     08/09/2023).                                                                           Daniel Y. Fu, Zhiqiang Xie, Beidi Chen, Clark Barrett, Joseph E. Gon-
+[19] Hugging Face Inc. Hugging face. https://huggingface.co, 2023.                          zalez, Percy Liang, Christopher Ré, Ion Stoica, and Ce Zhang. Flexgen:
+[20] Zhihao Jia, Oded Padon, James Thomas, Todd Warszawski, Matei                           High-throughput generative inference of large language models with
+     Zaharia, and Alex Aiken. Taso: optimizing deep learning computation                    a single gpu, 2023.
+     with automatic generation of graph substitutions. In Proceedings of the           [40] Ying Sheng, Lianmin Zheng, Binhang Yuan, Zhuohan Li, Max Ryabinin,
+     27th ACM Symposium on Operating Systems Principles, pages 47–62,                       Daniel Y. Fu, Zhiqiang Xie, Beidi Chen, Clark Barrett, Joseph E. Gon-
+     2019.                                                                                  zalez, Percy Liang, Christopher Ré, Ion Stoica, and Ce Zhang. High-
+[21] Zhihao Jia, Matei Zaharia, and Alex Aiken. Beyond data and model par-                  throughput generative inference of large language models with a single
+     allelism for deep neural networks. In Proceedings of the 2nd Conference                gpu, 2023.
+     on Systems and Machine Learning, SysML’19, 2019.                                  [41] Mohammad Shoeybi, Mostofa Patwary, Raul Puri, Patrick LeGresley,
+[22] Joao Gante. Assisted generation: a new direction toward low-latency                    Jared Casper, and Bryan Catanzaro. Megatron-lm: Training multi-
+     text generation, 2023.                                                                 billion parameter language models using model parallelism, 2020.
+[23] Sehoon Kim, Karttikeya Mangalam, Suhong Moon, John Canny, Jiten-                  [42] James E Smith. A study of branch prediction strategies. In 25 years of
+     dra Malik, Michael W. Mahoney, Amir Gholami, and Kurt Keutzer. Big                     the international symposia on Computer architecture (selected papers),
+     little transformer decoder, 2023.                                                      pages 202–215, 1998.
+[24] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin                       [43] Shaden Smith, Mostofa Patwary, Brandon Norick, Patrick LeGresley,
+     Zheng, Cody Yu, Joseph E Gonzalez, Hao Zhang, and Ion Stoica.                          Samyam Rajbhandari, Jared Casper, Zhun Liu, Shrimai Prabhumoye,
+     vllm: Easy, fast, and cheap llm serving with pagedattention. See
+                                                                                  17
+       George Zerveas, Vijay Korthikanti, et al. Using deepspeed and mega-                  Operating Systems Design and Implementation (OSDI 21), pages 37–54.
+       tron to train megatron-turing nlg 530b, a large-scale generative lan-                USENIX Association, July 2021.
+       guage model. arXiv preprint arXiv:2201.11990, 2022.                           [51]   Heming Xia, Tao Ge, Si-Qing Chen, Furu Wei, and Zhifang Sui. Specu-
+[44]   Mitchell Stern, Noam Shazeer, and Jakob Uszkoreit. Blockwise par-                    lative decoding: Lossless speedup of autoregressive translation.
+       allel decoding for deep autoregressive models. Advances in Neural             [52]   Guangxuan Xiao, Ji Lin, Mickael Seznec, Julien Demouth, and Song
+       Information Processing Systems, 31, 2018.                                            Han. Smoothquant: Accurate and efficient post-training quantization
+[45]   Rohan Taori, Ishaan Gulrajani, Tianyi Zhang, Yann Dubois, Xuechen Li,                for large language models. arXiv preprint arXiv:2211.10438, 2022.
+       Carlos Guestrin, Percy Liang, and Tatsunori B. Hashimoto. Stanford            [53]   Nan Yang, Tao Ge, Liang Wang, Binxing Jiao, Daxin Jiang, Linjun Yang,
+       alpaca: An instruction-following llama model. https://github.com/                    Rangan Majumder, and Furu Wei. Inference with reference: Lossless
+       tatsu-lab/stanford_alpaca, 2023.                                                     acceleration of large language models. arXiv preprint arXiv:2304.04487,
+[46]   Hugo Touvron, Thibaut Lavril, Gautier Izacard, Xavier Martinet, Marie-               2023.
+       Anne Lachaux, Timothée Lacroix, Baptiste Rozière, Naman Goyal, Eric           [54]   Zhewei Yao, Reza Yazdani Aminabadi, Minjia Zhang, Xiaoxia Wu,
+       Hambro, Faisal Azhar, et al. Llama: Open and efficient foundation                    Conglong Li, and Yuxiong He. Zeroquant: Efficient and affordable
+       language models. arXiv preprint arXiv:2302.13971, 2023.                              post-training quantization for large-scale transformers. Advances in
+[47]   Colin Unger, Zhihao Jia, Wei Wu, Sina Lin, Mandeep Baines, Carlos                    Neural Information Processing Systems, 35:27168–27183, 2022.
+       Efrain Quintero Narvaez, Vinay Ramakrishnaiah, Nirmal Prajapati,              [55]   Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and
+       Pat McCormick, Jamaludin Mohd-Yusof, Xi Luo, Dheevatsa Mudigere,                     Byung-Gon Chun. Orca: A distributed serving system for Transformer-
+       Jongsoo Park, Misha Smelyanskiy, and Alex Aiken. Unity: Accelerating                 Based generative models. In 16th USENIX Symposium on Operating
+       DNN training through joint optimization of algebraic transformations                 Systems Design and Implementation (OSDI 22), pages 521–538, Carlsbad,
+       and parallelization. In 16th USENIX Symposium on Operating Systems                   CA, July 2022. USENIX Association.
+       Design and Implementation (OSDI 22), pages 267–284, Carlsbad, CA,             [56]   Haoyu Zhang, Jianjun Xu, and Ji Wang. Pretraining-based nat-
+       July 2022. USENIX Association.                                                       ural language generation for text summarization. arXiv preprint
+[48]   Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion                    arXiv:1902.09243, 2019.
+       Jones, Aidan N. Gomez, Lukasz Kaiser, and Illia Polosukhin. Attention         [57]   Susan Zhang, Stephen Roller, Naman Goyal, Mikel Artetxe, Moya Chen,
+       is all you need, 2017.                                                               Shuohui Chen, Christopher Dewan, Mona Diab, Xian Li, Xi Victoria
+[49]   Hanrui Wang, Zhekai Zhang, and Song Han. Spatten: Efficient sparse                   Lin, et al. Opt: Open pre-trained transformer language models. arXiv
+       attention architecture with cascade token and head pruning. In 2021                  preprint arXiv:2205.01068, 2022.
+       IEEE International Symposium on High-Performance Computer Archi-              [58]   Lianmin Zheng, Chengfan Jia, Minmin Sun, Zhao Wu, Cody Hao Yu,
+       tecture (HPCA), pages 97–110. IEEE, 2021.                                            Ameer Haj-Ali, Yida Wang, Jun Yang, Danyang Zhuo, Koushik Sen,
+[50]   Haojie Wang, Jidong Zhai, Mingyu Gao, Zixuan Ma, Shizhi Tang, Liyan                  et al. Ansor: Generating high-performance tensor programs for deep
+       Zheng, Yuanzhi Li, Kaiyuan Rong, Yuanyong Chen, and Zhihao Jia.                      learning. In 14th {USENIX} Symposium on Operating Systems Design
+       PET: Optimizing tensor programs with partially equivalent transfor-                  and Implementation ({OSDI} 20), pages 863–879, 2020.
+       mations and automated corrections. In 15th USENIX Symposium on
+
+
+
+
+                                                                                18
+

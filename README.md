@@ -1,136 +1,96 @@
 # Paper Reading Notes
 
-本仓库收录人工整理的论文原文、可检索文本、论文概要、中文详细解读与关键页面截图，主题覆盖 AI 安全、强化学习与知识蒸馏、PyTorch 动态图与 Graph 编译、GPU 编译与大模型推理系统，以及主流大模型公司的算法、架构与训练系统。
+本仓库保存 AI 论文原文、可检索文本、论文概要和中文精读。当前共 141 篇完整资料，阅读入口按“通用模型算法、AI Compiler、厂商定制实现”三条主线组织。
 
-## 阅读索引
+## 中文优先阅读约定
 
-- [AI 安全论文阅读索引](AI安全论文阅读索引.md)
-- [强化学习与蒸馏论文阅读索引](强化学习与蒸馏论文阅读索引.md)
-- [PyTorch 动态图与 Graph 编译论文阅读索引](PyTorch动态图与Graph编译论文阅读索引.md)
-- [Triton 论文阅读索引](Triton论文阅读索引.md)
-- [GPU 内核融合、MoE 与大模型推理论文阅读索引](GPU内核融合与大模型推理论文阅读索引.md)
-- [大模型算法、架构与系统论文阅读索引](大模型算法与架构论文阅读索引.md)
-- [2016–2026 主流 AI 模型与 AI Compiler 十年演进索引](AI模型与编译器十年演进索引.md)
-- [论文精读 GitHub Markdown 审核报告](论文精读Markdown审核报告.md)
+- `论文中文解读.md` 是默认入口：先用中文解释公式、图表指标、比较组、实验结论和证据边界。
+- 论文摘要、正文段落和说明页不使用截图或截图链接；这些内容全部写成可独立阅读的中文。
+- 专有名词第一次出现时保留英文，例如“性能缺口恢复比例（performance gap recovered, PGR）”。
+- 仓库中的 823 张整页截图已经删除；目前只保留 7 张从论文源码导出的独立图表，每张都有中文图题、标签翻译和读图结论。
 
-## 大模型算法、架构与系统
+## 从这里开始：三条主线
 
-| 时间 | 公司/主题 | 类型 | 目录 | 资料 |
-|---|---|---|---|---|
-| 2024 | DeepSeek | 论文 | [`deepseek_moe`](deepseek_moe/) | DeepSeekMoE |
-| 2024 | DeepSeek | 技术报告 | [`deepseek_v2`](deepseek_v2/) | DeepSeek-V2 |
-| 2024 | DeepSeek | 技术报告 | [`deepseek_v3`](deepseek_v3/) | DeepSeek-V3 |
-| 2025 | DeepSeek | 技术报告 | [`deepseek_r1`](deepseek_r1/) | DeepSeek-R1 |
-| 2025 | Ascend × DeepSeek | 系统论文 | [`ascend_cloudmatrix384`](ascend_cloudmatrix384/) | Serving LLMs on Huawei CloudMatrix384 |
-| 2020 | OpenAI | 论文 | [`openai_gpt3`](openai_gpt3/) | Language Models are Few-Shot Learners |
-| 2021 | OpenAI | 论文 | [`openai_codex`](openai_codex/) | Evaluating Large Language Models Trained on Code |
-| 2022 | OpenAI | 论文 | [`openai_instructgpt`](openai_instructgpt/) | Training Language Models to Follow Instructions with Human Feedback |
-| 2023 | OpenAI | 技术报告/系统卡 | [`openai_gpt4`](openai_gpt4/) | GPT-4 Technical Report |
-| 2025 | OpenAI | 模型卡 | [`openai_gpt_oss`](openai_gpt_oss/) | gpt-oss-120b & gpt-oss-20b |
-| 2024 | Anthropic | 模型卡 | [`anthropic_claude3_model_card`](anthropic_claude3_model_card/) | The Claude 3 Model Family |
-| 2024 | Anthropic | 在线论文 | [`anthropic_scaling_monosemanticity`](anthropic_scaling_monosemanticity/) | Scaling Monosemanticity |
-| 2025 | MiniMax | 技术报告 | [`minimax_01`](minimax_01/) | MiniMax-01 |
-| 2025 | MiniMax | 技术报告 | [`minimax_m1`](minimax_m1/) | MiniMax-M1 |
-| 2025 | Kimi | 技术报告 | [`kimi_k15`](kimi_k15/) | Kimi k1.5 |
-| 2025 | Kimi | 技术报告 | [`kimi_k2`](kimi_k2/) | Kimi K2 |
-| 2024/2025 | Kimi | 系统论文 | [`kimi_mooncake`](kimi_mooncake/) | Mooncake |
-
-## AI 安全论文
-
-| 时间 | 目录 | 论文 |
+| 主线 | 你会学到什么 | 入口 |
 |---|---|---|
-| 2022 | [`constitutional_ai`](constitutional_ai/) | Constitutional AI: Harmlessness from AI Feedback |
-| 2023 | [`jailbroken`](jailbroken/) | Jailbroken: How Does LLM Safety Training Fail? |
-| 2023 | [`ai_control`](ai_control/) | AI Control: Improving Safety Despite Intentional Subversion |
-| 2023 | [`weak_to_strong`](weak_to_strong/) | Weak-to-Strong Generalization |
-| 2024 | [`sleeper_agents`](sleeper_agents/) | Sleeper Agents |
-| 2024 | [`simple_adaptive_attacks`](simple_adaptive_attacks/) | Jailbreaking Leading Safety-Aligned LLMs with Simple Adaptive Attacks |
-| 2024 | [`mechanistic_interpretability`](mechanistic_interpretability/) | Mechanistic Interpretability for AI Safety: A Review |
-| 2024 | [`sycophancy_to_subterfuge`](sycophancy_to_subterfuge/) | Sycophancy to Subterfuge |
-| 2024 | [`alignment_faking`](alignment_faking/) | Alignment Faking in Large Language Models |
-| 2025 | [`emergent_misalignment`](emergent_misalignment/) | Emergent Misalignment |
-| 2025 | [`shade_arena`](shade_arena/) | SHADE-Arena |
-| 2026 | [`exploitgym`](exploitgym/) | ExploitGym |
+| 模型基础理论与最新算法 | LSTM、Transformer、Attention、Scaling、MoE、SSM、Reasoning、推测解码、扩散、多模态 | [AI 模型基础理论与算法演进索引](AI模型基础理论与算法演进索引.md) |
+| AI Compiler 与运行时 | 动态图捕获、IR、lowering、fusion、autotuning、kernel DSL、分布式编译、runtime | [AI Compiler、Kernel DSL 与运行时演进索引](AI编译器与运行时演进索引.md) |
+| 厂商模型与定制实现 | DeepSeek、OpenAI、Anthropic、MiniMax、Kimi、Qwen、Llama、Gemini、Ascend、NVIDIA | [AI 厂商模型、训练系统与部署实现索引](AI厂商模型与系统实现索引.md) |
 
-## 强化学习与知识蒸馏论文
+## 分类边界
 
-| 时间 | 目录 | 论文 |
+| 例子 | 主归类 | 原因 |
 |---|---|---|
-| 2015 | [`deep_q_network`](deep_q_network/) | Human-level Control through Deep Reinforcement Learning |
-| 2015 | [`knowledge_distillation`](knowledge_distillation/) | Distilling the Knowledge in a Neural Network |
-| 2016 | [`policy_distillation`](policy_distillation/) | Policy Distillation |
-| 2017 | [`proximal_policy_optimization`](proximal_policy_optimization/) | Proximal Policy Optimization Algorithms |
-| 2017 | [`distral`](distral/) | Distral: Robust Multitask Reinforcement Learning |
-| 2017 | [`human_preferences_rl`](human_preferences_rl/) | Deep Reinforcement Learning from Human Preferences |
-| 2018 | [`soft_actor_critic`](soft_actor_critic/) | Soft Actor-Critic |
-| 2020 | [`muzero`](muzero/) | Mastering Atari, Go, Chess and Shogi by Planning with a Learned Model |
+| Transformer、RoPE、Mamba、DDPM | 模型算法 | 贡献是可迁移的架构或训练方法 |
+| MoE、CoT、PRM、test-time scaling | 近代高级算法 | 分别扩展条件容量或单题推理计算 |
+| Speculative decoding、Medusa、EAGLE | 近代高级算法 | 是可迁移的解码算法，不是某家 serving 产品 |
+| FlashAttention 1–4 | 模型/Attention 算法 | 改变 exact Attention 的 IO 和硬件算法，不是完整编译器 |
+| XLA、TVM、MLIR、Triton、TensorIR | AI Compiler | 贡献是 IR、lowering、schedule 或 codegen |
+| DeepSeek-V3、GPT-4、Claude 3、Qwen3 | 厂商实现 | 是具体模型族的架构、训练和发布报告 |
+| CloudMatrix384、Mooncake、TensorRT-LLM | 厂商实现 | 是面向特定模型、硬件或产品的部署系统 |
 
-## PyTorch 动态图与 Graph 编译
+跨层论文可以从多个索引找到，但只有一个主归类，避免重复时间线造成概念混淆。
 
-| 时间 | 类型 | 目录 | 资料 |
-|---|---|---|---|
-| 2017 | 论文 | [`dynamic_computation_graphs`](dynamic_computation_graphs/) | Deep Learning with Dynamic Computation Graphs |
-| 2019 | 论文 | [`chainer_define_by_run`](chainer_define_by_run/) | Chainer: A Deep Learning Framework for Accelerating the Research Cycle |
-| 2019 | 论文 | [`pytorch_imperative`](pytorch_imperative/) | PyTorch: An Imperative Style, High-Performance Deep Learning Library |
-| 2019 | 论文 | [`janus_symbolic_graph`](janus_symbolic_graph/) | JANUS |
-| 2021 | 论文 | [`nimble_dynamic_nn`](nimble_dynamic_nn/) | Nimble |
-| 2021 | 论文 | [`disc_dynamic_shape`](disc_dynamic_shape/) | DISC |
-| 2022 | 论文 | [`torch_fx`](torch_fx/) | torch.fx |
-| 2024 | 论文 | [`pytorch_2`](pytorch_2/) | PyTorch 2 |
-| 2026 | 官方文档 | [`pytorch_graph_programming_model`](pytorch_graph_programming_model/) | Dynamo、torch.export 与 Dynamic Shapes Programming Model |
+## 推荐阅读方式
 
-## GPU 编译、Kernel 与大模型推理
+### 学模型算法
 
-| 时间 | 类型 | 目录 | 资料 |
-|---|---|---|---|
-| 2017 | 论文 | [`sparsely_gated_moe`](sparsely_gated_moe/) | Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer |
-| 2019 | 论文 | [`triton_compiler`](triton_compiler/) | Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations |
-| 2020 | 论文 | [`fusion_stitching`](fusion_stitching/) | FusionStitching |
-| 2022 | 论文 | [`switch_transformers`](switch_transformers/) | Switch Transformers |
-| 2023 | 论文 | [`welder`](welder/) | Welder: Scheduling Deep Learning Memory Access via Tile-graph |
-| 2023 | 论文 | [`megablocks`](megablocks/) | MegaBlocks: Efficient Sparse Training with Mixture-of-Experts |
-| 2024 | 论文 | [`pytorch_2`](pytorch_2/) | PyTorch 2 |
-| 2024 | 论文 | [`korch`](korch/) | Optimal Kernel Orchestration for Tensor Programs with Korch |
-| 2025 | 论文 | [`tritonbench`](tritonbench/) | TritonBench |
-| 2025/2026 | 论文 | [`linear_layouts`](linear_layouts/) | Linear Layouts |
-| 2025 | 预印本 | [`mirage_persistent_kernel`](mirage_persistent_kernel/) | MPK: A Compiler and Runtime for Mega-Kernelizing Tensor Programs |
-| 2026 | 论文 | [`taming_bitwise_gpu_kernels`](taming_bitwise_gpu_kernels/) | Taming Bitwise Behavior in GPU Kernels with Tensor Core |
-| 2026 | 预印本 | [`event_tensor`](event_tensor/) | Event Tensor |
-| 2026 | 预印本 | [`ada_mk`](ada_mk/) | Ada-MK |
-| 2026 | 预印本 | [`cute_layout_algebra`](cute_layout_algebra/) | CuTe Layout Representation and Algebra |
-| 2026 | 官方文档 | [`tensorrt_llm_architecture`](tensorrt_llm_architecture/) | TensorRT LLM Architecture Overview |
-| 2026 | 官方报告 | [`cutedsl_torchinductor`](cutedsl_torchinductor/) | TorchInductor CuTeDSL Backend |
+1. LSTM → Seq2Seq → Bahdanau Attention → Transformer。
+2. GPT-1 / BERT / T5 → Scaling Laws → Chinchilla。
+3. RoPE / ALiBi / MQA / GQA → FlashAttention 1–4。
+4. VAE / GAN → DDPM → Latent Diffusion → DiT。
+5. Mamba → Mamba-2，理解 Attention 之外的序列建模。
 
-## 目录命名约定
+### 学近代高级算法
 
-论文目录使用可读的英文短标题和 `lowercase_snake_case`：
+1. MoE：Sparsely-Gated MoE → Switch Transformer → MegaBlocks → DeepSeekMoE。
+2. Reasoning：CoT → Self-Consistency → Tree of Thoughts → PRM → compute-optimal scaling → s1。
+3. Speculative decoding：两篇基础 draft–verify → SpecInfer → Medusa → EAGLE → EAGLE-2。
+4. 用 [近代高级算法专题索引](近代高级算法论文阅读索引.md) 对照三条路线的优化目标、成本和评测口径。
 
-```text
-paper_short_title/
-├── paper.pdf
-├── paper.txt
-├── 论文概要.md
-├── 论文中文解读.md
-└── rendered_figures/
-```
+### 学 AI Compiler
 
-- 目录名表达论文内容，不再使用只有编号的 `arxiv_YYMM.NNNNN`。
-- `论文概要.md` 用于快速浏览；`论文中文解读.md` 是详细版本。
-- `paper.txt` 由 PDF 提取，便于全文搜索，不替代排版后的原文。
-- `rendered_figures/` 保存解读实际引用的原论文页面。
-- 个别论文可能包含额外的源码归档或实验材料。
-- 官方工程资料会明确标注来源性质、快照日期，并保留原始 Markdown/HTML。
+1. XLA / TVM / Glow：为什么需要整图与多层 IR。
+2. MLIR / TensorIR：怎样保存不同抽象层的语义。
+3. Ansor / MetaSchedule / Roller / Bolt：怎样搜索 schedule。
+4. Triton / Hidet / TileLang / CuTe：怎样表达 GPU tile、layout 和 pipeline。
+5. GSPMD / Alpa：怎样把分片和通信纳入编译计划。
 
-## 新增论文检查表
+### 看厂商工程落地
 
-1. 使用唯一、可读的英文短标题作为目录名。
-2. 保存原始 PDF，并记录论文链接、作者、公开时间和版本。
-3. 从 PDF 提取可检索文本。
-4. 分别编写概要与中文详细解读，不把两者混为同一文档。
-5. 只渲染解读实际引用的关键页面。
-6. 把论文加入相应主题索引，并检查所有相对链接。
-7. 非论文资料必须标明类型、来源与快照时间。
+1. DeepSeekMoE → V2 → V3 → R1。
+2. Mooncake / CloudMatrix384 / TensorRT-LLM：模型怎样进入 serving。
+3. InstructGPT / DeepSeek-R1 / Kimi k1.5 / MiniMax-M1：reasoning RL 横向对照。
+4. OpenAI / Anthropic / Qwen / Llama / Gemini：比较公开内容与未披露边界。
 
-## 文件规模
+## 专题索引
 
-仓库包含 PDF 和论文截图。当前单文件均低于 GitHub 的 100 MB 限制，因此暂不要求 Git LFS；后续若加入超大附件，应在提交前检查文件大小并单独决定是否使用 LFS。
+| 专题 | 入口 |
+|---|---|
+| MoE、Reasoning/test-time scaling 与 Speculative decoding | [近代高级算法论文阅读索引](近代高级算法论文阅读索引.md) |
+| AI 安全、对齐欺骗、越狱与控制 | [AI 安全论文阅读索引](AI安全论文阅读索引.md) |
+| 强化学习与知识蒸馏 | [强化学习与蒸馏论文阅读索引](强化学习与蒸馏论文阅读索引.md) |
+| PyTorch 动态图与 Graph 编译 | [PyTorch 动态图与 Graph 编译论文阅读索引](PyTorch动态图与Graph编译论文阅读索引.md) |
+| Triton 与 GPU layout | [Triton 论文阅读索引](Triton论文阅读索引.md) |
+| GPU 融合、MoE Kernel 与推理系统 | [GPU 内核融合与大模型推理论文阅读索引](GPU内核融合与大模型推理论文阅读索引.md) |
+| 全量 Markdown 审核 | [论文精读 GitHub Markdown 审核报告](论文精读Markdown审核报告.md) |
+
+## 每篇论文的目录结构
+
+每篇资料通常包含：
+
+- `paper.pdf`：论文或官方资料原文；
+- `paper.txt`：可全文检索的文本；
+- `论文概要.md`：快速理解问题、方法、证据与局限；
+- `论文中文解读.md`：公式、论证链、实验、复现和证据边界；
+- `rendered_figures/`：仅在论文具有独立图表文件时保留；不存放论文整页或正文段落截图。
+
+XLA、TensorRT-LLM 等少数资料来自官方架构页面快照，目录中会明确说明它们不是同行评审论文。
+
+## 精读质量与审核
+
+- 141/141 篇均有 PDF、可检索文本、概要、精读和证据导航。
+- 所有精读都以中文解释为主；需要核对原文时回到本地 PDF 或可检索文本。
+- 141 篇精读和仓库资源中均无论文整页文字截图；仅保留 7 张真正的独立图表。
+- 新增 12 篇均逐项解释方法公式、主实验、消融、失败模式和“能/不能证明什么”。
+- 逐篇结果见 [论文精读 GitHub Markdown 审核报告](论文精读Markdown审核报告.md)。

@@ -88,6 +88,6 @@ Linear Layouts 纵向改造：tile 到硬件资源的映射怎样统一、正确
 - `paper.txt`：由 PDF 提取、保留大致版面的文本，便于全文检索；
 - `论文概要.md`：快速了解贡献、关键结果和边界；
 - `论文中文解读.md`：按章节、图表、方法、实验和局限展开的长篇解读；
-- `rendered_figures/`：详细解读中引用的原论文页图。
+- `rendered_figures/`：从论文源码导出的独立图表；不保存整页文字截图。
 
 在线原文入口：[Triton 2019](https://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf) · [PyTorch 2](https://docs.pytorch.org/assets/pytorch2-2.pdf) · [TritonBench](https://arxiv.org/abs/2502.14752) · [Linear Layouts](https://arxiv.org/abs/2505.23819)

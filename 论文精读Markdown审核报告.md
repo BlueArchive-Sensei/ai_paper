@@ -1,174 +1,216 @@
-# 论文精读 GitHub Markdown 审核报告
+# 论文精读与 GitHub Markdown 审核报告
 
 - 审核日期：2026-10-05
-- 审核范围：仓库内全部 129 个 `论文中文解读.md`，并联查 README、索引和 129 个 `论文概要.md`
-- 总体结论：**129/129 篇论文的 PDF、文本、概要、精读和证据导航已经配齐**
-- 精读统计：count=129 min=2451 median=3048 max=34534 h2=1723 images=990 cites=268
-- 全部作者撰写 Markdown 终检：267 个文件、1,789 个本地链接，错误 0
+- 审核范围：仓库内全部 295 个 Markdown 文件，包括 141 个精读、141 个概要、11 个根目录入口/索引和 2 份上游资料
+- 总体结论：**295/295 个 Markdown 文件通过 GitHub 渲染结构、表格、数学、链接和本地解析检查**
+- 精读统计：count=141，字符总数=533404，min=1664，median=2456，max=36003，H2=1842
+- 图像资源：整页截图 0；独立图表 7；图表中文翻译块 7
+- 全仓库本地链接：1,439 个，错误 0
 
-## 本轮实际改动
+## GitHub Markdown 全仓库整改
 
-1. 对 67 篇原先偏短的模型、Attention、生成模型、多模态与 AI Compiler 笔记进行了正文级加深。
-2. 每篇加深稿新增“原文论证链、机制/公式、实验阅读、复现检查、常见误读”。
-3. 67 篇加深稿分别在论证、机制、实验、结论段加入 4 个原文页定位，共 268 个逐段定位。
-4. 全部 129 篇精读新增“原文证据导航”，链接本地 PDF、可检索文本和已引用截图。
-5. 数学分隔符统一为 GitHub 支持的 `$...$` 与 `$$...$$`。
-6. 补齐 `taming_bitwise_gpu_kernels/论文概要.md`，现在 129 篇全部具有“概要 + 精读”。
-7. 保留原来已经较长的详细精读正文；本轮对它们补齐证据入口，并完成结构与链接复核。
+首轮检查发现 201 个文件至少存在一项格式问题，现已全部修复：
 
-## 审核规则与结果
+- 67 个文件的文件尾换行不规范；
+- 644 处连续空行、23 处尾随空格；
+- 20 处标题前后缺少空行，9 处列表前缺少空行；
+- 1 个数学代码围栏未正确关闭，6 处围栏前后缺少空行；
+- 84 个星号列表标记已统一为短横线；
+- 2 份 TensorRT-LLM 文档存在多 H1、Setext 标题、Sphinx 锚点、MyST 指令或无效 HTML；
+- 13 个依赖上游仓库结构的失效相对链接已改为有效的 GitHub 链接。
+
+## GitHub Markdown 终检结果
 
 | 检查项 | 通过标准 | 结果 |
 |---|---|---|
-| 资料配对 | 每篇均有 PDF、可检索文本、概要、精读 | 129/129 |
-| 标题结构 | 每篇恰好一个 H1，标题层级不跳级 | 129/129 |
-| 代码围栏 | Markdown 围栏成对闭合 | 129/129 |
-| 数学公式 | 无旧式圆括号或方括号数学分隔符残留；美元分隔符成对 | 129/129 |
-| 本地链接 | PDF、文本、截图和 Markdown 相对链接目标存在 | 1,789/1,789 |
-| 图片可访问性 | 每篇至少一张原文截图，且 alt 文本非空 | 129/129 |
-| 原文入口 | 同时提供 `paper.pdf` 与 `paper.txt` | 129/129 |
-| 证据导航 | 提供 PDF 文件页码与对应截图 | 129/129 |
-| 异常字符 | 不含会破坏渲染的控制字符 | 129/129 |
-| 最低完整度 | 不存在少于 1,800 个中文/公式字符的精读 | 129/129 |
+| 文件范围 | 所有 `.md` 均参与审核 | 295/295 |
+| 一级标题 | 每个文件首个非空行是 H1，且全文只有一个 H1 | 295/295 |
+| 标题结构 | ATX 标题、层级不跳级、标题前后有空行、无重复标题 | 295/295 |
+| 空白字符 | 无尾随空格、Tab、CRLF、连续空行；文件尾恰好一个换行 | 295/295 |
+| 代码围栏 | 全部成对闭合、带语言标识、前后留空行，统一使用反引号 | 62 个代码块入口，错误 0 |
+| 数学公式 | 无旧式分隔符；`$$` 和行内 `$...$` 成对闭合 | 错误 0 |
+| 表格 | 表头、分隔行、列数及表格前后空行符合 GFM | 147 张表，错误 0 |
+| 列表 | 统一短横线标记，编号格式和嵌套缩进可被 GFM 正确解析 | 错误 0 |
+| HTML 扩展 | `details/summary` 成对；删除不平衡 `div`；保留有效显式锚点 | 错误 0 |
+| 非 GFM 语法 | Sphinx 锚点和 MyST note 已转为 HTML 锚点与 GitHub Alert | 残留 0 |
+| 图片 | 图片 alt 非空；无论文整页文字截图 | 7/7 独立图表通过 |
+| 本地链接 | PDF、文本、图表和 Markdown 相对链接目标存在 | 1,439/1,439 |
+| 实际解析 | 使用本地 Markdown 解析器逐文件渲染 | 295/295 |
+
+说明：GitHub Flavored Markdown 允许原生 HTML、自动链接和长表格行，因此没有强制 80 字符换行，也没有删除用于 `details`、`summary`、`br` 和显式锚点的有效 HTML。
+
+## 图片与中文解释整改
+
+1. 删除 823 个 `page-*` 整页渲染文件，共约 238 MB。
+2. 删除全部 1,434 处整页截图 Markdown 引用。
+3. 141 篇精读的证据导航统一只提供本地 PDF 与可检索文本。
+4. 仓库目前只保留 7 张从论文源码导出的独立架构图、流程图和性能图。
+5. 7 张图全部具有中文图题、英文标签翻译、坐标或流程含义和证据边界。
+6. 图表密集或术语困难的 12 篇论文保留“图表英文术语与坐标轴翻译”章节。
+
+## 本轮新增专题审核
+
+- 新增 12 篇、24 份中文 Markdown，覆盖 CoT、Self-Consistency、ToT、PRM、test-time scaling 与六篇推测解码论文。
+- 12/12 篇均具备 PDF、可检索文本、概要和精读；没有新增任何图片或文字截图。
+- 每篇精读均单列原文方法与公式、主实验、消融或失败模式、证据边界和复现检查。
+- 新增 [近代高级算法论文阅读索引](近代高级算法论文阅读索引.md)，将 MoE、Reasoning/test-time scaling 与 Speculative decoding 设为同级算法分支。
+
+## 当前强制写作标准
+
+- 摘要、定义、实验设置、结论、表格说明和附录论证必须写成可独立阅读的中文。
+- 图片只允许真正的架构图、流程图、曲线图、柱状图、热力图或其他数据图表。
+- 每张图必须紧邻中文图题、图例/标签翻译、坐标轴解释、主要趋势和证据边界。
+- 专有名词第一次出现时保留英文。
+- 每个 Markdown 文件必须只有一个 H1，并通过结构、表格、数学、链接和解析检查。
 
 ## 审核边界
 
-- `source_*.md`、`source_*.html` 等是为了留存上游页面而保存的原始快照，不属于作者撰写的精读 Markdown；其中的相对链接可能依赖原项目目录结构。
-- 表中的“逐段原文定位”为 4，表示该篇是本轮正文级加深的 67 篇之一；为 0 表示原稿本身已是详细精读，本轮保留正文并补齐统一证据导航。0 不是审核失败。
-- PDF 页码使用仓库文件的物理页序号，可能与论文正文印刷页码不同。
-- PASS 表示 Markdown 结构、本地资源和证据入口通过。对开放问题、复现实验和闭源技术报告未披露信息，正文仍按论文自身证据边界表述，不把缺失细节推断为事实。
+- “中文精读”是忠实重建论证，不是逐词机械直译；目标是让中文读者不看英文页面也能理解论文。
+- 当前只有一篇论文的源码包提供了可直接复用的 7 张独立图表。其他论文暂不展示图片，避免把整页渲染冒充图表。
+- 后续若增加 Markdown 或裁切新图表，应按本报告同一规则重新审核。
 
-## 逐篇追踪表
+## 逐篇精读追踪表
 
-| 目录 | 字符数 | H2 数 | 原文截图数 | 逐段原文定位 | 结果 |
-|---|---:|---:|---:|---:|---|
-| `ada_mk` | 3552 | 12 | 5 | 0 | PASS |
-| `ai_control` | 10895 | 17 | 28 | 0 | PASS |
-| `alibi` | 2724 | 13 | 4 | 4 | PASS |
-| `alignment_faking` | 17862 | 19 | 102 | 0 | PASS |
-| `alpa` | 3043 | 13 | 4 | 4 | PASS |
-| `alphafold2` | 2938 | 13 | 4 | 4 | PASS |
-| `alphazero` | 2451 | 13 | 4 | 4 | PASS |
-| `ansor` | 2819 | 13 | 4 | 4 | PASS |
-| `anthropic_claude3_model_card` | 3596 | 11 | 6 | 0 | PASS |
-| `anthropic_scaling_monosemanticity` | 3415 | 11 | 5 | 0 | PASS |
-| `ascend_cloudmatrix384` | 5191 | 12 | 5 | 0 | PASS |
-| `bahdanau_attention` | 2662 | 13 | 4 | 4 | PASS |
-| `bert` | 2869 | 13 | 4 | 4 | PASS |
-| `bigbird` | 2652 | 13 | 4 | 4 | PASS |
-| `bolt` | 2915 | 13 | 4 | 4 | PASS |
-| `chainer_define_by_run` | 4185 | 11 | 5 | 0 | PASS |
-| `chinchilla` | 2816 | 13 | 4 | 4 | PASS |
-| `clip` | 2807 | 13 | 4 | 4 | PASS |
-| `constitutional_ai` | 10919 | 20 | 12 | 0 | PASS |
-| `cute_layout_algebra` | 3803 | 13 | 8 | 0 | PASS |
-| `cutedsl_torchinductor` | 4079 | 14 | 4 | 0 | PASS |
-| `ddpm` | 2843 | 13 | 4 | 4 | PASS |
-| `deep_q_network` | 5024 | 13 | 6 | 0 | PASS |
-| `deepseek_moe` | 3421 | 10 | 4 | 0 | PASS |
-| `deepseek_r1` | 4324 | 12 | 5 | 0 | PASS |
-| `deepseek_v2` | 3963 | 11 | 5 | 0 | PASS |
-| `deepseek_v3` | 4533 | 13 | 6 | 0 | PASS |
-| `disc_dynamic_shape` | 4926 | 13 | 4 | 0 | PASS |
-| `distral` | 5099 | 13 | 6 | 0 | PASS |
-| `dit` | 2944 | 13 | 4 | 4 | PASS |
-| `dpo` | 3012 | 13 | 4 | 4 | PASS |
-| `dynamic_computation_graphs` | 4736 | 11 | 5 | 0 | PASS |
-| `emergent_misalignment` | 12149 | 14 | 29 | 0 | PASS |
-| `event_tensor` | 3519 | 13 | 7 | 0 | PASS |
-| `exploitgym` | 10362 | 17 | 8 | 0 | PASS |
-| `flamingo` | 2883 | 13 | 4 | 4 | PASS |
-| `flash_attention` | 3042 | 13 | 4 | 4 | PASS |
-| `flash_attention_2` | 2877 | 13 | 4 | 4 | PASS |
-| `flash_attention_3` | 3004 | 13 | 4 | 4 | PASS |
-| `flash_attention_4` | 3119 | 13 | 4 | 4 | PASS |
-| `fp4_flash_attention_4` | 2974 | 13 | 4 | 4 | PASS |
-| `fusion_stitching` | 3828 | 12 | 6 | 0 | PASS |
-| `gan` | 2700 | 13 | 4 | 4 | PASS |
-| `gcn` | 2587 | 13 | 4 | 4 | PASS |
-| `gemini` | 2704 | 13 | 4 | 4 | PASS |
-| `glow_compiler` | 2884 | 13 | 4 | 4 | PASS |
-| `gpt1` | 2869 | 13 | 4 | 4 | PASS |
-| `gpt2` | 2793 | 13 | 4 | 4 | PASS |
-| `grouped_query_attention` | 2887 | 13 | 4 | 4 | PASS |
-| `gspmd` | 2908 | 13 | 4 | 4 | PASS |
-| `hidet` | 2838 | 13 | 4 | 4 | PASS |
-| `human_preferences_rl` | 5410 | 15 | 6 | 0 | PASS |
-| `instella_moe` | 2909 | 13 | 4 | 4 | PASS |
-| `jailbroken` | 6319 | 14 | 10 | 0 | PASS |
-| `janus_symbolic_graph` | 5031 | 13 | 7 | 0 | PASS |
-| `kimi_k15` | 3488 | 11 | 5 | 0 | PASS |
-| `kimi_k2` | 3787 | 11 | 5 | 0 | PASS |
-| `kimi_mooncake` | 3644 | 10 | 5 | 0 | PASS |
-| `knowledge_distillation` | 5251 | 14 | 5 | 0 | PASS |
-| `korch` | 3807 | 13 | 6 | 0 | PASS |
-| `latent_diffusion` | 2805 | 13 | 4 | 4 | PASS |
-| `linear_layouts` | 15615 | 23 | 8 | 0 | PASS |
-| `linformer` | 2826 | 13 | 4 | 4 | PASS |
-| `llama` | 2853 | 13 | 4 | 4 | PASS |
-| `llama_3` | 2820 | 13 | 4 | 4 | PASS |
-| `llava` | 2775 | 13 | 4 | 4 | PASS |
-| `longformer` | 2833 | 13 | 4 | 4 | PASS |
-| `lstm` | 2728 | 13 | 4 | 4 | PASS |
-| `mamba` | 2916 | 13 | 4 | 4 | PASS |
-| `mamba_2` | 2954 | 13 | 4 | 4 | PASS |
-| `mechanistic_interpretability` | 8371 | 17 | 25 | 0 | PASS |
-| `megablocks` | 4097 | 13 | 9 | 0 | PASS |
-| `metaschedule` | 2737 | 13 | 4 | 4 | PASS |
-| `minimax_01` | 4003 | 11 | 6 | 0 | PASS |
-| `minimax_m1` | 3683 | 11 | 5 | 0 | PASS |
-| `mirage_persistent_kernel` | 4117 | 14 | 8 | 0 | PASS |
-| `mlir` | 3074 | 13 | 4 | 4 | PASS |
-| `multi_query_attention` | 2950 | 13 | 4 | 4 | PASS |
-| `muzero` | 7163 | 16 | 8 | 0 | PASS |
-| `nimble_dynamic_nn` | 5673 | 13 | 6 | 0 | PASS |
-| `openai_codex` | 3038 | 11 | 5 | 0 | PASS |
-| `openai_gpt3` | 3263 | 11 | 5 | 0 | PASS |
-| `openai_gpt4` | 2931 | 10 | 5 | 0 | PASS |
-| `openai_gpt_oss` | 3764 | 11 | 5 | 0 | PASS |
-| `openai_instructgpt` | 3240 | 10 | 5 | 0 | PASS |
-| `palm` | 2814 | 13 | 4 | 4 | PASS |
-| `performer` | 2841 | 13 | 4 | 4 | PASS |
-| `policy_distillation` | 5304 | 13 | 7 | 0 | PASS |
-| `proximal_policy_optimization` | 5494 | 13 | 6 | 0 | PASS |
-| `pytorch_2` | 10809 | 20 | 5 | 0 | PASS |
-| `pytorch_graph_programming_model` | 9308 | 19 | 13 | 0 | PASS |
-| `pytorch_imperative` | 4900 | 11 | 5 | 0 | PASS |
-| `qwen_3` | 2845 | 13 | 4 | 4 | PASS |
-| `rammer` | 2934 | 13 | 4 | 4 | PASS |
-| `resnet` | 2646 | 13 | 4 | 4 | PASS |
-| `roller` | 2614 | 13 | 4 | 4 | PASS |
-| `rope` | 2763 | 13 | 4 | 4 | PASS |
-| `sam` | 2858 | 13 | 4 | 4 | PASS |
-| `scaling_laws` | 2834 | 13 | 4 | 4 | PASS |
-| `seq2seq` | 2500 | 13 | 4 | 4 | PASS |
-| `shade_arena` | 10076 | 14 | 17 | 0 | PASS |
-| `simple_adaptive_attacks` | 11154 | 17 | 32 | 0 | PASS |
-| `sleeper_agents` | 13672 | 18 | 82 | 0 | PASS |
-| `soft_actor_critic` | 5258 | 13 | 6 | 0 | PASS |
-| `sparsely_gated_moe` | 3644 | 12 | 7 | 0 | PASS |
-| `swin_transformer` | 2733 | 13 | 4 | 4 | PASS |
-| `switch_transformers` | 3462 | 12 | 8 | 0 | PASS |
-| `sycophancy_to_subterfuge` | 8579 | 17 | 25 | 0 | PASS |
-| `t5` | 2922 | 13 | 4 | 4 | PASS |
-| `taming_bitwise_gpu_kernels` | 34534 | 19 | 7 | 0 | PASS |
-| `taso` | 2851 | 13 | 4 | 4 | PASS |
-| `tensor_comprehensions` | 3080 | 13 | 4 | 4 | PASS |
-| `tensorir` | 2956 | 13 | 4 | 4 | PASS |
-| `tensorrt_llm_architecture` | 4322 | 13 | 3 | 0 | PASS |
-| `tilelang` | 2919 | 13 | 4 | 4 | PASS |
-| `tinyiree` | 2829 | 13 | 4 | 4 | PASS |
-| `torch_fx` | 5323 | 13 | 6 | 0 | PASS |
-| `transformer` | 3048 | 13 | 4 | 4 | PASS |
-| `transformer_xl` | 2815 | 13 | 4 | 4 | PASS |
-| `triton_compiler` | 10022 | 17 | 5 | 0 | PASS |
-| `tritonbench` | 10600 | 19 | 5 | 0 | PASS |
-| `tvm_compiler` | 3012 | 13 | 4 | 4 | PASS |
-| `vae` | 2930 | 13 | 4 | 4 | PASS |
-| `vit` | 2803 | 13 | 4 | 4 | PASS |
-| `wav2vec2` | 2758 | 13 | 4 | 4 | PASS |
-| `weak_to_strong` | 10889 | 16 | 56 | 0 | PASS |
-| `welder` | 3810 | 12 | 7 | 0 | PASS |
-| `whisper` | 2799 | 13 | 4 | 4 | PASS |
-| `xla_compiler` | 3298 | 13 | 4 | 4 | PASS |
-
+| 目录 | 字符数 | H2 | 独立图表 | 图中文字翻译 | 专项术语表 | 文字页引用 | 结果 |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `ada_mk` | 3352 | 12 | 0 | 0 | 否 | 0 | PASS |
+| `ai_control` | 9584 | 17 | 0 | 0 | 是 | 0 | PASS |
+| `alibi` | 1942 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `alignment_faking` | 11543 | 19 | 0 | 0 | 是 | 0 | PASS |
+| `alpa` | 2256 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `alphafold2` | 2156 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `alphazero` | 1664 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `ansor` | 2031 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `anthropic_claude3_model_card` | 2599 | 11 | 0 | 0 | 否 | 0 | PASS |
+| `anthropic_scaling_monosemanticity` | 2456 | 11 | 0 | 0 | 否 | 0 | PASS |
+| `ascend_cloudmatrix384` | 4228 | 12 | 0 | 0 | 否 | 0 | PASS |
+| `bahdanau_attention` | 1880 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `bert` | 2087 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `bigbird` | 1870 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `bolt` | 2127 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `chainer_define_by_run` | 3314 | 11 | 0 | 0 | 否 | 0 | PASS |
+| `chinchilla` | 2024 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `clip` | 2020 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `constitutional_ai` | 10805 | 21 | 0 | 0 | 是 | 0 | PASS |
+| `cute_layout_algebra` | 3397 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `cutedsl_torchinductor` | 3916 | 14 | 0 | 0 | 否 | 0 | PASS |
+| `ddpm` | 2061 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `deep_q_network` | 4692 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `deepseek_moe` | 2746 | 10 | 0 | 0 | 否 | 0 | PASS |
+| `deepseek_r1` | 3427 | 12 | 0 | 0 | 否 | 0 | PASS |
+| `deepseek_v2` | 3030 | 11 | 0 | 0 | 否 | 0 | PASS |
+| `deepseek_v3` | 4375 | 14 | 0 | 0 | 是 | 0 | PASS |
+| `disc_dynamic_shape` | 4149 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `distral` | 4751 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `dit` | 2162 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `dpo` | 2225 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `dynamic_computation_graphs` | 3747 | 11 | 0 | 0 | 否 | 0 | PASS |
+| `emergent_misalignment` | 11113 | 15 | 0 | 0 | 是 | 0 | PASS |
+| `event_tensor` | 3152 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `exploitgym` | 9927 | 17 | 0 | 0 | 否 | 0 | PASS |
+| `flamingo` | 2096 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `flash_attention` | 2255 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `flash_attention_2` | 2090 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `flash_attention_3` | 2217 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `flash_attention_4` | 2332 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `fp4_flash_attention_4` | 2209 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `fusion_stitching` | 3576 | 12 | 0 | 0 | 否 | 0 | PASS |
+| `gan` | 1918 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `gcn` | 1805 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `gemini` | 1917 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `glow_compiler` | 2091 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `gpt1` | 2087 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `gpt2` | 2011 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `grouped_query_attention` | 2105 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `gspmd` | 2121 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `hidet` | 2040 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `human_preferences_rl` | 5076 | 15 | 0 | 0 | 否 | 0 | PASS |
+| `instella_moe` | 2117 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `jailbroken` | 6191 | 15 | 0 | 0 | 是 | 0 | PASS |
+| `janus_symbolic_graph` | 3830 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `kimi_k15` | 2467 | 11 | 0 | 0 | 否 | 0 | PASS |
+| `kimi_k2` | 2842 | 11 | 0 | 0 | 否 | 0 | PASS |
+| `kimi_mooncake` | 2651 | 10 | 0 | 0 | 否 | 0 | PASS |
+| `knowledge_distillation` | 4962 | 14 | 0 | 0 | 否 | 0 | PASS |
+| `korch` | 3501 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `latent_diffusion` | 2023 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `linear_layouts` | 13828 | 23 | 0 | 0 | 否 | 0 | PASS |
+| `linformer` | 2044 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `llama` | 2071 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `llama_3` | 2033 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `llava` | 1993 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `longformer` | 2046 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `lstm` | 1941 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `mamba` | 2124 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `mamba_2` | 2162 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `mechanistic_interpretability` | 7303 | 17 | 0 | 0 | 是 | 0 | PASS |
+| `megablocks` | 3598 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `metaschedule` | 1949 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `minimax_01` | 2804 | 11 | 0 | 0 | 否 | 0 | PASS |
+| `minimax_m1` | 2800 | 11 | 0 | 0 | 否 | 0 | PASS |
+| `mirage_persistent_kernel` | 3721 | 14 | 0 | 0 | 否 | 0 | PASS |
+| `mlir` | 2281 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `multi_query_attention` | 2168 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `muzero` | 6599 | 16 | 0 | 0 | 否 | 0 | PASS |
+| `nimble_dynamic_nn` | 4504 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `openai_codex` | 2181 | 11 | 0 | 0 | 否 | 0 | PASS |
+| `openai_gpt3` | 2402 | 11 | 0 | 0 | 否 | 0 | PASS |
+| `openai_gpt4` | 2078 | 10 | 0 | 0 | 否 | 0 | PASS |
+| `openai_gpt_oss` | 2805 | 11 | 0 | 0 | 否 | 0 | PASS |
+| `openai_instructgpt` | 2313 | 10 | 0 | 0 | 否 | 0 | PASS |
+| `palm` | 2027 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `performer` | 2059 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `policy_distillation` | 4910 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `proximal_policy_optimization` | 5112 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `pytorch_2` | 9746 | 20 | 0 | 0 | 否 | 0 | PASS |
+| `pytorch_graph_programming_model` | 6579 | 19 | 0 | 0 | 否 | 0 | PASS |
+| `pytorch_imperative` | 4013 | 11 | 0 | 0 | 否 | 0 | PASS |
+| `qwen_3` | 2063 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `rammer` | 2141 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `resnet` | 1859 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `roller` | 1826 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `rope` | 1976 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `sam` | 2076 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `scaling_laws` | 2047 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `seq2seq` | 1718 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `shade_arena` | 9680 | 15 | 0 | 0 | 是 | 0 | PASS |
+| `simple_adaptive_attacks` | 9556 | 17 | 0 | 0 | 是 | 0 | PASS |
+| `sleeper_agents` | 8625 | 18 | 0 | 0 | 是 | 0 | PASS |
+| `soft_actor_critic` | 4900 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `sparsely_gated_moe` | 3340 | 12 | 0 | 0 | 否 | 0 | PASS |
+| `swin_transformer` | 1951 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `switch_transformers` | 3092 | 12 | 0 | 0 | 否 | 0 | PASS |
+| `sycophancy_to_subterfuge` | 7529 | 17 | 0 | 0 | 是 | 0 | PASS |
+| `t5` | 2135 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `taming_bitwise_gpu_kernels` | 36003 | 19 | 7 | 7 | 否 | 0 | PASS |
+| `taso` | 2063 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `tensor_comprehensions` | 2282 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `tensorir` | 2158 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `tensorrt_llm_architecture` | 4208 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `tilelang` | 2126 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `tinyiree` | 2041 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `torch_fx` | 4112 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `transformer` | 2261 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `transformer_xl` | 2033 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `triton_compiler` | 8937 | 17 | 0 | 0 | 否 | 0 | PASS |
+| `tritonbench` | 9543 | 19 | 0 | 0 | 否 | 0 | PASS |
+| `tvm_compiler` | 2214 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `vae` | 2148 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `vit` | 2021 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `wav2vec2` | 1976 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `weak_to_strong` | 7686 | 16 | 0 | 0 | 是 | 0 | PASS |
+| `welder` | 3476 | 12 | 0 | 0 | 否 | 0 | PASS |
+| `whisper` | 2012 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `xla_compiler` | 2510 | 13 | 0 | 0 | 否 | 0 | PASS |
+| `chain_of_thought` | 3097 | 7 | 0 | 0 | 是 | 0 | PASS |
+| `self_consistency` | 3387 | 9 | 0 | 0 | 是 | 0 | PASS |
+| `tree_of_thoughts` | 3402 | 8 | 0 | 0 | 是 | 0 | PASS |
+| `lets_verify_step_by_step` | 3181 | 10 | 0 | 0 | 是 | 0 | PASS |
+| `scaling_test_time_compute` | 3837 | 10 | 0 | 0 | 是 | 0 | PASS |
+| `s1_test_time_scaling` | 3668 | 10 | 0 | 0 | 是 | 0 | PASS |
+| `speculative_decoding` | 3322 | 10 | 0 | 0 | 是 | 0 | PASS |
+| `speculative_sampling` | 3526 | 10 | 0 | 0 | 是 | 0 | PASS |
+| `specinfer` | 3381 | 10 | 0 | 0 | 是 | 0 | PASS |
+| `medusa` | 3598 | 10 | 0 | 0 | 是 | 0 | PASS |
+| `eagle_speculative` | 3575 | 10 | 0 | 0 | 是 | 0 | PASS |
+| `eagle_2` | 3574 | 10 | 0 | 0 | 是 | 0 | PASS |
