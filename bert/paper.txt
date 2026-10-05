@@ -1,0 +1,1078 @@
+                                                   BERT: Pre-training of Deep Bidirectional Transformers for
+                                                                  Language Understanding
+
+                                                     Jacob Devlin
+                                                              Ming-Wei Chang Kenton Lee Kristina Toutanova
+                                                                     Google AI Language
+                                                 {jacobdevlin,mingweichang,kentonl,kristout}@google.com
+
+
+
+
+                                                              Abstract                           There are two existing strategies for apply-
+                                                                                              ing pre-trained language representations to down-
+                                             We introduce a new language representa-
+                                                                                              stream tasks: feature-based and fine-tuning. The
+arXiv:1810.04805v2 [cs.CL] 24 May 2019
+
+
+
+
+                                             tion model called BERT, which stands for
+                                             Bidirectional Encoder Representations from       feature-based approach, such as ELMo (Peters
+                                             Transformers. Unlike recent language repre-      et al., 2018a), uses task-specific architectures that
+                                             sentation models (Peters et al., 2018a; Rad-     include the pre-trained representations as addi-
+                                             ford et al., 2018), BERT is designed to pre-     tional features. The fine-tuning approach, such as
+                                             train deep bidirectional representations from    the Generative Pre-trained Transformer (OpenAI
+                                             unlabeled text by jointly conditioning on both   GPT) (Radford et al., 2018), introduces minimal
+                                             left and right context in all layers. As a re-
+                                                                                              task-specific parameters, and is trained on the
+                                             sult, the pre-trained BERT model can be fine-
+                                             tuned with just one additional output layer      downstream tasks by simply fine-tuning all pre-
+                                             to create state-of-the-art models for a wide     trained parameters. The two approaches share the
+                                             range of tasks, such as question answering and   same objective function during pre-training, where
+                                             language inference, without substantial task-    they use unidirectional language models to learn
+                                             specific architecture modifications.             general language representations.
+                                             BERT is conceptually simple and empirically         We argue that current techniques restrict the
+                                             powerful. It obtains new state-of-the-art re-    power of the pre-trained representations, espe-
+                                             sults on eleven natural language processing      cially for the fine-tuning approaches. The ma-
+                                             tasks, including pushing the GLUE score to
+                                                                                              jor limitation is that standard language models are
+                                             80.5% (7.7% point absolute improvement),
+                                             MultiNLI accuracy to 86.7% (4.6% absolute
+                                                                                              unidirectional, and this limits the choice of archi-
+                                             improvement), SQuAD v1.1 question answer-        tectures that can be used during pre-training. For
+                                             ing Test F1 to 93.2 (1.5 point absolute im-      example, in OpenAI GPT, the authors use a left-to-
+                                             provement) and SQuAD v2.0 Test F1 to 83.1        right architecture, where every token can only at-
+                                             (5.1 point absolute improvement).                tend to previous tokens in the self-attention layers
+                                                                                              of the Transformer (Vaswani et al., 2017). Such re-
+                                         1   Introduction
+                                                                                              strictions are sub-optimal for sentence-level tasks,
+                                         Language model pre-training has been shown to        and could be very harmful when applying fine-
+                                         be effective for improving many natural language     tuning based approaches to token-level tasks such
+                                         processing tasks (Dai and Le, 2015; Peters et al.,   as question answering, where it is crucial to incor-
+                                         2018a; Radford et al., 2018; Howard and Ruder,       porate context from both directions.
+                                         2018). These include sentence-level tasks such as       In this paper, we improve the fine-tuning based
+                                         natural language inference (Bowman et al., 2015;     approaches by proposing BERT: Bidirectional
+                                         Williams et al., 2018) and paraphrasing (Dolan       Encoder Representations from Transformers.
+                                         and Brockett, 2005), which aim to predict the re-    BERT alleviates the previously mentioned unidi-
+                                         lationships between sentences by analyzing them      rectionality constraint by using a “masked lan-
+                                         holistically, as well as token-level tasks such as   guage model” (MLM) pre-training objective, in-
+                                         named entity recognition and question answering,     spired by the Cloze task (Taylor, 1953). The
+                                         where models are required to produce fine-grained    masked language model randomly masks some of
+                                         output at the token level (Tjong Kim Sang and        the tokens from the input, and the objective is to
+                                         De Meulder, 2003; Rajpurkar et al., 2016).           predict the original vocabulary id of the masked
+word based only on its context. Unlike left-to-            These approaches have been generalized to
+right language model pre-training, the MLM ob-          coarser granularities, such as sentence embed-
+jective enables the representation to fuse the left     dings (Kiros et al., 2015; Logeswaran and Lee,
+and the right context, which allows us to pre-          2018) or paragraph embeddings (Le and Mikolov,
+train a deep bidirectional Transformer. In addi-        2014). To train sentence representations, prior
+tion to the masked language model, we also use          work has used objectives to rank candidate next
+a “next sentence prediction” task that jointly pre-     sentences (Jernite et al., 2017; Logeswaran and
+trains text-pair representations. The contributions     Lee, 2018), left-to-right generation of next sen-
+of our paper are as follows:                            tence words given a representation of the previous
+                                                        sentence (Kiros et al., 2015), or denoising auto-
+• We demonstrate the importance of bidirectional
+                                                        encoder derived objectives (Hill et al., 2016).
+  pre-training for language representations. Un-
+  like Radford et al. (2018), which uses unidirec-         ELMo and its predecessor (Peters et al., 2017,
+  tional language models for pre-training, BERT         2018a) generalize traditional word embedding re-
+  uses masked language models to enable pre-            search along a different dimension. They extract
+  trained deep bidirectional representations. This      context-sensitive features from a left-to-right and a
+  is also in contrast to Peters et al. (2018a), which   right-to-left language model. The contextual rep-
+  uses a shallow concatenation of independently         resentation of each token is the concatenation of
+  trained left-to-right and right-to-left LMs.          the left-to-right and right-to-left representations.
+                                                        When integrating contextual word embeddings
+• We show that pre-trained representations reduce       with existing task-specific architectures, ELMo
+  the need for many heavily-engineered task-            advances the state of the art for several major NLP
+  specific architectures. BERT is the first fine-       benchmarks (Peters et al., 2018a) including ques-
+  tuning based representation model that achieves       tion answering (Rajpurkar et al., 2016), sentiment
+  state-of-the-art performance on a large suite         analysis (Socher et al., 2013), and named entity
+  of sentence-level and token-level tasks, outper-      recognition (Tjong Kim Sang and De Meulder,
+  forming many task-specific architectures.             2003). Melamud et al. (2016) proposed learning
+                                                        contextual representations through a task to pre-
+• BERT advances the state of the art for eleven
+                                                        dict a single word from both left and right context
+  NLP tasks. The code and pre-trained mod-
+                                                        using LSTMs. Similar to ELMo, their model is
+  els are available at https://github.com/
+                                                        feature-based and not deeply bidirectional. Fedus
+  google-research/bert.
+                                                        et al. (2018) shows that the cloze task can be used
+2     Related Work                                      to improve the robustness of text generation mod-
+                                                        els.
+There is a long history of pre-training general lan-
+guage representations, and we briefly review the        2.2   Unsupervised Fine-tuning Approaches
+most widely-used approaches in this section.
+                                                        As with the feature-based approaches, the first
+2.1    Unsupervised Feature-based Approaches            works in this direction only pre-trained word em-
+Learning widely applicable representations of           bedding parameters from unlabeled text (Col-
+words has been an active area of research for           lobert and Weston, 2008).
+decades, including non-neural (Brown et al., 1992;         More recently, sentence or document encoders
+Ando and Zhang, 2005; Blitzer et al., 2006) and         which produce contextual token representations
+neural (Mikolov et al., 2013; Pennington et al.,        have been pre-trained from unlabeled text and
+2014) methods. Pre-trained word embeddings              fine-tuned for a supervised downstream task (Dai
+are an integral part of modern NLP systems, of-         and Le, 2015; Howard and Ruder, 2018; Radford
+fering significant improvements over embeddings         et al., 2018). The advantage of these approaches
+learned from scratch (Turian et al., 2010). To pre-     is that few parameters need to be learned from
+train word embedding vectors, left-to-right lan-        scratch. At least partly due to this advantage,
+guage modeling objectives have been used (Mnih          OpenAI GPT (Radford et al., 2018) achieved pre-
+and Hinton, 2009), as well as objectives to dis-        viously state-of-the-art results on many sentence-
+criminate correct from incorrect words in left and      level tasks from the GLUE benchmark (Wang
+right context (Mikolov et al., 2013).                   et al., 2018a). Left-to-right language model-
+      NSP                Mask LM                        Mask LM              MNLI NER    SQuAD
+                                                                                                                                    Start/End Span
+
+
+       C         T1        ...      TN     T[SEP]     T1’      ...    TM’                  C       T1      ...     TN      T[SEP]   T1’     ...    TM’
+
+
+
+
+                                   BERT                                                            BERT            BERT
+      E[CLS]     E1        ...      EN     E[SEP]      E1’      ...   EM’                 E[CLS]   E1      ...     EN      E[SEP]    E1’     ...   EM’
+
+
+
+      [CLS]      Tok 1     ...     Tok N    [SEP]      Tok 1    ...   TokM                [CLS]    Tok 1   ...     Tok N    [SEP]   Tok 1    ...   TokM
+
+
+
+
+               Masked Sentence A                    Masked Sentence B                                   Question                      Paragraph
+
+                         Unlabeled Sentence A and B Pair                                                         Question Answer Pair
+
+
+                                 Pre-training                                                              Fine-Tuning
+
+Figure 1: Overall pre-training and fine-tuning procedures for BERT. Apart from output layers, the same architec-
+tures are used in both pre-training and fine-tuning. The same pre-trained model parameters are used to initialize
+models for different down-stream tasks. During fine-tuning, all parameters are fine-tuned. [CLS] is a special
+symbol added in front of every input example, and [SEP] is a special separator token (e.g. separating ques-
+tions/answers).
+
+
+ing and auto-encoder objectives have been used                               mal difference between the pre-trained architec-
+for pre-training such models (Howard and Ruder,                              ture and the final downstream architecture.
+2018; Radford et al., 2018; Dai and Le, 2015).
+                                                                             Model Architecture BERT’s model architec-
+2.3     Transfer Learning from Supervised Data                               ture is a multi-layer bidirectional Transformer en-
+There has also been work showing effective trans-                            coder based on the original implementation de-
+fer from supervised tasks with large datasets, such                          scribed in Vaswani et al. (2017) and released in
+as natural language inference (Conneau et al.,                               the tensor2tensor library.1 Because the use
+2017) and machine translation (McCann et al.,                                of Transformers has become common and our im-
+2017). Computer vision research has also demon-                              plementation is almost identical to the original,
+strated the importance of transfer learning from                             we will omit an exhaustive background descrip-
+large pre-trained models, where an effective recipe                          tion of the model architecture and refer readers to
+is to fine-tune models pre-trained with Ima-                                 Vaswani et al. (2017) as well as excellent guides
+geNet (Deng et al., 2009; Yosinski et al., 2014).                            such as “The Annotated Transformer.”2
+                                                                                In this work, we denote the number of layers
+3     BERT                                                                   (i.e., Transformer blocks) as L, the hidden size as
+                                                                             H, and the number of self-attention heads as A.3
+We introduce BERT and its detailed implementa-                               We primarily report results on two model sizes:
+tion in this section. There are two steps in our                             BERTBASE (L=12, H=768, A=12, Total Param-
+framework: pre-training and fine-tuning. Dur-                                eters=110M) and BERTLARGE (L=24, H=1024,
+ing pre-training, the model is trained on unlabeled                          A=16, Total Parameters=340M).
+data over different pre-training tasks. For fine-                               BERTBASE was chosen to have the same model
+tuning, the BERT model is first initialized with                             size as OpenAI GPT for comparison purposes.
+the pre-trained parameters, and all of the param-                            Critically, however, the BERT Transformer uses
+eters are fine-tuned using labeled data from the                             bidirectional self-attention, while the GPT Trans-
+downstream tasks. Each downstream task has sep-                              former uses constrained self-attention where every
+arate fine-tuned models, even though they are ini-                           token can only attend to context to its left.4
+tialized with the same pre-trained parameters. The
+                                                                                1
+question-answering example in Figure 1 will serve                                   https://github.com/tensorflow/tensor2tensor
+                                                                                2
+as a running example for this section.                                              http://nlp.seas.harvard.edu/2018/04/03/attention.html
+                                                                                  3
+                                                                                    In all cases we set the feed-forward/filter size to be 4H,
+   A distinctive feature of BERT is its unified ar-                          i.e., 3072 for the H = 768 and 4096 for the H = 1024.
+                                                                                  4
+chitecture across different tasks. There is mini-                                   We note that in the literature the bidirectional Trans-
+Input/Output Representations To make BERT                           In order to train a deep bidirectional representa-
+handle a variety of down-stream tasks, our input                 tion, we simply mask some percentage of the input
+representation is able to unambiguously represent                tokens at random, and then predict those masked
+both a single sentence and a pair of sentences                   tokens. We refer to this procedure as a “masked
+(e.g., h Question, Answer i) in one token sequence.              LM” (MLM), although it is often referred to as a
+Throughout this work, a “sentence” can be an arbi-               Cloze task in the literature (Taylor, 1953). In this
+trary span of contiguous text, rather than an actual             case, the final hidden vectors corresponding to the
+linguistic sentence. A “sequence” refers to the in-              mask tokens are fed into an output softmax over
+put token sequence to BERT, which may be a sin-                  the vocabulary, as in a standard LM. In all of our
+gle sentence or two sentences packed together.                   experiments, we mask 15% of all WordPiece to-
+   We use WordPiece embeddings (Wu et al.,                       kens in each sequence at random. In contrast to
+2016) with a 30,000 token vocabulary. The first                  denoising auto-encoders (Vincent et al., 2008), we
+token of every sequence is always a special clas-                only predict the masked words rather than recon-
+sification token ([CLS]). The final hidden state                 structing the entire input.
+corresponding to this token is used as the ag-                      Although this allows us to obtain a bidirec-
+gregate sequence representation for classification               tional pre-trained model, a downside is that we
+tasks. Sentence pairs are packed together into a                 are creating a mismatch between pre-training and
+single sequence. We differentiate the sentences in               fine-tuning, since the [MASK] token does not ap-
+two ways. First, we separate them with a special                 pear during fine-tuning. To mitigate this, we do
+token ([SEP]). Second, we add a learned embed-                   not always replace “masked” words with the ac-
+ding to every token indicating whether it belongs                tual [MASK] token. The training data generator
+to sentence A or sentence B. As shown in Figure 1,               chooses 15% of the token positions at random for
+we denote input embedding as E, the final hidden                 prediction. If the i-th token is chosen, we replace
+vector of the special [CLS] token as C ∈ RH ,                    the i-th token with (1) the [MASK] token 80% of
+and the final hidden vector for the ith input token              the time (2) a random token 10% of the time (3)
+as Ti ∈ RH .                                                     the unchanged i-th token 10% of the time. Then,
+   For a given token, its input representation is                Ti will be used to predict the original token with
+constructed by summing the corresponding token,                  cross entropy loss. We compare variations of this
+segment, and position embeddings. A visualiza-                   procedure in Appendix C.2.
+tion of this construction can be seen in Figure 2.
+                                                                 Task #2: Next Sentence Prediction (NSP)
+3.1   Pre-training BERT                                          Many important downstream tasks such as Ques-
+Unlike Peters et al. (2018a) and Radford et al.                  tion Answering (QA) and Natural Language Infer-
+(2018), we do not use traditional left-to-right or               ence (NLI) are based on understanding the rela-
+right-to-left language models to pre-train BERT.                 tionship between two sentences, which is not di-
+Instead, we pre-train BERT using two unsuper-                    rectly captured by language modeling. In order
+vised tasks, described in this section. This step                to train a model that understands sentence rela-
+is presented in the left part of Figure 1.                       tionships, we pre-train for a binarized next sen-
+                                                                 tence prediction task that can be trivially gener-
+Task #1: Masked LM Intuitively, it is reason-                    ated from any monolingual corpus. Specifically,
+able to believe that a deep bidirectional model is               when choosing the sentences A and B for each pre-
+strictly more powerful than either a left-to-right               training example, 50% of the time B is the actual
+model or the shallow concatenation of a left-to-                 next sentence that follows A (labeled as IsNext),
+right and a right-to-left model. Unfortunately,                  and 50% of the time it is a random sentence from
+standard conditional language models can only be                 the corpus (labeled as NotNext). As we show
+trained left-to-right or right-to-left, since bidirec-           in Figure 1, C is used for next sentence predic-
+tional conditioning would allow each word to in-                 tion (NSP).5 Despite its simplicity, we demon-
+directly “see itself”, and the model could trivially             strate in Section 5.1 that pre-training towards this
+predict the target word in a multi-layered context.              task is very beneficial to both QA and NLI. 6
+                                                                    5
+former is often referred to as a “Transformer encoder” while         The final model achieves 97%-98% accuracy on NSP.
+                                                                    6
+the left-context-only version is referred to as a “Transformer       The vector C is not a meaningful sentence representation
+decoder” since it can be used for text generation.               without fine-tuning, since it was trained with NSP.
+           Input         [CLS]    my    dog    is    cute    [SEP]      he    likes    play    ##ing    [SEP]
+
+
+           Token
+                         E[CLS]   Emy   Edog   Eis   Ecute   E[SEP]     Ehe   Elikes   Eplay   E##ing   E[SEP]
+           Embeddings
+
+
+           Segment
+           Embeddings     EA      EA    EA     EA    EA       EA        EB     EB      EB       EB       EB
+
+
+           Position
+           Embeddings     E0      E1    E2     E3    E4       E5        E6     E7      E8       E9      E10
+
+
+Figure 2: BERT input representation. The input embeddings are the sum of the token embeddings, the segmenta-
+tion embeddings and the position embeddings.
+
+
+The NSP task is closely related to representation-           (4) a degenerate text-∅ pair in text classification
+learning objectives used in Jernite et al. (2017) and        or sequence tagging. At the output, the token rep-
+Logeswaran and Lee (2018). However, in prior                 resentations are fed into an output layer for token-
+work, only sentence embeddings are transferred to            level tasks, such as sequence tagging or question
+down-stream tasks, where BERT transfers all pa-              answering, and the [CLS] representation is fed
+rameters to initialize end-task model parameters.            into an output layer for classification, such as en-
+                                                             tailment or sentiment analysis.
+Pre-training data The pre-training procedure                    Compared to pre-training, fine-tuning is rela-
+largely follows the existing literature on language          tively inexpensive. All of the results in the pa-
+model pre-training. For the pre-training corpus we           per can be replicated in at most 1 hour on a sin-
+use the BooksCorpus (800M words) (Zhu et al.,                gle Cloud TPU, or a few hours on a GPU, starting
+2015) and English Wikipedia (2,500M words).                  from the exact same pre-trained model.7 We de-
+For Wikipedia we extract only the text passages              scribe the task-specific details in the correspond-
+and ignore lists, tables, and headers. It is criti-          ing subsections of Section 4. More details can be
+cal to use a document-level corpus rather than a             found in Appendix A.5.
+shuffled sentence-level corpus such as the Billion
+Word Benchmark (Chelba et al., 2013) in order to             4        Experiments
+extract long contiguous sequences.
+                                                             In this section, we present BERT fine-tuning re-
+3.2   Fine-tuning BERT                                       sults on 11 NLP tasks.
+Fine-tuning is straightforward since the self-               4.1       GLUE
+attention mechanism in the Transformer al-
+                                                             The General Language Understanding Evaluation
+lows BERT to model many downstream tasks—
+                                                             (GLUE) benchmark (Wang et al., 2018a) is a col-
+whether they involve single text or text pairs—by
+                                                             lection of diverse natural language understanding
+swapping out the appropriate inputs and outputs.
+                                                             tasks. Detailed descriptions of GLUE datasets are
+For applications involving text pairs, a common
+                                                             included in Appendix B.1.
+pattern is to independently encode text pairs be-
+                                                                To fine-tune on GLUE, we represent the input
+fore applying bidirectional cross attention, such
+                                                             sequence (for single sentence or sentence pairs)
+as Parikh et al. (2016); Seo et al. (2017). BERT
+                                                             as described in Section 3, and use the final hid-
+instead uses the self-attention mechanism to unify
+                                                             den vector C ∈ RH corresponding to the first
+these two stages, as encoding a concatenated text
+                                                             input token ([CLS]) as the aggregate representa-
+pair with self-attention effectively includes bidi-
+                                                             tion. The only new parameters introduced during
+rectional cross attention between two sentences.
+                                                             fine-tuning are classification layer weights W ∈
+   For each task, we simply plug in the task-                RK×H , where K is the number of labels. We com-
+specific inputs and outputs into BERT and fine-              pute a standard classification loss with C and W ,
+tune all the parameters end-to-end. At the in-               i.e., log(softmax(CW T )).
+put, sentence A and sentence B from pre-training
+                                                                7
+are analogous to (1) sentence pairs in paraphras-                 For example, the BERT SQuAD model can be trained in
+                                                             around 30 minutes on a single Cloud TPU to achieve a Dev
+ing, (2) hypothesis-premise pairs in entailment, (3)         F1 score of 91.0%.
+                                                                8
+question-passage pairs in question answering, and                 See (10) in https://gluebenchmark.com/faq.
+System           MNLI-(m/mm)                  QQP      QNLI      SST-2    CoLA      STS-B      MRPC       RTE     Average
+                    392k                      363k     108k       67k      8.5k      5.7k       3.5k      2.5k       -
+Pre-OpenAI SOTA   80.6/80.1                   66.1     82.3       93.2     35.0      81.0       86.0      61.7     74.0
+BiLSTM+ELMo+Attn  76.4/76.1                   64.8     79.8       90.4     36.0      73.3       84.9      56.8     71.0
+OpenAI GPT        82.1/81.4                   70.3     87.4       91.3     45.4      80.0       82.3      56.0     75.1
+BERTBASE          84.6/83.4                   71.2     90.5       93.5     52.1      85.8       88.9      66.4     79.6
+BERTLARGE         86.7/85.9                   72.1     92.7       94.9     60.5      86.5       89.3      70.1     82.1
+
+Table 1: GLUE Test results, scored by the evaluation server (https://gluebenchmark.com/leaderboard).
+The number below each task denotes the number of training examples. The “Average” column is slightly different
+than the official GLUE score, since we exclude the problematic WNLI set.8 BERT and OpenAI GPT are single-
+model, single task. F1 scores are reported for QQP and MRPC, Spearman correlations are reported for STS-B, and
+accuracy scores are reported for the other tasks. We exclude entries that use BERT as one of their components.
+
+
+   We use a batch size of 32 and fine-tune for 3                 Wikipedia containing the answer, the task is to
+epochs over the data for all GLUE tasks. For each                predict the answer text span in the passage.
+task, we selected the best fine-tuning learning rate                As shown in Figure 1, in the question answer-
+(among 5e-5, 4e-5, 3e-5, and 2e-5) on the Dev set.               ing task, we represent the input question and pas-
+Additionally, for BERTLARGE we found that fine-                  sage as a single packed sequence, with the ques-
+tuning was sometimes unstable on small datasets,                 tion using the A embedding and the passage using
+so we ran several random restarts and selected the               the B embedding. We only introduce a start vec-
+best model on the Dev set. With random restarts,                 tor S ∈ RH and an end vector E ∈ RH during
+we use the same pre-trained checkpoint but per-                  fine-tuning. The probability of word i being the
+form different fine-tuning data shuffling and clas-              start of the answer span is computed as a dot prod-
+sifier layer initialization.9                                    uct between Ti and S followed by a softmax over
+                                                                                                              S·Ti
+   Results are presented in Table 1.           Both              all of the words in the paragraph: Pi = Pe S·T    j
+                                                                                                                     .
+                                                                                                                    j   e
+BERTBASE and BERTLARGE outperform all sys-
+                                                                 The analogous formula is used for the end of the
+tems on all tasks by a substantial margin, obtaining
+                                                                 answer span. The score of a candidate span from
+4.5% and 7.0% respective average accuracy im-
+                                                                 position i to position j is defined as S·Ti + E·Tj ,
+provement over the prior state of the art. Note that
+                                                                 and the maximum scoring span where j ≥ i is
+BERTBASE and OpenAI GPT are nearly identical
+                                                                 used as a prediction. The training objective is the
+in terms of model architecture apart from the at-
+                                                                 sum of the log-likelihoods of the correct start and
+tention masking. For the largest and most widely
+                                                                 end positions. We fine-tune for 3 epochs with a
+reported GLUE task, MNLI, BERT obtains a 4.6%
+                                                                 learning rate of 5e-5 and a batch size of 32.
+absolute accuracy improvement. On the official
+                                                                    Table 2 shows top leaderboard entries as well
+GLUE leaderboard10 , BERTLARGE obtains a score
+                                                                 as results from top published systems (Seo et al.,
+of 80.5, compared to OpenAI GPT, which obtains
+                                                                 2017; Clark and Gardner, 2018; Peters et al.,
+72.8 as of the date of writing.
+                                                                 2018a; Hu et al., 2018). The top results from the
+   We find that BERTLARGE significantly outper-
+                                                                 SQuAD leaderboard do not have up-to-date public
+forms BERTBASE across all tasks, especially those
+                                                                 system descriptions available,11 and are allowed to
+with very little training data. The effect of model
+                                                                 use any public data when training their systems.
+size is explored more thoroughly in Section 5.2.
+                                                                 We therefore use modest data augmentation in
+4.2   SQuAD v1.1                                                 our system by first fine-tuning on TriviaQA (Joshi
+                                                                 et al., 2017) befor fine-tuning on SQuAD.
+The Stanford Question Answering Dataset                             Our best performing system outperforms the top
+(SQuAD v1.1) is a collection of 100k crowd-                      leaderboard system by +1.5 F1 in ensembling and
+sourced question/answer pairs (Rajpurkar et al.,                 +1.3 F1 as a single system. In fact, our single
+2016). Given a question and a passage from                       BERT model outperforms the top ensemble sys-
+    9
+      The GLUE data set distribution does not include the Test   tem in terms of F1 score. Without TriviaQA fine-
+labels, and we only made a single GLUE evaluation server
+submission for each of BERTBASE and BERTLARGE .                    11
+                                                                      QANet is described in Yu et al. (2018), but the system
+   10
+      https://gluebenchmark.com/leaderboard                      has improved substantially after publication.
+              System                Dev        Test                     System                   Dev Test
+                                  EM F1       EM F1
+                                                                        ESIM+GloVe               51.9 52.7
+       Top Leaderboard Systems (Dec 10th, 2018)                         ESIM+ELMo                59.1 59.2
+  Human                         -     - 82.3 91.2                       OpenAI GPT                - 78.0
+  #1 Ensemble - nlnet           -     - 86.0 91.7
+                                                                        BERTBASE                 81.6 -
+  #2 Ensemble - QANet           -     - 84.5 90.5
+                                                                        BERTLARGE                86.6 86.3
+                     Published
+  BiDAF+ELMo (Single)          - 85.6 - 85.8                            Human (expert)†           -   85.0
+  R.M. Reader (Ensemble)      81.2 87.9 82.3 88.5                       Human (5 annotations)†    -   88.0
+
+                        Ours
+  BERTBASE (Single)               80.8   88.5 -     -         Table 4: SWAG Dev and Test accuracies. † Human per-
+  BERTLARGE (Single)              84.1   90.9 -     -         formance is measured with 100 samples, as reported in
+  BERTLARGE (Ensemble)            85.8   91.8 -     -         the SWAG paper.
+  BERTLARGE (Sgl.+TriviaQA)       84.2   91.1 85.1 91.8
+  BERTLARGE (Ens.+TriviaQA)       86.2   92.2 87.4 93.2
+
+                                                              sˆi,j = maxj≥i S·Ti + E·Tj . We predict a non-null
+Table 2: SQuAD 1.1 results. The BERT ensemble
+                                                              answer when sˆi,j > snull + τ , where the thresh-
+is 7x systems which use different pre-training check-
+points and fine-tuning seeds.
+                                                              old τ is selected on the dev set to maximize F1.
+                                                              We did not use TriviaQA data for this model. We
+              System                  Dev      Test
+                                                              fine-tuned for 2 epochs with a learning rate of 5e-5
+                                    EM F1     EM F1           and a batch size of 48.
+        Top Leaderboard Systems (Dec 10th, 2018)                  The results compared to prior leaderboard en-
+  Human                         86.3 89.0 86.9 89.5           tries and top published work (Sun et al., 2018;
+  #1 Single - MIR-MRC (F-Net) -        - 74.8 78.0            Wang et al., 2018b) are shown in Table 3, exclud-
+  #2 Single - nlnet               -    - 74.2 77.1
+                                                              ing systems that use BERT as one of their com-
+                        Published
+  unet (Ensemble)                   -     -   71.4 74.9       ponents. We observe a +5.1 F1 improvement over
+  SLQA+ (Single)                    -         71.4 74.4       the previous best system.
+                           Ours
+  BERTLARGE (Single)              78.7 81.9 80.0 83.1         4.4    SWAG
+                                                              The Situations With Adversarial Generations
+Table 3: SQuAD 2.0 results. We exclude entries that           (SWAG) dataset contains 113k sentence-pair com-
+use BERT as one of their components.                          pletion examples that evaluate grounded common-
+                                                              sense inference (Zellers et al., 2018). Given a sen-
+tuning data, we only lose 0.1-0.4 F1, still outper-           tence, the task is to choose the most plausible con-
+forming all existing systems by a wide margin.12              tinuation among four choices.
+                                                                 When fine-tuning on the SWAG dataset, we
+4.3    SQuAD v2.0                                             construct four input sequences, each containing
+                                                              the concatenation of the given sentence (sentence
+The SQuAD 2.0 task extends the SQuAD 1.1
+                                                              A) and a possible continuation (sentence B). The
+problem definition by allowing for the possibility
+                                                              only task-specific parameters introduced is a vec-
+that no short answer exists in the provided para-
+                                                              tor whose dot product with the [CLS] token rep-
+graph, making the problem more realistic.
+                                                              resentation C denotes a score for each choice
+   We use a simple approach to extend the SQuAD
+                                                              which is normalized with a softmax layer.
+v1.1 BERT model for this task. We treat ques-
+                                                                 We fine-tune the model for 3 epochs with a
+tions that do not have an answer as having an an-
+                                                              learning rate of 2e-5 and a batch size of 16. Re-
+swer span with start and end at the [CLS] to-
+                                                              sults are presented in Table 4. BERTLARGE out-
+ken. The probability space for the start and end
+                                                              performs the authors’ baseline ESIM+ELMo sys-
+answer span positions is extended to include the
+                                                              tem by +27.1% and OpenAI GPT by 8.3%.
+position of the [CLS] token. For prediction, we
+compare the score of the no-answer span: snull =              5     Ablation Studies
+S·C + E·C to the score of the best non-null span
+  12
+                                                              In this section, we perform ablation experiments
+     The TriviaQA data we used consists of paragraphs from
+TriviaQA-Wiki formed of the first 400 tokens in documents,    over a number of facets of BERT in order to better
+that contain at least one of the provided possible answers.   understand their relative importance. Additional
+                            Dev Set                       results are still far worse than those of the pre-
+Tasks           MNLI-m QNLI MRPC SST-2 SQuAD              trained bidirectional models. The BiLSTM hurts
+                 (Acc) (Acc) (Acc) (Acc) (F1)
+                                                          performance on the GLUE tasks.
+BERTBASE          84.4    88.4    86.7   92.7    88.5
+No NSP            83.9    84.9    86.5   92.6    87.9        We recognize that it would also be possible to
+LTR & No NSP      82.1    84.3    77.5   92.1    77.8     train separate LTR and RTL models and represent
+  + BiLSTM        82.1    84.1    75.7   91.6    84.9     each token as the concatenation of the two mod-
+                                                          els, as ELMo does. However: (a) this is twice as
+Table 5: Ablation over the pre-training tasks using the
+BERTBASE architecture. “No NSP” is trained without        expensive as a single bidirectional model; (b) this
+the next sentence prediction task. “LTR & No NSP” is      is non-intuitive for tasks like QA, since the RTL
+trained as a left-to-right LM without the next sentence   model would not be able to condition the answer
+prediction, like OpenAI GPT. “+ BiLSTM” adds a ran-       on the question; (c) this it is strictly less powerful
+domly initialized BiLSTM on top of the “LTR + No          than a deep bidirectional model, since it can use
+NSP” model during fine-tuning.                            both left and right context at every layer.
+
+                                                          5.2   Effect of Model Size
+ablation studies can be found in Appendix C.
+                                                          In this section, we explore the effect of model size
+5.1     Effect of Pre-training Tasks                      on fine-tuning task accuracy. We trained a number
+                                                          of BERT models with a differing number of layers,
+We demonstrate the importance of the deep bidi-
+                                                          hidden units, and attention heads, while otherwise
+rectionality of BERT by evaluating two pre-
+                                                          using the same hyperparameters and training pro-
+training objectives using exactly the same pre-
+                                                          cedure as described previously.
+training data, fine-tuning scheme, and hyperpa-
+rameters as BERTBASE :                                       Results on selected GLUE tasks are shown in
+                                                          Table 6. In this table, we report the average Dev
+No NSP: A bidirectional model which is trained            Set accuracy from 5 random restarts of fine-tuning.
+using the “masked LM” (MLM) but without the               We can see that larger models lead to a strict ac-
+“next sentence prediction” (NSP) task.                    curacy improvement across all four datasets, even
+LTR & No NSP: A left-context-only model which             for MRPC which only has 3,600 labeled train-
+is trained using a standard Left-to-Right (LTR)           ing examples, and is substantially different from
+LM, rather than an MLM. The left-only constraint          the pre-training tasks. It is also perhaps surpris-
+was also applied at fine-tuning, because removing         ing that we are able to achieve such significant
+it introduced a pre-train/fine-tune mismatch that         improvements on top of models which are al-
+degraded downstream performance. Additionally,            ready quite large relative to the existing literature.
+this model was pre-trained without the NSP task.          For example, the largest Transformer explored in
+This is directly comparable to OpenAI GPT, but            Vaswani et al. (2017) is (L=6, H=1024, A=16)
+using our larger training dataset, our input repre-       with 100M parameters for the encoder, and the
+sentation, and our fine-tuning scheme.                    largest Transformer we have found in the literature
+   We first examine the impact brought by the NSP         is (L=64, H=512, A=2) with 235M parameters
+task. In Table 5, we show that removing NSP               (Al-Rfou et al., 2018). By contrast, BERTBASE
+hurts performance significantly on QNLI, MNLI,            contains 110M parameters and BERTLARGE con-
+and SQuAD 1.1. Next, we evaluate the impact               tains 340M parameters.
+of training bidirectional representations by com-            It has long been known that increasing the
+paring “No NSP” to “LTR & No NSP”. The LTR                model size will lead to continual improvements
+model performs worse than the MLM model on all            on large-scale tasks such as machine translation
+tasks, with large drops on MRPC and SQuAD.                and language modeling, which is demonstrated
+   For SQuAD it is intuitively clear that a LTR           by the LM perplexity of held-out training data
+model will perform poorly at token predictions,           shown in Table 6. However, we believe that
+since the token-level hidden states have no right-        this is the first work to demonstrate convinc-
+side context. In order to make a good faith at-           ingly that scaling to extreme model sizes also
+tempt at strengthening the LTR system, we added           leads to large improvements on very small scale
+a randomly initialized BiLSTM on top. This does           tasks, provided that the model has been suffi-
+significantly improve results on SQuAD, but the           ciently pre-trained. Peters et al. (2018b) presented
+mixed results on the downstream task impact of               System                               Dev F1 Test F1
+increasing the pre-trained bi-LM size from two               ELMo (Peters et al., 2018a)           95.7    92.2
+to four layers and Melamud et al. (2016) men-                CVT (Clark et al., 2018)               -      92.6
+                                                             CSE (Akbik et al., 2018)               -      93.1
+tioned in passing that increasing hidden dimen-
+sion size from 200 to 600 helped, but increasing             Fine-tuning approach
+                                                               BERTLARGE                           96.6    92.8
+further to 1,000 did not bring further improve-                BERTBASE                            96.4    92.4
+ments. Both of these prior works used a feature-             Feature-based approach (BERTBASE )
+based approach — we hypothesize that when the                  Embeddings                          91.0     -
+model is fine-tuned directly on the downstream                 Second-to-Last Hidden               95.6     -
+                                                               Last Hidden                         94.9     -
+tasks and uses only a very small number of ran-                Weighted Sum Last Four Hidden       95.9     -
+domly initialized additional parameters, the task-             Concat Last Four Hidden             96.1     -
+specific models can benefit from the larger, more              Weighted Sum All 12 Layers          95.5     -
+expressive pre-trained representations even when
+                                                         Table 7: CoNLL-2003 Named Entity Recognition re-
+downstream task data is very small.
+                                                         sults. Hyperparameters were selected using the Dev
+                                                         set. The reported Dev and Test scores are averaged over
+5.3     Feature-based Approach with BERT                 5 random restarts using those hyperparameters.
+All of the BERT results presented so far have used
+the fine-tuning approach, where a simple classifi-
+cation layer is added to the pre-trained model, and      layer in the output. We use the representation of
+all parameters are jointly fine-tuned on a down-         the first sub-token as the input to the token-level
+stream task. However, the feature-based approach,        classifier over the NER label set.
+where fixed features are extracted from the pre-            To ablate the fine-tuning approach, we apply the
+trained model, has certain advantages. First, not        feature-based approach by extracting the activa-
+all tasks can be easily represented by a Trans-          tions from one or more layers without fine-tuning
+former encoder architecture, and therefore require       any parameters of BERT. These contextual em-
+a task-specific model architecture to be added.          beddings are used as input to a randomly initial-
+Second, there are major computational benefits           ized two-layer 768-dimensional BiLSTM before
+to pre-compute an expensive representation of the        the classification layer.
+training data once and then run many experiments
+with cheaper models on top of this representation.          Results are presented in Table 7. BERTLARGE
+                                                         performs competitively with state-of-the-art meth-
+   In this section, we compare the two approaches
+                                                         ods. The best performing method concatenates the
+by applying BERT to the CoNLL-2003 Named
+                                                         token representations from the top four hidden lay-
+Entity Recognition (NER) task (Tjong Kim Sang
+                                                         ers of the pre-trained Transformer, which is only
+and De Meulder, 2003). In the input to BERT, we
+                                                         0.3 F1 behind fine-tuning the entire model. This
+use a case-preserving WordPiece model, and we
+                                                         demonstrates that BERT is effective for both fine-
+include the maximal document context provided
+                                                         tuning and feature-based approaches.
+by the data. Following standard practice, we for-
+mulate this as a tagging task but do not use a CRF
+                                                         6     Conclusion
+      Hyperparams             Dev Set Accuracy
+   #L     #H #A LM (ppl) MNLI-m MRPC SST-2               Recent empirical improvements due to transfer
+       3 768 12     5.84     77.9     79.8   88.4        learning with language models have demonstrated
+       6 768 3      5.24     80.6     82.2   90.7        that rich, unsupervised pre-training is an integral
+       6 768 12     4.68     81.9     84.8   91.3        part of many language understanding systems. In
+      12 768 12     3.99     84.4     86.7   92.9
+      12 1024 16    3.54     85.7     86.9   93.3        particular, these results enable even low-resource
+      24 1024 16    3.23     86.6     87.8   93.7        tasks to benefit from deep unidirectional architec-
+                                                         tures. Our major contribution is further general-
+Table 6: Ablation over BERT model size. #L = the         izing these findings to deep bidirectional architec-
+number of layers; #H = hidden size; #A = number of at-   tures, allowing the same pre-trained model to suc-
+tention heads. “LM (ppl)” is the masked LM perplexity    cessfully tackle a broad set of NLP tasks.
+of held-out training data.
+References                                                 Kevin Clark, Minh-Thang Luong, Christopher D Man-
+                                                             ning, and Quoc Le. 2018. Semi-supervised se-
+Alan Akbik, Duncan Blythe, and Roland Vollgraf.              quence modeling with cross-view training. In Pro-
+  2018. Contextual string embeddings for sequence            ceedings of the 2018 Conference on Empirical Meth-
+  labeling. In Proceedings of the 27th International         ods in Natural Language Processing, pages 1914–
+  Conference on Computational Linguistics, pages             1925.
+  1638–1649.
+                                                           Ronan Collobert and Jason Weston. 2008. A unified
+Rami Al-Rfou, Dokook Choe, Noah Constant, Mandy              architecture for natural language processing: Deep
+  Guo, and Llion Jones. 2018. Character-level lan-           neural networks with multitask learning. In Pro-
+  guage modeling with deeper self-attention. arXiv           ceedings of the 25th international conference on
+  preprint arXiv:1808.04444.                                 Machine learning, pages 160–167. ACM.
+
+Rie Kubota Ando and Tong Zhang. 2005. A framework          Alexis Conneau, Douwe Kiela, Holger Schwenk, Loı̈c
+  for learning predictive structures from multiple tasks     Barrault, and Antoine Bordes. 2017. Supervised
+  and unlabeled data. Journal of Machine Learning            learning of universal sentence representations from
+  Research, 6(Nov):1817–1853.                                natural language inference data. In Proceedings of
+                                                             the 2017 Conference on Empirical Methods in Nat-
+                                                             ural Language Processing, pages 670–680, Copen-
+Luisa Bentivogli, Bernardo Magnini, Ido Dagan,
+                                                             hagen, Denmark. Association for Computational
+  Hoa Trang Dang, and Danilo Giampiccolo. 2009.
+                                                             Linguistics.
+  The fifth PASCAL recognizing textual entailment
+  challenge. In TAC. NIST.
+                                                           Andrew M Dai and Quoc V Le. 2015. Semi-supervised
+                                                             sequence learning. In Advances in neural informa-
+John Blitzer, Ryan McDonald, and Fernando Pereira.           tion processing systems, pages 3079–3087.
+  2006. Domain adaptation with structural correspon-
+  dence learning. In Proceedings of the 2006 confer-       J. Deng, W. Dong, R. Socher, L.-J. Li, K. Li, and L. Fei-
+  ence on empirical methods in natural language pro-          Fei. 2009. ImageNet: A Large-Scale Hierarchical
+  cessing, pages 120–128. Association for Computa-            Image Database. In CVPR09.
+  tional Linguistics.
+                                                           William B Dolan and Chris Brockett. 2005. Automati-
+Samuel R. Bowman, Gabor Angeli, Christopher Potts,           cally constructing a corpus of sentential paraphrases.
+  and Christopher D. Manning. 2015. A large anno-            In Proceedings of the Third International Workshop
+  tated corpus for learning natural language inference.      on Paraphrasing (IWP2005).
+  In EMNLP. Association for Computational Linguis-
+  tics.                                                    William Fedus, Ian Goodfellow, and Andrew M Dai.
+                                                             2018. Maskgan: Better text generation via filling in
+Peter F Brown, Peter V Desouza, Robert L Mercer,             the . arXiv preprint arXiv:1801.07736.
+  Vincent J Della Pietra, and Jenifer C Lai. 1992.
+  Class-based n-gram models of natural language.           Dan Hendrycks and Kevin Gimpel. 2016. Bridging
+  Computational linguistics, 18(4):467–479.                  nonlinearities and stochastic regularizers with gaus-
+                                                             sian error linear units. CoRR, abs/1606.08415.
+Daniel Cer, Mona Diab, Eneko Agirre, Inigo Lopez-
+  Gazpio, and Lucia Specia. 2017. Semeval-2017             Felix Hill, Kyunghyun Cho, and Anna Korhonen. 2016.
+  task 1: Semantic textual similarity multilingual and       Learning distributed representations of sentences
+  crosslingual focused evaluation. In Proceedings            from unlabelled data. In Proceedings of the 2016
+  of the 11th International Workshop on Semantic             Conference of the North American Chapter of the
+  Evaluation (SemEval-2017), pages 1–14, Vancou-             Association for Computational Linguistics: Human
+  ver, Canada. Association for Computational Lin-            Language Technologies. Association for Computa-
+  guistics.                                                  tional Linguistics.
+
+                                                           Jeremy Howard and Sebastian Ruder. 2018. Universal
+Ciprian Chelba, Tomas Mikolov, Mike Schuster, Qi Ge,          language model fine-tuning for text classification. In
+  Thorsten Brants, Phillipp Koehn, and Tony Robin-            ACL. Association for Computational Linguistics.
+  son. 2013. One billion word benchmark for measur-
+  ing progress in statistical language modeling. arXiv     Minghao Hu, Yuxing Peng, Zhen Huang, Xipeng Qiu,
+  preprint arXiv:1312.3005.                                  Furu Wei, and Ming Zhou. 2018. Reinforced
+                                                             mnemonic reader for machine reading comprehen-
+Z. Chen, H. Zhang, X. Zhang, and L. Zhao. 2018.              sion. In IJCAI.
+   Quora question pairs.
+                                                           Yacine Jernite, Samuel R. Bowman, and David Son-
+Christopher Clark and Matt Gardner. 2018. Simple             tag. 2017. Discourse-based objectives for fast un-
+  and effective multi-paragraph reading comprehen-           supervised sentence representation learning. CoRR,
+  sion. In ACL.                                              abs/1705.00557.
+Mandar Joshi, Eunsol Choi, Daniel S Weld, and Luke      Matthew Peters, Mark Neumann, Luke Zettlemoyer,
+ Zettlemoyer. 2017. Triviaqa: A large scale distantly    and Wen-tau Yih. 2018b. Dissecting contextual
+ supervised challenge dataset for reading comprehen-     word embeddings: Architecture and representation.
+ sion. In ACL.                                           In Proceedings of the 2018 Conference on Empiri-
+                                                         cal Methods in Natural Language Processing, pages
+Ryan Kiros, Yukun Zhu, Ruslan R Salakhutdinov,           1499–1509.
+  Richard Zemel, Raquel Urtasun, Antonio Torralba,
+  and Sanja Fidler. 2015. Skip-thought vectors. In      Alec Radford, Karthik Narasimhan, Tim Salimans, and
+  Advances in neural information processing systems,      Ilya Sutskever. 2018. Improving language under-
+  pages 3294–3302.                                        standing with unsupervised learning. Technical re-
+                                                          port, OpenAI.
+Quoc Le and Tomas Mikolov. 2014. Distributed rep-
+  resentations of sentences and documents. In Inter-    Pranav Rajpurkar, Jian Zhang, Konstantin Lopyrev, and
+  national Conference on Machine Learning, pages          Percy Liang. 2016. Squad: 100,000+ questions for
+  1188–1196.                                              machine comprehension of text. In Proceedings of
+                                                          the 2016 Conference on Empirical Methods in Nat-
+Hector J Levesque, Ernest Davis, and Leora Morgen-        ural Language Processing, pages 2383–2392.
+  stern. 2011. The winograd schema challenge. In
+  Aaai spring symposium: Logical formalizations of      Minjoon Seo, Aniruddha Kembhavi, Ali Farhadi, and
+  commonsense reasoning, volume 46, page 47.              Hannaneh Hajishirzi. 2017. Bidirectional attention
+                                                          flow for machine comprehension. In ICLR.
+Lajanugen Logeswaran and Honglak Lee. 2018. An
+  efficient framework for learning sentence represen-   Richard Socher, Alex Perelygin, Jean Wu, Jason
+  tations. In International Conference on Learning        Chuang, Christopher D Manning, Andrew Ng, and
+  Representations.                                        Christopher Potts. 2013. Recursive deep models
+                                                          for semantic compositionality over a sentiment tree-
+Bryan McCann, James Bradbury, Caiming Xiong, and
+                                                          bank. In Proceedings of the 2013 conference on
+  Richard Socher. 2017. Learned in translation: Con-
+                                                          empirical methods in natural language processing,
+  textualized word vectors. In NIPS.
+                                                          pages 1631–1642.
+Oren Melamud, Jacob Goldberger, and Ido Dagan.
+  2016. context2vec: Learning generic context em-       Fu Sun, Linyang Li, Xipeng Qiu, and Yang Liu.
+  bedding with bidirectional LSTM. In CoNLL.              2018. U-net: Machine reading comprehension
+                                                          with unanswerable questions.  arXiv preprint
+Tomas Mikolov, Ilya Sutskever, Kai Chen, Greg S Cor-      arXiv:1810.06638.
+  rado, and Jeff Dean. 2013. Distributed representa-
+  tions of words and phrases and their compositional-   Wilson L Taylor. 1953. Cloze procedure: A new
+  ity. In Advances in Neural Information Processing       tool for measuring readability. Journalism Bulletin,
+  Systems 26, pages 3111–3119. Curran Associates,         30(4):415–433.
+  Inc.
+                                                        Erik F Tjong Kim Sang and Fien De Meulder.
+Andriy Mnih and Geoffrey E Hinton. 2009. A scal-           2003. Introduction to the conll-2003 shared task:
+  able hierarchical distributed language model. In         Language-independent named entity recognition. In
+  D. Koller, D. Schuurmans, Y. Bengio, and L. Bot-         CoNLL.
+  tou, editors, Advances in Neural Information Pro-
+                                                        Joseph Turian, Lev Ratinov, and Yoshua Bengio. 2010.
+  cessing Systems 21, pages 1081–1088. Curran As-
+                                                           Word representations: A simple and general method
+  sociates, Inc.
+                                                           for semi-supervised learning. In Proceedings of the
+Ankur P Parikh, Oscar Täckström, Dipanjan Das, and       48th Annual Meeting of the Association for Compu-
+  Jakob Uszkoreit. 2016. A decomposable attention          tational Linguistics, ACL ’10, pages 384–394.
+  model for natural language inference. In EMNLP.
+                                                        Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob
+Jeffrey Pennington, Richard Socher, and Christo-          Uszkoreit, Llion Jones, Aidan N Gomez, Lukasz
+   pher D. Manning. 2014. Glove: Global vectors for       Kaiser, and Illia Polosukhin. 2017. Attention is all
+   word representation. In Empirical Methods in Nat-      you need. In Advances in Neural Information Pro-
+   ural Language Processing (EMNLP), pages 1532–          cessing Systems, pages 6000–6010.
+   1543.
+                                                        Pascal Vincent, Hugo Larochelle, Yoshua Bengio, and
+Matthew Peters, Waleed Ammar, Chandra Bhagavat-           Pierre-Antoine Manzagol. 2008. Extracting and
+ ula, and Russell Power. 2017. Semi-supervised se-        composing robust features with denoising autoen-
+ quence tagging with bidirectional language models.       coders. In Proceedings of the 25th international
+ In ACL.                                                  conference on Machine learning, pages 1096–1103.
+                                                          ACM.
+Matthew Peters, Mark Neumann, Mohit Iyyer, Matt
+ Gardner, Christopher Clark, Kenton Lee, and Luke       Alex Wang, Amanpreet Singh, Julian Michael, Fe-
+ Zettlemoyer. 2018a. Deep contextualized word rep-        lix Hill, Omer Levy, and Samuel Bowman. 2018a.
+ resentations. In NAACL.                                  Glue: A multi-task benchmark and analysis platform
+  for natural language understanding. In Proceedings         • Additional details for our experiments are
+  of the 2018 EMNLP Workshop BlackboxNLP: An-                  presented in Appendix B; and
+  alyzing and Interpreting Neural Networks for NLP,
+  pages 353–355.                                             • Additional ablation studies are presented in
+Wei Wang, Ming Yan, and Chen Wu. 2018b. Multi-                 Appendix C.
+  granularity hierarchical attention fusion networks           We present additional ablation studies for
+  for reading comprehension and question answering.
+  In Proceedings of the 56th Annual Meeting of the As-
+                                                               BERT including:
+  sociation for Computational Linguistics (Volume 1:             – Effect of Number of Training Steps; and
+  Long Papers). Association for Computational Lin-
+  guistics.                                                      – Ablation for Different Masking Proce-
+                                                                   dures.
+Alex Warstadt, Amanpreet Singh, and Samuel R Bow-
+  man. 2018. Neural network acceptability judg-          A     Additional Details for BERT
+  ments. arXiv preprint arXiv:1805.12471.
+                                                         A.1    Illustration of the Pre-training Tasks
+Adina Williams, Nikita Nangia, and Samuel R Bow-
+  man. 2018. A broad-coverage challenge corpus           We provide examples of the pre-training tasks in
+  for sentence understanding through inference. In       the following.
+  NAACL.
+                                                         Masked LM and the Masking Procedure As-
+Yonghui Wu, Mike Schuster, Zhifeng Chen, Quoc V          suming the unlabeled sentence is my dog is
+  Le, Mohammad Norouzi, Wolfgang Macherey,
+                                                         hairy, and during the random masking procedure
+  Maxim Krikun, Yuan Cao, Qin Gao, Klaus
+  Macherey, et al. 2016.       Google’s neural ma-       we chose the 4-th token (which corresponding to
+  chine translation system: Bridging the gap between     hairy), our masking procedure can be further il-
+  human and machine translation. arXiv preprint          lustrated by
+  arXiv:1609.08144.
+                                                             • 80% of the time: Replace the word with the
+Jason Yosinski, Jeff Clune, Yoshua Bengio, and Hod
+   Lipson. 2014. How transferable are features in deep         [MASK] token, e.g., my dog is hairy →
+   neural networks? In Advances in neural information          my dog is [MASK]
+   processing systems, pages 3320–3328.
+                                                             • 10% of the time: Replace the word with a
+Adams Wei Yu, David Dohan, Minh-Thang Luong, Rui               random word, e.g., my dog is hairy → my
+  Zhao, Kai Chen, Mohammad Norouzi, and Quoc V
+                                                               dog is apple
+  Le. 2018. QANet: Combining local convolution
+  with global self-attention for reading comprehen-
+  sion. In ICLR.                                             • 10% of the time: Keep the word un-
+                                                               changed, e.g., my dog is hairy → my dog
+Rowan Zellers, Yonatan Bisk, Roy Schwartz, and Yejin           is hairy. The purpose of this is to bias the
+  Choi. 2018. Swag: A large-scale adversarial dataset          representation towards the actual observed
+  for grounded commonsense inference. In Proceed-
+  ings of the 2018 Conference on Empirical Methods             word.
+  in Natural Language Processing (EMNLP).
+                                                            The advantage of this procedure is that the
+Yukun Zhu, Ryan Kiros, Rich Zemel, Ruslan Salakhut-      Transformer encoder does not know which words
+  dinov, Raquel Urtasun, Antonio Torralba, and Sanja     it will be asked to predict or which have been re-
+  Fidler. 2015. Aligning books and movies: Towards       placed by random words, so it is forced to keep
+  story-like visual explanations by watching movies
+  and reading books. In Proceedings of the IEEE          a distributional contextual representation of ev-
+  international conference on computer vision, pages     ery input token. Additionally, because random
+  19–27.                                                 replacement only occurs for 1.5% of all tokens
+                                                         (i.e., 10% of 15%), this does not seem to harm
+   Appendix for “BERT: Pre-training of                   the model’s language understanding capability. In
+   Deep Bidirectional Transformers for                   Section C.2, we evaluate the impact this proce-
+       Language Understanding”                           dure.
+  We organize the appendix into three sections:             Compared to standard langauge model training,
+                                                         the masked LM only make predictions on 15% of
+   • Additional implementation details for BERT          tokens in each batch, which suggests that more
+     are presented in Appendix A;                        pre-training steps may be required for the model
+            BERT (Ours)                    OpenAI GPT                                                 ELMo
+       T1     T2   ...    TN          T1      T2   ...    TN                                  T1      T2       ...    TN
+
+
+      Trm    Trm   ...    Trm        Trm     Trm   ...   Trm
+                                                                      Lstm       Lstm   ...        Lstm        Lstm    Lstm          Lstm
+                                                                                                                              ...
+
+      Trm    Trm   ...    Trm        Trm     Trm   ...   Trm
+                                                                      Lstm       Lstm   ...        Lstm        Lstm    Lstm    ...   Lstm
+
+
+
+       E1     E2   ...    EN          E1      E2   ...    EN                                  E1          E2    ...   EN
+
+
+
+
+Figure 3: Differences in pre-training model architectures. BERT uses a bidirectional Transformer. OpenAI GPT
+uses a left-to-right Transformer. ELMo uses the concatenation of independently trained left-to-right and right-to-
+left LSTMs to generate features for downstream tasks. Among the three, only BERT representations are jointly
+conditioned on both left and right context in all layers. In addition to the architecture differences, BERT and
+OpenAI GPT are fine-tuning approaches, while ELMo is a feature-based approach.
+
+
+to converge. In Section C.1 we demonstrate that                epochs over the 3.3 billion word corpus. We
+MLM does converge marginally slower than a left-               use Adam with learning rate of 1e-4, β1 = 0.9,
+to-right model (which predicts every token), but               β2 = 0.999, L2 weight decay of 0.01, learning
+the empirical improvements of the MLM model                    rate warmup over the first 10,000 steps, and linear
+far outweigh the increased training cost.                      decay of the learning rate. We use a dropout prob-
+                                                               ability of 0.1 on all layers. We use a gelu acti-
+Next Sentence Prediction The next sentence                     vation (Hendrycks and Gimpel, 2016) rather than
+prediction task can be illustrated in the following            the standard relu, following OpenAI GPT. The
+examples.                                                      training loss is the sum of the mean masked LM
+                                                               likelihood and the mean next sentence prediction
+Input = [CLS]      the man went to [MASK] store [SEP]
+                                                               likelihood.
+            he bought a gallon [MASK] milk [SEP]
+                                                                  Training of BERTBASE was performed on 4
+Label = IsNext                                                 Cloud TPUs in Pod configuration (16 TPU chips
+                                                               total).13 Training of BERTLARGE was performed
+Input = [CLS]      the man [MASK] to the store [SEP]
+                                                               on 16 Cloud TPUs (64 TPU chips total). Each pre-
+                                                               training took 4 days to complete.
+            penguin [MASK] are flight ##less birds [SEP]
+                                                                  Longer sequences are disproportionately expen-
+Label = NotNext                                                sive because attention is quadratic to the sequence
+                                                               length. To speed up pretraing in our experiments,
+A.2    Pre-training Procedure                                  we pre-train the model with sequence length of
+To generate each training input sequence, we sam-              128 for 90% of the steps. Then, we train the rest
+ple two spans of text from the corpus, which we                10% of the steps of sequence of 512 to learn the
+refer to as “sentences” even though they are typ-              positional embeddings.
+ically much longer than single sentences (but can
+be shorter also). The first sentence receives the A            A.3           Fine-tuning Procedure
+embedding and the second receives the B embed-                 For fine-tuning, most model hyperparameters are
+ding. 50% of the time B is the actual next sentence            the same as in pre-training, with the exception of
+that follows A and 50% of the time it is a random              the batch size, learning rate, and number of train-
+sentence, which is done for the “next sentence pre-            ing epochs. The dropout probability was always
+diction” task. They are sampled such that the com-             kept at 0.1. The optimal hyperparameter values
+bined length is ≤ 512 tokens. The LM masking is                are task-specific, but we found the following range
+applied after WordPiece tokenization with a uni-               of possible values to work well across all tasks:
+form masking rate of 15%, and no special consid-
+eration given to partial word pieces.                             • Batch size: 16, 32
+   We train with batch size of 256 sequences (256                13
+                                                                    https://cloudplatform.googleblog.com/2018/06/Cloud-
+sequences * 512 tokens = 128,000 tokens/batch)                 TPU-now-offers-preemptible-pricing-and-global-
+for 1,000,000 steps, which is approximately 40                 availability.html
+   • Learning rate (Adam): 5e-5, 3e-5, 2e-5                  To isolate the effect of these differences, we per-
+   • Number of epochs: 2, 3, 4                            form ablation experiments in Section 5.1 which
+                                                          demonstrate that the majority of the improvements
+   We also observed that large data sets (e.g.,           are in fact coming from the two pre-training tasks
+100k+ labeled training examples) were far less            and the bidirectionality they enable.
+sensitive to hyperparameter choice than small data
+sets. Fine-tuning is typically very fast, so it is rea-   A.5    Illustrations of Fine-tuning on Different
+sonable to simply run an exhaustive search over                  Tasks
+the above parameters and choose the model that            The illustration of fine-tuning BERT on different
+performs best on the development set.                     tasks can be seen in Figure 4. Our task-specific
+                                                          models are formed by incorporating BERT with
+A.4   Comparison of BERT, ELMo ,and                       one additional output layer, so a minimal num-
+      OpenAI GPT                                          ber of parameters need to be learned from scratch.
+Here we studies the differences in recent popular         Among the tasks, (a) and (b) are sequence-level
+representation learning models including ELMo,            tasks while (c) and (d) are token-level tasks. In
+OpenAI GPT and BERT. The comparisons be-                  the figure, E represents the input embedding, Ti
+tween the model architectures are shown visually          represents the contextual representation of token i,
+in Figure 3. Note that in addition to the architec-       [CLS] is the special symbol for classification out-
+ture differences, BERT and OpenAI GPT are fine-           put, and [SEP] is the special symbol to separate
+tuning approaches, while ELMo is a feature-based          non-consecutive token sequences.
+approach.
+   The most comparable existing pre-training              B     Detailed Experimental Setup
+method to BERT is OpenAI GPT, which trains a              B.1    Detailed Descriptions for the GLUE
+left-to-right Transformer LM on a large text cor-                Benchmark Experiments.
+pus. In fact, many of the design decisions in BERT
+                                                          Our GLUE results in Table1 are obtained
+were intentionally made to make it as close to
+                                                          from        https://gluebenchmark.com/
+GPT as possible so that the two methods could be
+                                                          leaderboard            and     https://blog.
+minimally compared. The core argument of this
+                                                          openai.com/language-unsupervised.
+work is that the bi-directionality and the two pre-
+                                                          The GLUE benchmark includes the following
+training tasks presented in Section 3.1 account for
+                                                          datasets, the descriptions of which were originally
+the majority of the empirical improvements, but
+                                                          summarized in Wang et al. (2018a):
+we do note that there are several other differences
+between how BERT and GPT were trained:                    MNLI Multi-Genre Natural Language Inference
+                                                          is a large-scale, crowdsourced entailment classifi-
+   • GPT is trained on the BooksCorpus (800M              cation task (Williams et al., 2018). Given a pair of
+     words); BERT is trained on the BooksCor-             sentences, the goal is to predict whether the sec-
+     pus (800M words) and Wikipedia (2,500M               ond sentence is an entailment, contradiction, or
+     words).                                              neutral with respect to the first one.
+   • GPT uses a sentence separator ([SEP]) and            QQP Quora Question Pairs is a binary classifi-
+     classifier token ([CLS]) which are only in-          cation task where the goal is to determine if two
+     troduced at fine-tuning time; BERT learns            questions asked on Quora are semantically equiv-
+     [SEP], [CLS] and sentence A/B embed-                 alent (Chen et al., 2018).
+     dings during pre-training.
+                                                          QNLI Question Natural Language Inference is
+   • GPT was trained for 1M steps with a batch            a version of the Stanford Question Answering
+     size of 32,000 words; BERT was trained for           Dataset (Rajpurkar et al., 2016) which has been
+     1M steps with a batch size of 128,000 words.         converted to a binary classification task (Wang
+                                                          et al., 2018a). The positive examples are (ques-
+   • GPT used the same learning rate of 5e-5 for          tion, sentence) pairs which do contain the correct
+     all fine-tuning experiments; BERT chooses a          answer, and the negative examples are (question,
+     task-specific fine-tuning learning rate which        sentence) from the same paragraph which do not
+     performs the best on the development set.            contain the answer.
+         Class                                                                           Class
+         Label                                                                           Label
+
+
+            C        T1      ...       TN     T[SEP]     T1’     ...         TM’            C        T1         T2        ...     TN
+
+
+
+
+                                       BERT                                                                    BERT
+
+           E[CLS]    E1      ...       EN     E[SEP]      E1’     ...        EM’          E[CLS]     E1        E2         ...     EN
+
+
+
+           [CLS]
+                     Tok
+                             ...       Tok
+                                               [SEP]
+                                                          Tok
+                                                                  ...        Tok          [CLS]     Tok 1     Tok 2       ...   Tok N
+                      1                 N                  1                  M
+
+
+
+
+                      Sentence 1                          Sentence 2                                        Single Sentence
+
+
+
+
+                                                          Start/End Span                           O        B-PER        ...     O
+
+
+              C       T1      ...       TN     T[SEP]     T1’     ...         TM’          C        T1         T2        ...     TN
+
+
+
+
+                                        BERT                                                                  BERT
+
+            E[CLS]    E1      ...       EN      E[SEP]     E1’         ...    EM’        E[CLS]     E1         E2        ...     EN
+
+
+
+                      Tok               Tok                Tok                Tok                  Tok 1                        Tok N
+             [CLS]
+                       1
+                              ...        N
+                                                [SEP]
+                                                            1
+                                                                       ...     M
+                                                                                         [CLS]               Tok 2       ...
+
+
+
+                            Question                           Paragraph                                    Single Sentence
+
+
+
+
+                                    Figure 4: Illustrations of Fine-tuning BERT on Different Tasks.
+
+
+SST-2 The Stanford Sentiment Treebank is a                                          for whether the sentences in the pair are semanti-
+binary single-sentence classification task consist-                                 cally equivalent (Dolan and Brockett, 2005).
+ing of sentences extracted from movie reviews
+with human annotations of their sentiment (Socher                                   RTE Recognizing Textual Entailment is a bi-
+et al., 2013).                                                                      nary entailment task similar to MNLI, but with
+                                                                                    much less training data (Bentivogli et al., 2009).14
+CoLA The Corpus of Linguistic Acceptability is
+a binary single-sentence classification task, where                                 WNLI Winograd NLI is a small natural lan-
+the goal is to predict whether an English sentence                                  guage inference dataset (Levesque et al., 2011).
+is linguistically “acceptable” or not (Warstadt                                     The GLUE webpage notes that there are issues
+et al., 2018).                                                                      with the construction of this dataset, 15 and every
+                                                                                    trained system that’s been submitted to GLUE has
+STS-B The Semantic Textual Similarity Bench-                                        performed worse than the 65.1 baseline accuracy
+mark is a collection of sentence pairs drawn from                                   of predicting the majority class. We therefore ex-
+news headlines and other sources (Cer et al.,                                       clude this set to be fair to OpenAI GPT. For our
+2017). They were annotated with a score from 1                                      GLUE submission, we always predicted the ma-
+to 5 denoting how similar the two sentences are in
+                                                                                       14
+terms of semantic meaning.                                                                Note that we only report single-task fine-tuning results
+                                                                                    in this paper. A multitask fine-tuning approach could poten-
+MRPC Microsoft Research Paraphrase Corpus                                           tially push the performance even further. For example, we
+                                                                                    did observe substantial improvements on RTE from multi-
+consists of sentence pairs automatically extracted                                  task training with MNLI.
+                                                                                       15
+from online news sources, with human annotations                                          https://gluebenchmark.com/faq
+jority class.                                                                   Note that the purpose of the masking strategies
+                                                                             is to reduce the mismatch between pre-training
+C                    Additional Ablation Studies                             and fine-tuning, as the [MASK] symbol never ap-
+                                                                             pears during the fine-tuning stage. We report the
+C.1                      Effect of Number of Training Steps
+                                                                             Dev results for both MNLI and NER. For NER,
+Figure 5 presents MNLI Dev accuracy after fine-                              we report both fine-tuning and feature-based ap-
+tuning from a checkpoint that has been pre-trained                           proaches, as we expect the mismatch will be am-
+for k steps. This allows us to answer the following                          plified for the feature-based approach as the model
+questions:                                                                   will not have the chance to adjust the representa-
+                                                                             tions.
+             1. Question: Does BERT really need such
+                a large amount of pre-training (128,000                         Masking Rates               Dev Set Results
+                words/batch * 1,000,000 steps) to achieve                    M ASK S AME    R ND    MNLI              NER
+                high fine-tuning accuracy?                                                         Fine-tune Fine-tune Feature-based
+                Answer: Yes, BERTBASE achieves almost                         80%     10% 10%        84.2      95.4           94.9
+                                                                             100%      0%   0%       84.3      94.9           94.0
+                1.0% additional accuracy on MNLI when                         80%      0% 20%        84.1      95.2           94.6
+                trained on 1M steps compared to 500k steps.                   80%     20%   0%       84.4      95.2           94.7
+                                                                               0%     20% 80%        83.7      94.8           94.6
+             2. Question: Does MLM pre-training converge                       0%      0% 100%       83.6      94.9           94.6
+                slower than LTR pre-training, since only 15%
+                of words are predicted in each batch rather                   Table 8: Ablation over different masking strategies.
+                than every word?
+                Answer: The MLM model does converge                             The results are presented in Table 8. In the table,
+                slightly slower than the LTR model. How-                     M ASK means that we replace the target token with
+                ever, in terms of absolute accuracy the MLM                  the [MASK] symbol for MLM; S AME means that
+                model begins to outperform the LTR model                     we keep the target token as is; R ND means that
+                almost immediately.                                          we replace the target token with another random
+                                                                             token.
+C.2                      Ablation for Different Masking                         The numbers in the left part of the table repre-
+                         Procedures                                          sent the probabilities of the specific strategies used
+In Section 3.1, we mention that BERT uses a                                  during MLM pre-training (BERT uses 80%, 10%,
+mixed strategy for masking the target tokens when                            10%). The right part of the paper represents the
+pre-training with the masked language model                                  Dev set results. For the feature-based approach,
+(MLM) objective. The following is an ablation                                we concatenate the last 4 layers of BERT as the
+study to evaluate the effect of different masking                            features, which was shown to be the best approach
+strategies.                                                                  in Section 5.3.
+                                                                                From the table it can be seen that fine-tuning is
+                                                                             surprisingly robust to different masking strategies.
+                    84                                                       However, as expected, using only the M ASK strat-
+                                                                             egy was problematic when applying the feature-
+MNLI Dev Accuracy
+
+
+
+
+                    82
+                                                                             based approach to NER. Interestingly, using only
+                    80
+                                                                             the R ND strategy performs much worse than our
+                                                                             strategy as well.
+                    78
+                                               BERTBASE (Masked LM)
+                    76                         BERTBASE (Left-to-Right)
+
+                              200      400        600        800     1,000
+                                Pre-training Steps (Thousands)
+
+
+Figure 5: Ablation over number of training steps. This
+shows the MNLI accuracy after fine-tuning, starting
+from model parameters that have been pre-trained for
+k steps. The x-axis is the value of k.
+

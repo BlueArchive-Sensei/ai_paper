@@ -1,0 +1,1163 @@
+                                         Hidet: Task-Mapping Programming Paradigm for Deep Learning
+                                                               Tensor Programs
+                                                              Yaoyao Ding∗†                                               Cody Hao Yu                                  Bojian Zheng†
+                                                           University of Toronto                                     Amazon Web Services                            University of Toronto
+                                                             Toronto, Canada                                           Santa Clara, USA                                Toronto, Canada
+                                                          yaoyao@cs.toronto.edu                                       hyuz@amazon.com                               bojian@cs.toronto.edu
+
+                                                                  Yizhi Liu                                                 Yida Wang                            Gennady Pekhimenko†
+                                                          Amazon Web Services                                       Amazon Web Services                            University of Toronto
+arXiv:2210.09603v2 [cs.LG] 15 Feb 2023
+
+
+
+
+                                                             Santa Clara, USA                                         Santa Clara, USA                               Toronto, Canada
+                                                          yizhiliu@amazon.com                                      wangyida@amazon.com                          pekhimenko@cs.toronto.edu
+
+                                         ABSTRACT                                                                                    on average). It also reduces the tuning time by 20× and 11× com-
+                                         As deep learning models nowadays are widely adopted by both                                 pared with AutoTVM and Ansor, respectively. We open-sourced
+                                         cloud services and edge devices, reducing the latency of deep learn-                        hidet at https://www.github.com/hidet-org/hidet.
+                                         ing model inferences becomes crucial to provide efficient model
+                                         serving. However, it is challenging to develop efficient tensor pro-                        CCS CONCEPTS
+                                         grams for deep learning operators due to the high complexity of                             • Computing methodologies → Parallel programming lan-
+                                         modern accelerators (e.g., NVIDIA GPUs and Google TPUs) and                                 guages; Machine learning; Artificial intelligence.
+                                         the rapidly growing number of operators.
+                                            Deep learning compilers, such as Apache TVM, adopt declara-                              KEYWORDS
+                                         tive scheduling primitives to lower the bar of developing tensor                            deep learning systems, systems for machine learning, programming
+                                         programs. However, we show that this approach is insufficient to                            models, compilation, tensor computation
+                                         cover state-of-the-art tensor program optimizations (e.g., double
+                                         buffering). In this paper, we propose to embed the scheduling pro-                          ACM Reference Format:
+                                         cess into tensor programs and use dedicated mappings, called task                           Yaoyao Ding, Cody Hao Yu, Bojian Zheng, Yizhi Liu, Yida Wang, and Gen-
+                                         mappings, to define the computation assignment and ordering di-                             nady Pekhimenko. 2023. Hidet: Task-Mapping Programming Paradigm for
+                                                                                                                                     Deep Learning Tensor Programs. In Proceedings of the 28th ACM Interna-
+                                         rectly in the tensor programs. This new approach greatly enriches
+                                                                                                                                     tional Conference on Architectural Support for Programming Languages and
+                                         the expressible optimizations by allowing developers to manipulate                          Operating Systems, Volume 2 (ASPLOS ’23), March 25–29, 2023, Vancouver,
+                                         tensor programs at a much finer granularity (e.g., allowing program-                        BC, Canada. ACM, New York, NY, USA, 15 pages. https://doi.org/10.1145/
+                                         statement-level optimizations). We call the proposed method the                             3575693.3575702
+                                         task-mapping programming paradigm. In addition, we propose a
+                                         new post-scheduling fusion optimization that allows developers
+                                         to focus on scheduling every single operator and automates the
+                                                                                                                                     1    INTRODUCTION
+                                         fusion after scheduling. It greatly reduces the engineering efforts                         Deep neural networks (DNNs) [35] have achieved state-of-the-art
+                                         for operator fusion. Our proposed paradigm also constructs an ef-                           (SOTA) results in various tasks such as image recognition [25, 34,
+                                         ficient hardware-centric schedule space, which is agnostic to the                           49, 50], natural language translation [16, 36, 48], and autonomous
+                                         program input size and greatly reduces the tuning time.                                     driving [14]. In deployment environments, these models are re-
+                                            With the proposed paradigm, we implement a deep learning                                 peatedly executed to serve continuous user requests, named model
+                                         compiler – Hidet. Extensive experiments on modern convolution                               serving. Thus, it is crucial to reduce the latency and maximize the
+                                         and transformer models show that Hidet outperforms state-of-the-                            throughput of model execution to ensure safety, save energy, and
+                                         art DNN inference framework, ONNX Runtime, and compiler, TVM                                improve user experience.
+                                         equipped with scheduler AutoTVM and Ansor, by up to 1.48× (1.22×                               There are two major ways to execute a DNN model. (1) Deep
+                                                                                                                                     learning (DL) frameworks such as TensorFlow [1], PyTorch [41]
+                                         ∗ Part   of the work done while interning at Amazon.                                        and ONNX Runtime [15] dispatch operators to kernel libraries such
+                                         † Also    with Vector Institute.                                                            as cuDNN [12], cuBLAS [26], and CUTLASS [32] during execution.
+                                                                                                                                     (2) On the other hand, DL compilers such as Tensorflow-XLA [44]
+                                         Permission to make digital or hard copies of part or all of this work for personal or       and TVM [9] automatically generate kernels through a compilation
+                                         classroom use is granted without fee provided that copies are not made or distributed       process for the given operators. Various schedulers such as An-
+                                         for profit or commercial advantage and that copies bear this notice and the full citation
+                                         on the first page. Copyrights for third-party components of this work must be honored.      sor [65] and AutoTVM [11] are used to schedule the kernels during
+                                         For all other uses, contact the owner/author(s).                                            compilation to achieve high performance.
+                                         ASPLOS ’23, March 25–29, 2023, Vancouver, BC, Canada                                           Kernel libraries (e.g., cuDNN [12] and cuBLAS [26]) provide a
+                                         © 2023 Copyright held by the owner/author(s).
+                                         ACM ISBN 978-1-4503-9916-6/23/03.                                                           collection of highly optimized hand-crafted kernels (e.g., convolu-
+                                         https://doi.org/10.1145/3575693.3575702                                                     tions and matrix multiplications). These libraries typically achieve
+ASPLOS ’23, March 25–29, 2023, Vancouver, BC, Canada                                   Yaoyao Ding, Cody Hao Yu, Bojian Zheng, Yizhi Liu, Yida Wang, and Gennady Pekhimenko
+
+
+near-peak performance on widely used input sizes, as they are                                 time. We also propose post-scheduling fusion to fuse the scheduled
+able to implement a large spectrum of optimizations in low-level                              operator with surrounding operators automatically, so developers
+languages (e.g., CUDA C/C++ and assembly code). However, man-                                 don’t need to worry about fusion when writing schedule templates.
+ually tweaking a kernel to optimize for performance is laborious,                                We implement a new DL compiler called Hidet based on the pro-
+error-prone, and requires expertise in writing low-level language                             posed ideas. In this work, we mainly focus on optimizing DNN in-
+codes. Thus, it is difficult to generalize to other input shapes, new                         ference on GPUs, as it is the most commonly used DNN accelerator.
+operators, and kernel fusion patterns. In addition, template-based                            The proposed ideas also apply to other accelerators such as CPUs
+libraries such as CUTLASS [32] employ C++ templates to generate                               and TPUs [31]. Extensive experiments on modern convolutional
+tensor programs for different input shapes on the fly. Although                               and transformer models show that Hidet outperforms state-of-the-
+template-based libraries can achieve competitive performance on                               art DL inference frameworks and schedulers, AutoTVM [11] and
+many input shapes by dynamically tuning the optimization hyper-                               Ansor [65], by up to 1.48× (1.22× on average) while reducing the
+parameters, they do not reduce the complexity of writing tensor                               tuning time of the two schedulers by 20× and 11×, respectively.
+programs for new operators and only provide limited fusion ca-                                   We summarize our contributions as follows:
+pability (e.g., only a small number of predefined operators can be                                 • We identify and present the limited expressiveness of loop-
+fused with matrix multiplication).                                                                   oriented scheduling adopted by state-of-the-art DL compilers
+   Alternatively, DL compilers [4, 9, 43, 44, 67] are proposed to com-                               to be their fundamental limitation in efficiently compiling
+pile deep learning networks into tensor programs automatically.                                      complex tensor programs (e.g., matrix multiplication).
+Existing state-of-the-art DL compilers adopt the idea of decou-                                    • We introduce the task-mapping-oriented programming par-
+pling computation definition and scheduling, originally proposed                                     adigm to simplify tensor program development without sac-
+by Halide [43] and TVM [9]. The computation definition of an                                         rificing the expressiveness of optimizations compared with
+operator only defines how each element of the output tensor is                                       hand-crafted implementations. Based on this paradigm, we
+computed mathematically, and the schedule defines the way the                                        propose post-scheduling fusion to fuse the scheduled pro-
+execution is performed, such as the loop order and thread bind-                                      gram with surrounding operators. The paradigm also allows
+ing [9, 43]. Compilers leverage schedulers like AutoTVM [11] and                                     us to search in the hardware-centric schedule space to reduce
+Asnor [65] to tune the hyper-parameters of the schedule to optimize                                  the tuning time significantly.
+operator performance for each input shape. Unlike kernel libraries                                 • We implement a new DL compiler, named Hidet, based on
+and templates that target a fixed set of operators and limited fusion                                the proposed ideas. Extensive experiments show that Hidet
+patterns, compilers are capable of supporting more operators and                                     outperforms state-of-the-art DL frameworks and compilers
+more flexible fusion patterns automatically.                                                         by up to 1.48× and reduces tuning time by 11×. We have
+   However, existing state-of-the-art compilers are mostly based on                                  open-sourced Hidet here.
+the loop-oriented scheduling primitives, which manipulate the loop
+structure of a tensor program in a declarative manner (e.g., loop split                       2 BACKGROUND
+and reorder). Although loop-oriented scheduling primitives have
+achieved great success in simplifying tensor program writing [9,                              2.1 CUDA Programming Model
+11, 65], certain key optimizations (e.g., double buffering [32]) are                          The CUDA programming platform [40] is widely used by deep learn-
+hard to implement. Specifically, loop-oriented scheduling primitives                          ing systems on NVIDIA GPUs. In this section, we briefly introduce
+cannot express the fine-grained tensor program transformations                                the CUDA programming model on modern GPUs.
+required by the key optimizations discussed in Section 3.1. Besides,
+loop-oriented scheduling also suffers from the long kernel tuning                                  Thr ead        Launch
+time due to the rarity of efficient schedules in the tremendous                                   ... War p Ker nel             B     B    B     B      SM SM SM
+tuning spaces. For instance, AutoTVM [11] takes 15 hours to tune                               32 threads
+                                                                                                                               Used Smem:
+a single CNN model Inception V3 [50] on a modern GPU.                                                                        Used Registers:            SM SM SM
+                                                                                                              B B
+   In this work, we propose a new paradigm for writing efficient
+tensor programs: task-mapping-oriented programming paradigm.
+                                                                                                     ...
+                                                                                                Thr ead       B    ...            Str eaming
+                                                                                                                              Multipr ocessor (SM)      SM    ... SM
+In this paradigm, we define the parallelizable computations in an                                Block       Ker nel           Gr aphics Pr ocessing Unit (GPU)
+operator as tasks, and the process of assigning and ordering the
+tasks to parallel processing units (e.g., threads) as scheduling. The                             Figure 1: An overview of CUDA programming model.
+developers can directly define the scheduling in the tensor program
+through task mappings 1 . This paradigm simplifies the development
+of tensor programs without sacrificing the ability to express opti-                           Kernel, Thread Block, and Thread. When running a workload on
+mizations requiring fine-grained program manipulation. With the                               the GPU, thousands of threads will be executed. Each thread exe-
+in-program style of scheduling, this paradigm also allows us to                               cutes the same piece of code, called kernel code. When launching a
+search the tensor program in an efficient hardware-centric schedule                           kernel, a grid of thread blocks will be dispatched onto the GPU as
+space that is agnostic to input size to dramatically reduce the tuning                        shown in Figure 1. Each grid usually comprises tens to thousands of
+1 The
+                                                                                              thread blocks, while each thread block comprises tens to hundreds
+     name task mapping comes from the abstraction where a scheduling process
+can be considered as the one that maps tasks to processing units in both spatial and          of threads. In the kernel code, pre-defined variables threadIdx and
+temporal dimensions.                                                                          blockIdx, and suffix x, y, and z are used to access the 3-dimensional
+                                                                                          2
+Hidet: Task-Mapping Programming Paradigm for Deep Learning Tensor Programs                                 ASPLOS ’23, March 25–29, 2023, Vancouver, BC, Canada
+
+
+index of thread in a thread block and the thread block in the grid               CUDA Matr ix N=1024                                            N tile size 64
+of blocks, respectively.                                                         Multiplication
+                                                                                                                          1 Decompose into
+Hardware Implementation. Each modern GPU has tens to hundreds                               K=1024                        indepenent sub tasks
+of streaming multiprocessors (SMs). Each SM supports scheduling up                                              B         run by thread blocks
+to thousands of concurrent threads [40]. Threads in a thread block
+are partitioned into warps, and each warp contains 32 consecutive
+                                                                                  M                                                         K tile size 8
+threads executing the same instructions. There are two kinds of                  1024
+programmable on-chip memory: shared memory and registers. Reg-                                   A              C         M tile size 64
+isters are privately allocated to each thread, while shared memory
+                                                                                        2    Load A and B from global memory to shared
+is allocated to each thread block and only threads in the thread                            memory cooper atively by all threads in block
+block can access it. When launching a kernel, the thread blocks
+are dispatched to the SMs wave by wave [23]. Each thread block                                                          Gmem B Global Memory
+will only be dispatched to a single SM while each SM may contain                            Gmem ASmem A                     Cooperatively Load
+multiple thread blocks. The number of maximum resident thread                                                           Smem B Shared Memory
+blocks per SM is limited by the size of shared memory, register file,
+and warp scheduling units.                                                              3   Matrix-Multiply Accumulate (MMA)
+   Operators in the deep neural network are implemented as GPU                                        N tile size 64      Warp 0                   Warp 1
+kernels. When running a neural network, we launch these kernels
+                                                                                    K tile size 8          Smem B                    Warp 2        Warp 3
+following an order satisfying the operator dependency. Among
+these operators, matrix multiplication (also known as a linear or
+                                                                                                       0    1       0    1       0   1     4 Iterations for
+dense layer) is one of the most important operators. We next present
+an efficient implementation of matrix multiplication using CUDA                     M tile             2    3       2    3       2   3        each warp
+and take it as an example throughout the paper.                                           Smem A
+                                                                                    size 64            0    1       0    1
+                                                                                                                                Tensor Core MMA
+                                                                                                       2    3       2    3
+2.2    Efficient Matrix Multiplication                                                                                          (16x16x8)
+This section illustrates an efficient implementation of matrix multi-             Repeat for each K tile
+plication 𝐶 = 𝐴𝐵 (all matrices are 1024 × 1024) on modern NVIDIA                        4    Store C from register to global memory
+GPUs via Tensor Cores [13]. Figure 2 shows the desired workflow. In
+step 1 , we decompose the matrix multiplication into independent
+subtasks by tiling the M and N dimensions. After tiling, there will              Figure 2: Efficient Matrix Multiplication on CUDA Platform.
+       𝑀             𝑁
+be M tile size × N tile size independent subtasks while each sub-task is
+a matrix multiplication with size: M tile size × N tile size × 𝐾. Each            1 def matmul(A: fp32[M, K], B: fp32[K, N], C: fp32[M, N]):
+subtask will be assigned to a thread block. Inside each thread block,             2    SmemA, SmemB = shared fp32[64, 8], fp32[8, 64]
+the K dimension will be further tiled into K tile𝐾 size tiles, and the            3    RegsC= local fp32[...]
+thread block will apply step 2 - 3 to each K tile. In step 2 , threads            4    ... # Step 1 : Calculate sub-task offset
+in the thread block load fragments of matrix A and B from global                  5    for k0 in range(128): # Iterate each K tile
+memory to shared memory collectively (i.e., different threads load                6         # Step 2 : Load A and B frag. to SmemA and SmemB
+                                                                                  7         SmemA, SmemB = cooperative_load(A, B, k0)
+different parts of the fragments). All threads in a thread block will
+                                                                                  8         sync_threads()
+be synchronized to make sure the data loading is finished before                            # Step 3 : Block MMA (RegsC = SmemA * SmemB + RegsC)
+                                                                                  9
+proceeding to the next step. In step 3 , 4 warps in the thread block             10         RegsC= block_mma(SmemA, SmemB, RegsC)
+work on 4 × 4 = 16 matrix multiply accumulates (MMAs), each of                   11         sync_threads()
+which is an operation 𝐶 16×16 = 𝐴16×8 𝐵 8×16 + 𝐶 16×16 . Each warp               12    ... # Step 4 : Write back C (RegsC => C)
+conducts 4 MMAs using Tensor Core [13] with 4 sequential itera-
+tions. Once we accumulate the results of matrix multiplication for
+                                                                                            Figure 3: Pseudo-code of Matrix Multiplication.
+each K tile, we 4 store the results from the accumulating register
+to global memory. Figure 3 gives the pseudo-code of the 4 steps.
+   There are two ways to implement the kernel: (1) directly write the            compiler TVM [9] and schedulers (e.g., AutoTVM [11] and An-
+CUDA C code as in kernel libraries [12, 26, 32], or (2) use declarative          sor [65]). Since this paradigm offers a set of declarative scheduling
+loop-oriented scheduling primitives. In the next subsection, we                  primitives to manipulate the loop structure of tensor programs, we
+would give a brief introduction to the second method.                            name it declarative loop-oriented scheduling.
+                                                                                    Figure 4 shows the workflow of loop-oriented scheduling. De-
+2.3    Declarative Loop-Oriented Scheduling                                      velopers first provide a mathematical computation of the operator
+To simplify tensor program optimization, Halide [43] proposes a                  that defines how each element in the tensor is computed. The exam-
+programming paradigm of tensor programs, in which the computa-                   ple gives the definition of matrix multiplication, where the (i, j)-th
+tion definition and scheduling of the computation are decoupled.                 element of the output is a sum reduction. Given the computation
+This programming paradigm is adopted by state-of-the-art DNN                     definition, the schedulers first 1 generate a default tensor program
+                                                                             3
+ASPLOS ’23, March 25–29, 2023, Vancouver, BC, Canada                                           Yaoyao Ding, Cody Hao Yu, Bojian Zheng, Yizhi Liu, Yida Wang, and Gennady Pekhimenko
+
+
+ Computation                                                                                          way, a manual schedule becomes a schedule template and can be
+                        B = compute([ M, N], lambda i, j: reduce([ K], A[i, k] * B[k, j]))
+  Definition                                                                                          optimized by auto-tuning frameworks [11] for various input shapes
+              1    Generate Default Program Automatically                                             and hardware. To further save the time of writing a schedule tem-
+     Default            for i in range(M): for j in range(N): for k in range(K):
+                                                                                                      plate, auto-scheduling approaches that automatically generate a
+    Pr ogr am               C[i, j] += A[i, k] * B[k, j]                                              schedule by applying predefined rules to the computation definition
+                                                                                                      have been proposed [2, 65].
+              2    Apply Declarative Loop-Oriented Scheduling Primitives
+                                                                                                         However, as we illustrate in the next section, the schedule space
+                        (oi, ii), (oj, ij)= split (i, factor=64), split (j, factor=64)
+                                                                                                      from the loop-oriented scheduling paradigm is still inefficient. As
+                        reorder (oi, oj, ii, ij)
+                        bind(oi, blockIdx.x); bind(oj, blockIdx.y)                                    a result, 1) it is challenging to achieve competitive performance
+                        ...                                                                           on operators that are highly optimized by kernel libraries since
+                                                                                                      loop-oriented scheduling can not express some key optimizations,
+   Scheduled            for ii in range(64): for ij in range(64): for k in range(K):
+                          C[i, j] += A[ii + blockIdx.x * 64, k] * B[k, ij + blockIdx.y * 64]          2) schedulers need hours to days to find the best schedule configu-
+    Pr ogr am
+                                                                                                      ration in the schedule space.
+
+       Figure 4: Workflow of loop-oriented scheduling.                                                3     MOTIVATION
+                                                                                                      In this section, we summarize the challenges faced by state-of-the-
+Table 1: Loop-oriented scheduling primitives in TVM [9].                                              art loop-oriented scheduling.
+The primitive fuse, split, reorder, and bind transforms the
+program by fusing loop, splitting loop into sub-loops, re-                                            3.1     Limited Optimization Support
+ordering loops, and binding a loop to a hardware-specific
+                                                                                                      The declarative loop-oriented scheduling primitives suffer from
+axis.
+                                                                                                      limited support for key optimizations. We use an important opti-
+  Schedule Pr imitives Or iginal Pr ogr am                       Scheduled Pr ogr am
+                                                                                                      mization, double buffering [6, 32], that has been adopted in several
+                                                                                                      vendor libraries (e.g., cuBLAS [26] and CUTLASS [32]) but not
+                     fuse(i, j) for i in range(128):             for ij in range(512):
+                                    for j in range(4):               body(ij / 4, ij %4)              supported by TVM [9], to illustrate this fundamental limitation.
+                                        body(i, j)                                                       The implementation of matrix multiplication in Figure 3 is sub-
+                  split (i, 128) for i in range(512):            for oi in range(4):                  optimal since all threads in the same thread blocks are likely to be
+                                     body(i)                         for ii in range(128):            blocked by one type of hardware resource (i.e., memory bandwidth
+                                                                         body(oi * 128 + ii)          in Step 2 or computation units in Step 3) while leaving the other idle.
+                  reorder (i, j) for i in range(128):            for j in range(4):                   This is because, in Figure 3, the data loading (L7) and computation
+                                     for j in range(4):              for i in range(128):
+                                                                                                      (L10) use the same buffer, and synchronization (L8) needs to be
+                                         body(i, j)                      body(i, j)
+                                                                                                      used to satisfy data dependency.
+    bind(i, threadIdx.x) for i in range(128):                    body(threadIdx.x)
+                             body(i)
+                                                                                                       1     RegsA, RegsB = register fp32[...], fp32[...]
+                                                                                                       2     SmemA, SmemB = shared fp32[2, 64, 8], fp32[2, 8, 64]
+from the computation definition automatically by translating the                                       3     ... Two Buffers for A & B
+compute and reduce primitives to nested loops. Then, a series of                                       4     SmemA[0], SmemB[0] = cooperative_load(A, B, 0)
+declarative scheduling primitives are applied to transform the loop                                    5     sync_threads()              Preloading Next Tile of A/ B into Regs
+structure of the default tensor program for better performance on                                      6     for k0 in range(127):
+                                                                                                                                                 Computation of Cur r ent Tile
+the specific hardware. Table 1 shows the scheduling primitives                                         7         p, q = k0 %2, (k0 + 1) %2
+                                                                                                       8         RegsA, RegsB = cooperative_load(A, B, k0 + 1)
+in TVM [9].2 In the example of step 2 , we only list the first few
+                                                                                                       9         RegsC= block_mma(SmemA[ p], SmemB[p], RegsC)
+scheduling primitives to implement the matrix multiplication, as
+                                                                                                      10         SmemA[ q], SmemB[ q] = RegsA, RegsB
+TVM has used over 80 primitives to schedule matrix multiplication.                                    11         sync_threads() Store Next Tile of A/ B into Shar ed Memory
+Starting from the default program, we first split the i and j loops                                   12     RegsC= block_mma(SmemA[0], SmemB[0], RegsC)
+with factor 64 into (oi, ii) and (oj, ij), respectively, then re-                                     13     ...
+order loops into (oi, oj, ii, ij), and finally bind oi and oj to
+blockIdx.x and blockIdx.y, respectively. With these primitives,                                                   Figure 5: Double Buffering Optimization.
+we can get the scheduled program in Figure 4.
+   There are several ways to make use of a programming para-
+                                                                                                         The double buffering optimization shown in Figure 5 alleviates
+digm in a deep learning compiler. Intuitively, we can manually
+                                                                                                      the aforementioned problem by using two buffers: one is used for
+write a schedule for each workload (i.e., an operator with a con-
+                                                                                                      pre-loading the fragments for the next iteration (L8 and L10), while
+crete input on certain hardware) [9, 43]. However, this approach
+                                                                                                      the other is used for computation in the current iteration (L9). We
+requires significant engineering efforts to achieve optimal perfor-
+                                                                                                      first preload the next tile of matrix A and B into registers (L8),
+mance for all widely used operators and their typical input sizes.
+                                                                                                      and store them to shared memory after the computation of the
+Consequently, tunable parameters (e.g., tile size and loop orders)
+                                                                                                      current tile (L10). This is more efficient because computation in
+are introduced for developers to specify in the schedules. In this
+                                                                                                      L9 can be executed while the global memory loading in L8 is on
+2 Schedule   primitives that relocate loops are omitted.                                              the fly with thread-level parallelism. With double buffering, the
+                                                                                                  4
+Hidet: Task-Mapping Programming Paradigm for Deep Learning Tensor Programs                                                   ASPLOS ’23, March 25–29, 2023, Vancouver, BC, Canada
+
+
+threads in a thread block can utilize both memory accessing units                                             108
+
+
+
+
+                                                                                        Number of schedules
+and computation units at the same time.
+                                                                                                              107                                Geometric mean: 3.6 × 106
+   However, this optimization cannot be implemented using ex-
+isting declarative loop-oriented scheduling primitives in Table 1.                                            106
+This is because none of the schedule primitives can manipulate the
+loop body at a fine granularity3 . As a result, although loop-oriented                                        105
+scheduling simplifies tensor program writing, its declarative style of
+scheduling prevents developers from implementing optimizations                                                104
+                                                                                                                                  Conv2d in ResNet50
+requiring fine-grained manipulation of tensor programs. We want
+to highlight that double buffering optimization is only an example                      Figure 7: Sizes of schedule spaces adopted by AutoTVM [11].
+of the limited expressiveness of existing loop-oriented scheduling.
+Besides double buffering, thread block swizzle [7, 53] and efficient
+usage4 of Tensor Core MMA PTX instruction [28], and multi-stage                         3.3                         Long Tuning Time
+asynchronous prefetching [32] are widely used optimizations in
+kernel libraries [26, 32], but are difficult to implement with declara-                 In addition to expressiveness and extensibility, the tuning time
+tive loop-oriented scheduling. To implement these optimizations,                        of existing state-or-the-art schedulers [2, 11, 65] typically ranges
+we need a more expressive method to write tensor programs and                           from hours to days due to inefficient schedule spaces. The major-
+schedule their computations.                                                            ity of their schedule spaces are composed of loop tiling factors.
+                                                                                        To constrain the schedule space size and avoid conditional if-else
+3.2      Dedicated Schedule Template for Fusion                                         branches, existing schedulers only cover perfect tile sizes (i.e., only
+                                                                                        tile 𝑛-length loop with proper factors of 𝑛). For example, potential
+                                                                                        tile factors of a loop with length 10 only include 1, 2, 5, and 10. As a
+         Anchor Op           Element-wise Op           Fusible Sub-Graph                result, the space constructed by these schedulers with loop-oriented
+                                                                                        scheduling depends on the input shapes of the target workload. We
+          Conv2d                                                                        name this category of schedule space as input-centric schedule space.
+                                                         Fused Operator                 We observe two challenges with input-centric schedule space. (1)
+            BN
+                       Schedule Sub-Graph with     Conv2d-Bn-ReLU                       The schedule space size grows exponentially along with the number
+           ReLU      Anchor Op's Schedule Template                                      of input size factors. Figure 7 shows the number of schedules for
+                                                                                        each convolution in ResNet-50 [25]. There are up to 108 schedules
+                                                                                        to search for a single convolutional layer. (2) The schedule space
+          Figure 6: Workflow of TVM sub-graph fusion.                                   might not include the schedule with optimal performance as non-
+                                                                                        perfect tile sizes are not considered. An extreme example is that
+    One important advantage of compilers over kernel libraries is                       both Ansor and AutoTVM fail to find a valid schedule for matrix
+the ability to optimize arbitrary workloads, especially workloads                       multiplication with M=N=K=2039 because 2039 is a prime number.
+with multiple fused operators (e.g., Conv2d-BN-ReLU in convolu-                             To address the first challenge, the state-of-the-art schedulers [11,
+tional neural networks [25], and Reshape-Matmul-Transpose in                            65] employ a cost model to predict the performance of schedules
+transformer models [16]). For example, Figure 6 illustrates how                         and use genetic evolution search to increase the search efficiency.
+TVM [9] fuses Conv2d-BN-ReLU into a single kernel. Specifically,                        However, the search process still requires about half an hour to tune
+TVM groups operators to form sub-graphs. Each sub-graph can con-                        a single operator, resulting in 8 to 15 hours to tune an Inception
+tain only one anchor operator, which is usually the most compute-                       V3 model [50]. Long tuning time prevents existing schedulers from
+intensive one (e.g., convolution or matrix multiplication) with a                       co-optimizing DNNs with graph-level optimizations [30, 37] and
+carefully designed schedule template. Then, the schedule template                       upper-level applications such as neural architecture search [71].
+of the anchor operator will be used to schedule the entire sub-graph,                   Both of them need the latency of a kernel to guide their optimization
+meaning that the schedule template has to support all possible fu-                      and network searching within a short amount of tuning time.
+sion scenarios, which greatly increases the complexity of writing
+schedule templates. Although auto-schedulers (e.g., Ansor [65]) are                     4                      KEY IDEAS
+proposed to generate schedule templates automatically from the                          To address the challenges mentioned above, we propose a new
+computation definition with pre-defined auto-scheduling rules, it                       programming paradigm for tensor programs – task-mapping pro-
+is challenging to extend the auto-schedulers with new rules. This                       gramming paradigm (Section 4.1). This paradigm defines descriptive
+is because the new rule has to be compatible with all existing rules                    objects, called task mapping, to specify the task assignment and
+and needs to be general enough to support all operators. Thus,                          ordering. Task mappings replace the original loop-oriented sched-
+it is still challenging to support fusion, while not increasing the                     uling primitives and are directly defined and used in the tensor pro-
+complexity of writing specialized schedule templates.                                   gram, which allows more optimizations compared with the existing
+                                                                                        declarative style of scheduling. We also propose post-scheduling fu-
+3 Even though TVM tried to use a new primitive called double_buffer to implement        sion (Section 4.2) to simplify sub-graph scheduling by automatically
+double buffering optimization, it does not separate the global memory loading and
+shared memory storing, thus can only achieve sub-optimal performance.                   fusing surrounding operators to the operator with scheduled tensor
+4 Directly use MMA PTX instruction instead of WMMA instruction [28].                    program. The proposed paradigm also enables efficient partial tiling
+                                                                                    5
+ASPLOS ’23, March 25–29, 2023, Vancouver, BC, Canada                             Yaoyao Ding, Cody Hao Yu, Bojian Zheng, Yizhi Liu, Yida Wang, and Gennady Pekhimenko
+
+
+
+     SmemA = compute([ 64, 8], lambda i, k: A[i, k])             Declarative Loop-Oriented              Task-Mapping-Oriented                                    4 Iterations
+                                                                 Scheduling                             Programming Paradigm
+                                                                                                                                                   8
+ 1       Generate default tensor program                     1   Scheduling directly in the tensor
+  for i in range(64):                                            program with task mapping.                        (1) Define Task                         16
+      for k in range(8):                                                                                          Mapping task_map
+                                                                 def cooperative_load_A(A: fp32[64, 8]):
+          SmemA[i, k] = A[i, k]                                     SmemA = shared fp32[64, 8]
+                                                                                                                                           64             Assigned
+ 2        Apply declarative schedule primitives                     task_map = repeat(4, 1) × spatial(16, 8)
+                                                                                                                                                           to 128
+                                                                                                                                                          thr eads
+     io, ii = split (i, 16)                                         for i , k in task_map(threadIdx.x):        (2) Iterate over tasks
+                                              Each (i , k)
+     iik = fuse(ii, k)                                                                                          assigned to thread
+                                               is a task               SmemA[i , k] = A[ i , k]
+     bind(iik, threadIdx.x)                                                                                          threadIdx.x
+                                                                                                                                              repeat(4, 1) × spatial(16, 8)
+ 3        Lower schedule primitives                      2   Lower task mapping                (3) Implement task (i , k)                    Task Mapping Details
+
+  def cooperative_load_A(A: fp32[64, 8]):                              Task Mappings Task Shape Workers Mapping (worker id w => assigned tasks)
+     SmemA = shared fp32[64, 8]                                            repeat(4, 1)        (4, 1)         1       [ (0, 0), (1, 0), (2, 0), (3, 0)]
+     t = threadIdx.x
+     for io in range(4):                                                  spatial(16, 8)     (16, 8)         128      [(w / 8, w %8)]
+         i , k = io * 16 + t / 8, t %8                     repeat(4, 1) × spatial(16, 8)                              [ (w / 8, w %8), (w / 8 + 16, w %8),
+                                                                                             (64, 8)         128
+         SmemA[i , k] = A[ i , k]                      (× task mapping composition)                                   (w / 8 + 32, w %8), (w / 8 + 48, w %8)]
+
+Figure 8: Scheduling the cooperative loading with declarative loop-oriented scheduling and task-mapping programming par-
+adigm. In declarative loop-oriented scheduling, developers apply a series of declarative scheduling primitives to an automat-
+ically generated program to transform the tensor program into a more efficient one. Instead of employing declarative prim-
+itives, the task-mapping programming paradigm allows developers to directly embed the scheduling in the tensor program
+and enables a larger spectrum of optimizations compared with loop-oriented scheduling.
+
+
+(tile size is not required to divide loop length) to tune the tensor                     task, greatly simplifying tensor program developments. Compared
+program in small hardware-centric schedule space (Section 4.3) and                       with declarative loop-oriented scheduling, it schedules directly in
+significantly reduces the tuning time.                                                   the tensor program and allows more fine-grained optimizations.
+                                                                                         Besides this, it also allows developers to fall back on some dimen-
+4.1       Task-Mapping Programming Paradigm                                              sions to traditional loops to implement optimizations such as double
+                                                                                         buffering [32]. Since task mapping is the key component used in
+Loop-oriented scheduling manipulates a tensor program through
+                                                                                         the three steps, we name our new approach to construct tensor
+declarative loop-oriented scheduling primitives to simplify the ten-
+                                                                                         programs – a task-mapping programming paradigm.
+sor programming, but at the same time prevents fine-grained ma-
+                                                                                            The task mapping defined in step (1) is derived from task mapping
+nipulations and optimizations.
+                                                                                         composition of two basic task mappings (i.e., repeat(4, 1) and
+   We observe that the goal of loop-oriented scheduling primitives
+                                                                                         spatial(16, 8)). The table in Figure 8 gives the details of all
+is either to (1) assign the computations to parallel processing units
+                                                                                         appeared task mappings. The formal definition of task mapping
+(e.g., threads or warps), or (2) specify the execution order of the
+                                                                                         and its composition are given in Section 5.1.
+computations assigned to each processing unit. Figure 8 shows the
+                                                                                            The proposed paradigm simplifies tensor program development
+cooperative loading of the matrix A in the matrix multiplication as
+                                                                                         without sacrificing optimization expressiveness. Beyond the sched-
+an example (we omitted the block offset and only show the load-
+                                                                                         uling of a single operator, it is also important to schedule a fused
+ing of the matrix A for simplicity). In this example, loop-oriented
+                                                                                         sub-graph as operator fusion could greatly reduce the memory
+scheduling applies three primitives (i.e., loop split, fuse, and bind)
+                                                                                         traffic to accelerate the end-to-end DNN execution [9, 18, 30].
+to assign the loading of 512 (64x8) elements to 128 threads, and
+each thread loads 4 elements in order.
+   Instead of scheduling through applying declarative primitives,
+we propose to embed the scheduling into tensor programs and use                          4.2      Post-Scheduling Fusion
+dedicated mappings, called task mappings, to define the computa-                         We propose to decompose the scheduling of a fused sub-graph into
+tions assignment and ordering directly in the program. We use the                        two steps, as shown in Figure 9. In step 1 , we select the anchor
+example in Figure 8 to demonstrate how to use task mapping to                            operator as TVM [9] does, but only schedule the anchor operator
+fulfill the desired scheduling. In step (1), a task mapping is first                     alone. In step 2 , we fuse the surrounding operators to the scheduled
+defined, which assigns 64x8 tasks to 128 threads. Then, in step (2),                     tensor program of the anchor operator automatically. With this
+each task (i, k) assigned to a thread is iterated by calling the task                    decoupling, the scheduling of the anchor operator does not need to
+mapping with thread index threadIdx.x. Finally, in step (3), the                         consider the whole sub-graph but only the implementation of itself,
+task is implemented using its index (i, k). The three steps decou-                       which greatly reduces the engineering efforts required to a design
+ple the task assignment and the implementation of every single                           schedule template for sub-graph compared with AutoTVM [11].
+                                                                                    6
+Hidet: Task-Mapping Programming Paradigm for Deep Learning Tensor Programs                               ASPLOS ’23, March 25–29, 2023, Vancouver, BC, Canada
+
+
+
+    Injective Prologue Op                      Bijective Epilogue Op                    Computation Graph
+                                                                                                                               1   Import models
+                                                                                   2    Graph-level optimizations
+    Op        Op              Op     Op                Tensor Program                   Computation Graph
+                                                         Fused with
+ Anchor Op            1    Tensor Program 2             Prologues and                                                                      For each operator
+                                                                                       Operator Computation
+                                                          Epilogues
+                   Schedule              Apply
+         Op         Anchor       Op     Prologue                                   3    Task-Mapping-Oriented Programming Paradigm
+                   Operator             & Epiloge                                        Tensor Program                               Section 5.1
+
+                                                                                   4    Post-Scheduling Fusion        Section 5.2
+          Figure 9: Two steps in post-scheduling fusion.
+                                                                                         Tensor Program                                  CUDA Code
+                                                                                                                        5
+                                                                                                     Lower & Optimize & Codegen
+Because the fusion is done after we schedule the operator, we call
+this approach post-scheduling fusion.
+                                                                                                Figure 10: Overall design of Hidet.
+    In post-scheduling fusion, the anchor operator can be fused with
+operators before (as prologues) and after (as epilogues) it. We decide
+if an operator is fusible based on its characteristics. If an operator
+                                                                                 PyTorch [41] or a model file in ONNX [5] format, and then 2 per-
+has no reduction computation, it is defined as injective and qualified
+                                                                                 forms graph-level optimizations, such as constant folding and par-
+as a prologue operator. If an operator is injective and each element
+                                                                                 tition of fusible sub-graphs. After graph-level optimizations, each
+in the input tensor contributes to a single element in the output
+                                                                                 anchor operator in the fusible sub-graphs is lowered for scheduling.
+tensor, it is defined as bijective and qualified as an epilogue operator.
+                                                                                 In Hidet, we 3 schedule the operator with task-mapping program-
+For example, all elementwise operators (e.g., addition, ReLU [3]) and
+                                                                                 ming paradigm (Section 5.1) into a tensor program and tune the
+transform operators (e.g., reshape, transpose) are bijective operators
+                                                                                 schedule in hardware-centric schedule space. Then, in step 4 , the
+and are qualified as both prologue and epilogue operators. With
+                                                                                 post-scheduling fusion (Section 5.2) is applied to fuse the scheduled
+post-scheduling fusion, we can concentrate on the scheduling of a
+                                                                                 tensor program of the anchor operator with its surrounding opera-
+single operator while supporting flexible and effective fusion.
+                                                                                 tors automatically. 5 Finally, the fused tensor programs in Hidet’s
+                                                                                 intermediate representation (IR) will be optimized and lowered. A
+4.3      Hardware-Centric Scheduling Space                                       code generator will convert the lowered IR to CUDA kernels.
+Existing state-of-the-art schedulers [11, 65] adopt the input-centric
+schedule space discussed in Section 3.3, in which the schedule                   5.1    Task-Mapping Programming Paradigm
+chooses the proper factors of loop extent as the split or tile factors,
+                                                                                 One key challenge when optimizing tensor programs for certain
+which makes the schedule space unscalable and fails to cover the
+                                                                                 hardware with parallel processing units (e.g., modern CPUs, GPUs,
+optimal performance derived from tile sizes that are not proper
+                                                                                 and TPUs) is how to assign the independent (sub) tasks to the
+factors of loop extents. In addition to constructing a schedule space
+                                                                                 parallel processing units. Using cooperative loading in Figure 8 as
+based on input sizes, another approach is to design the schedule
+                                                                                 an example, when loading the fragment of matrix A with shape
+space based on hardware, named hardware-centric schedule space.
+                                                                                 64x8 from global memory to shared memory, the 512 tasks are
+Hardware-centric schedule space decouples the schedule space from
+                                                                                 assigned to the 128 threads in a thread block, and each thread is
+the input size by employing predicated loading (i.e., protecting the
+                                                                                 assigned with 4 loading tasks. In this example, tasks are assigned
+data loading by checking if the accessing indices are in bounds),
+                                                                                 to parallel processing units, called workers, and the tasks assigned
+and is widely used by kernel libraries [12, 26, 32].
+                                                                                 to each worker will be executed in a specific order. In this section,
+   With the proposed paradigm, we can provide a small but efficient
+                                                                                 we will first formalize the task assignment and ordering as task
+hardware-centric schedule space. Since the tile factors are based
+                                                                                 mapping, then introduce a binary operator on task mappings to
+on hardware resources (e.g., 64x64, 128x64, 16x32, etc), hardware-
+                                                                                 compose task mappings, and finally discuss the scheduling based
+centric schedule spaces are orders of magnitude smaller than input-
+                                                                                 on task mappings.
+centric schedule spaces. For example, the schedule space we adopted
+for matrix multiplication contains less than 200 schedules, which                5.1.1 Task Mapping. Formally, we define a worker set W𝑛 to be a
+is on average 105 × smaller than a typical schedule space in Au-                 set containing 𝑛 workers with id from 0 to 𝑛 − 1:
+toTVM [11]. Simply enumerating all schedules would be enough
+and can be done within one minute of time.                                                                W𝑛 = {0, 1, . . . , 𝑛 − 1}.
+                                                                                 We also define a task domain T as
+5     HIDET: SYSTEM DESIGN
+                                                                                             T = {(𝑡 0, 𝑡 1, . . . , 𝑡𝑚−1 ) | 0 ≤ 𝑡𝑖 < 𝑑𝑖 , 𝑡𝑖 ∈ Z},
+With the above key ideas, we design and implement a DNN compiler,
+named Hidet. Figure 10 shows the overall design. Hidet firstly 1                 to represent all tasks we are interested in, where 𝑚 is the task
+imports a deep neural network from a widely used framework like                  dimension and d = (𝑑 0, 𝑑 1, . . . , 𝑑𝑚−1 ) is the task shape.
+                                                                             7
+ASPLOS ’23, March 25–29, 2023, Vancouver, BC, Canada                                    Yaoyao Ding, Cody Hao Yu, Bojian Zheng, Yizhi Liu, Yida Wang, and Gennady Pekhimenko
+
+
+
+       0    1                                                                                                                  0   0               0    0     1    1       2       2
+                 Task execution order                        Task Assignment                       0     1    2        ×                   =
+       2    3                                                                                                                  0   0               0    0     1    1       2       2
+                                                                             Legend
+                                                                                                                        (a) repeat (1, 3) × spatial (2, 2)
+       0    1     repeat (2, 2)         f(w) = [(0, 0), (0, 1), (1, 0), (1, 1)]
+                                                                                                   0     0                                         0    1     2    0       1       2
+       2    3     Assign all tasks to a single worker                                                              ×       0   1   2       =
+                                                                                  (a)              0     0                                         0    1     2    0       1       2
+       0    0     spatial (2, 2)         f(w) = [(w / 2, w %2)]                                                         (b) spatial (2, 2) × repeat (1, 3)
+
+       0    0     Assign each worker a task (4 workers in this case)              (b)               0    0    × 0       1                                                      0
+                                                                                                                                                          0    1       ×
+                                                                                                              =
+                                                                                                                                                                       =       1
+Figure 11: Examples of two basic kinds of task mappings:                                           0     1     0       1 × 0 0
+                                                                                                                                                                   0       2
+repeat(2, 2) and spatial(2, 2). The number indicates the                                                                 =
+execution order of the tasks assigned to the same task, while                                       0    0     1       1 0 0 1            1                        1       3
+the color indicates the worker to which the task was as-
+signed.                                                                                           (c) spatial (2) × repeat (2) × spatial (2)      (d) repeat (1, 2) × repeat (2, 1)
+
+
+                                                                                               Figure 12: Examples of task mapping composition. (a) and (b)
+   A task mapping 𝑓 is defined as a function that maps each worker
+                                                                                               show that task mapping composition is not communicative.
+in the worker set to a list of tasks in the task domain, that is
+                                                                                               (c) shows an example of composing three task mappings. Be-
+                        𝑓 (𝑤) = [𝑡 (0) , 𝑡 (1) , . . . , 𝑡 (𝑞−1) ].                            cause task mapping composition is associative, the order of
+where 𝑤 ∈ W and 𝑡 (𝑖) ∈ T.                                                                     applying the composition does not matter. (d) shows an ex-
+   We find two basic task mappings that are very useful. The                                   ample to assign tasks in column-major order.
+repeat(d1, ..., dm) task mapping maps a grid of tasks (d1,
+..., dm) to a single worker while the spatial(d1, ..., dm)                                     holds for arbitrary task mappings 𝑓1, 𝑓2, 𝑓3 .
+task mapping maps a grid of tasks (d1, ..., dm) to the same                                       Task mapping composition is a powerful tool to construct new
+number of workers and each worker only works on a single task.                                 task mappings. Figure 12 gives some examples of task mapping
+Figure 11 shows two examples of these task mappings. Besides                                   composition. Besides these examples, task mapping spatial(4,
+them, Hidet also allows developers to define custom task mappings                              2) * repeat(2, 2) * spatial(4, 8) * repeat(4, 4) is used
+by specifying the task shape, number of workers, and the mapping                               in matrix multiplication with CUDA Core [40]. They correspond
+function. Though all examples are in 2-dimension, the task mapping                             to the warps in a block (4x2), the number of repeats for each warp
+can have an arbitrary number of task dimensions.                                               (2x2), the layout of threads in a warp (4x8), and the number of C
+                                                                                               elements each thread works on (4x4), respectively.
+5.1.2 Task Mapping Composition. In the example of cooperative
+loading, we can observe a hierarchical structure. The 64x8=512 tasks
+can be partitioned into 4 groups of tasks and each group contains                               1 def block_mma(SmemA: fp32[ 64, 8], SmemB: fp32[8, 64],
+                                                                                                2                    RegsC: fp32[ 4, 4, 4]):
+16x8=128 tasks. The 128 tasks in each group are executed by 128
+                                                                                                3    RegsA, RegsB = register fp32[4], fp32[4]
+threads. If we take each task group as a macro-task and the 128                                 4    task_map = spatial(2, 2) * repeat(2, 2)
+threads as a macro-worker, then task-mapping of the macro-tasks                                 5    worker_id = threadIdx.x / 32          # warp index
+to macro-workers is a task mapping that maps 4 tasks to a single                                6    for i, j in task_map(worker_id):
+worker, denoted by repeat(4, 1). This example demonstrates that                                 7        wmma_load_a(&SmemA[i * 16, 0], RegsA)
+all the tasks in a task mapping can be treated entirely as a single                             8        wmma_load_b(&SmemB[0, j * 16], RegsB)
+task and all the workers can be treated entirely as a single worker                             9        wmma_mma(RegsA, RegsB, RegsC[i, j])
+in another task mapping to create a composed task mapping.
+   We formalize this idea as follows. Let 𝑓1, 𝑓2 be two task mappings                           Figure 13: Use task mapping to schedule warp-level tasks.
+with the same task dimension. Let 𝑛 1, 𝑛 2 be the number of workers
+and d1, d2 be the task shapes of the two task mappings. We define                                 The task and worker in a task mapping are abstract concepts and
+𝑓3 be the composed task mapping of 𝑓1 and 𝑓2 that has 𝑛 1𝑛 2 workers                           can be used to describe tasks and workers on different hierarchical
+and task shape d3 = d1 ⊙ d2 .5 The mapping function is defined as                              levels. For example, besides a single thread, a worker can also
+       𝑓3 (𝑤) = [t1 ⊙ d2 + t2 | t1 ∈ 𝑓1 (⌊𝑤/𝑛 2 ⌋), t2 ∈ 𝑓2 (𝑤 % 𝑛 2 )].                       represent a warp, a thread block, or a processing unit in other
+                                                                                               accelerators. Figure 13 shows an example 6 with warps as workers
+The task mapping composition is denoted as 𝑓3 = 𝑓1 ◦ 𝑓2 . Task
+                                                                                               6 In the example, register buffers RegsA, RegsB, and RegsC are local to each thread. The
+composition is associative, that is
+                                                                                               primitive function wmma_load_a and wmma_load_b load data from shared memory to
+                         (𝑓1 ◦ 𝑓2 ) ◦ 𝑓3 = 𝑓1 ◦ (𝑓2 ◦ 𝑓3 ),                                    registers. Primitive function wmma_mma conducts the MMA with given registers. The
+                                                                                               RegsC has a special layout that would map (i, j) to (i%2, j%2). For simplicity, we do not
+5 We   use ⊙ to denote the element-wise multiplication.                                        introduce the data layouts in Hidet.
+                                                                                           8
+Hidet: Task-Mapping Programming Paradigm for Deep Learning Tensor Programs                               ASPLOS ’23, March 25–29, 2023, Vancouver, BC, Canada
+
+
+in a task mapping. It implements the block_mma function used                     with a schedule space containing a collection of available param-
+in the aforementioned matrix multiplication (see Figure 3 and 5).                eters for the parameterized task mappings, and the template can
+In the example, we use a task mapping to assign a grid of 4 × 4                  be instantiated with an arbitrary choice from the schedule space.
+tasks to 4 warps, and each warp takes 4 warp-level matrix-multiply-              Taking the matrix multiplication in Figure 5 and 13 as an example,
+accumulate (MMA) task, whose corresponding assignment is shown                   we could use different numbers of warps and repeat different num-
+in step 3 of Figure 2.                                                           bers of times for each warp to implement the matrix multiplication.
+   Task mappings and their composition could greatly simplify the                These different choices form the schedule space for matrix multi-
+tensor program writing as it employs dedicated mappings to define                plication. During scheduling, Hidet first enumerates the schedule
+the task assignment and ordering, and free developers from writing               choice from the schedule space. Then the schedule choice is used to
+complex loops and index calculations to achieve the same goal. We                create the task mappings for the given program template. Finally,
+call the tensor program writing paradigm based on task mappings                  Hidet instantiates the template into a tensor program and measures
+as task-mapping programming paradigm for tensor programs.                        its performance. The schedule with the best performance is used.
+                                                                                 We refer to the process as tuning.
+5.1.3 Scheduling Mechanisms. Based on the paradigm, we further
+                                                                                    Adding new operators to Hidet does not require high engi-
+implement two scheduling mechanisms in Hidet: template-based
+                                                                                 neering effort. Most operators in Hidet are scheduled automat-
+scheduling and rule-based scheduling. Inspired by Ansor [65] and
+                                                                                 ically through rule-based scheduling and are easy to add. The
+Halide-AutoScheduler [2], rule-based scheduling directly generates
+                                                                                 computation-intensive operators like convolution and matrix multi-
+the tensor program from one operator’s computation definition,
+                                                                                 plication usually require template-based scheduling for high perfor-
+without any extra engineering efforts and is used for the majority of
+                                                                                 mance. The complexity of adding a new Hidet template is similar
+operators in Hidet. On the other hand, rule-based scheduling might
+                                                                                 to that of the AutoTVM [11] template.
+not be able to generate an efficient-enough tensor program for key
+operators such as matrix multiplication. Inspired by AutoTVM [11],               5.2     Post-Scheduling Fusion
+we also allow developers to provide a tensor program template
+to support the efficient scheduling of these operators. Figure 14
+illustrates the two scheduling mechanisms.                                         Fusible Sub-Graph              Anchor            Prologue / Epilogue
+                                                                                   C: fp32[ 100]                           2
+                                                                                                                           def reverse(A, B):
+                    Operator Computation Definition                                                         Mul               i = threadIdx.x
+                                                                                   Mul 2.0      1               Schedule
+                                                                                    A                  Reverse Anchor Op      B[ i ] = A[99-i ]
+           Yes        Schedule Template Provided?           No                     Reverse Get Fusible
+                                                                                                         Mul            3 Fuse  Prolouge & Epilogue
+                                                                                    B      Sub-Graph
+  Template-based Scheduling                 Rule-based Scheduling                                      Reshape
+                                                                                   Mul 3.0                      Pr olouge A[i ] = C[i ] * 2.0
+    Schedule Space                            Input   A
+                                                          Computation                                                 Epilogue D[i / 50, i %50] = B[i ] * 3.0
+         Generate Task Mappings         Reduce   B                                 Reshape
+                                                          DAGExample               to (2, 50)       Fused def reverse(C: fp32[100], D: fp32[2, 50]):
+     Task Mappings                                                                                  Tensor   i = threadIdx.x
+                                            Compute   C
+         Used in Template                                                         D: fp32[2, 50]   Pr ogr am D[ i / 50, i %50] = (C[99-i ] * 2.0) * 3.0
+                                         Traverse Computation DAG&
+     Program Template                      Apply Translation Rules
+                                                                                         Figure 15: Example of Post-Scheduling Fusion.
+         Tensor Program in Task-Mapping-Oriented Paradigm
+                                                                                    To alleviate the complexity of scheduling a sub-graph as in Au-
+                                                                                 toTVM, we propose to decouple the sub-graph scheduling into two
+      Figure 14: Two Scheduling Mechanisms in Hidet.
+                                                                                 stages: (1) scheduling the anchor operator and (2) fusing the sched-
+                                                                                 uled tensor program with surrounding operators. The decoupling
+Rule-based Scheduling generates the tensor program given the                     allows developers to focus on the scheduling of the anchor operator
+computation definition automatically. It traverses the computation               instead of the whole sub-graph, and automates the fusion of the
+definition in the form of a directed acyclic graph (DAG) and applies             scheduled tensor program with other operators in the sub-graph.
+pre-defined rules to translate each node in the DAG into a part of               During tuning, the performance of fused tensor programs will be
+the final tensor program. Because this mechanism does not require                used as the target to maximize, thus the decoupling does not hurt
+developers to write a dedicated schedule template, it is widely used             the final performance.
+in Hidet for the operators that do not include reduction, such as                   Figure 15 shows an example of post-scheduling fusion. In step 1 ,
+reshape, transpose, slice, and all element-wise arithmetic operators.            during the graph-level optimization stage, an optimization pass
+On the other hand, for operators demanding extreme optimizations                 partitions the computation graph into sub-graphs. Given the sub-
+like matrix multiplication, we use another scheduling mechanism,                 graph, in step 2 , a selected anchor operator will be scheduled
+named template-based scheduling.                                                 into a tensor program with one of the scheduling mechanisms in
+Template-based Scheduling schedules the operator with the given                  Section 5.1.3. Finally, in step 3 , the remaining operators will be
+template. A schedule template is a tensor program written with                   fused into the scheduled program. These operators are classified
+parameterized task mappings. Each schedule template is equipped                  into two categories: prologue operators for each input tensor and
+                                                                             9
+ASPLOS ’23, March 25–29, 2023, Vancouver, BC, Canada                Yaoyao Ding, Cody Hao Yu, Bojian Zheng, Yizhi Liu, Yida Wang, and Gennady Pekhimenko
+
+
+epilogue operators for each output tensor. Each prologue operator            cuDNN [12] and cuBLAS [26]. AutoTVM and Ansor are two state-
+defines how each element access for the input tensor is computed,            of-the-art schedulers based on loop-oriented scheduling and input-
+and the epilogue operator defines how the output tensor elements             centric tuning spaces. We set the number of tuning trials in Au-
+are furthermore computed and stored in the output of the fused               toTVM and Ansor to 1000 and 800, respectively, as suggested in
+operator. In this example, the access of A[99 - i] will be replaced          their paper and official documentation.
+by C[99 - i] * 2.0, and the 𝑖-th element of output tensor is                 Performance. Figure 16 shows the results of end-to-end inference
+furthermore computed (i.e., multiply by 3.0) and stored to the               latency with a single batch. Hidet outperforms all baselines on most
+fused output tensor D with indices (i / 50, i % 50).                         models by up to 1.48×, and on average by 1.22×. This is because
+   The post-scheduling fusion simplifies the operator fusion. It also        Hidet is able to automatically fuse sub-graph, tune the schedule
+allows us to reuse existing highly optimized operators (e.g., ma-            for given input size (vs. PyTorch and Onnx Runtime), and express
+trix multiplication) to support new operators (e.g., convolution). In        more optimizations such as double buffering [32] (vs. AutoTVM and
+Hidet, we can implement the convolution operators as four opera-             Ansor). One exception is Ansor on MobileNetV2, as Ansor could find
+tors with img2col algorithm [8], one of which is matrix multiplica-          a better schedule for depthwise convolutions. We can implement
+tion and the other three are simple transform operators. With post-          similar schedules in Hidet, and we leave such implementations to
+scheduling fusion, we fuse the other three operators into a matrix           future work. In addition, we note that AutoTVM performs worse
+multiplication and reuse all optimizations (e.g., parallel reduction         on both Bert and GPT-2 models with 27ms and 41ms, respectively.
+on k dimension [32]) for matrix multiplications to convolutions.             This is because AutoTVM’s schedule templates for workloads in
+                                                                             these two models lack optimizations.
+6 EVALUATION                                                                 Tuning Cost. We compare the tuning cost (i.e., elapsed time in
+                                                                             the tuning process) of AutoTVM, Ansor, and Hidet in Figure 17.
+6.1 Experimental Setup
+                                                                             Hidet reduces the tuning cost by 11× and 20× compared with Ansor
+Implementation. We implement Hidet from scratch with ∼20K                    and AutoTVM, respectively. This is because Hidet adopts a small
+lines of code in Python and C++. Two levels of IR are used in Hidet:         (e.g., 180 schedules in matrix multiplication) but efficient schedule
+graph-level IR to represent the computation graph of DNN models              space with the proposed paradigm. As a result, Hidet only needs
+and tensor-level IR to represent tensor programs with schedules.             minutes to exhaustively enumerate all candidates. On the other
+Hidet lowers the tensor program written with task mappings to                hand, AutoTVM [11] and Ansor [65] adopt schedule spaces with 105
+CUDA C code and compiles it with the CUDA compiler. Notably,                 to 108 candidates, which prevents them from finding the optimal
+we only implement two efficient schedule templates for matrix mul-           schedule in their space in a short time, even equipped with a cost
+tiplication and reduction operators (e.g, sum reduction) to cover all        model. Note that although AutoTVM only spends 2 minutes for
+operators in evaluated models. Most operators are either scheduled           Bert and GPT-2 due to their small schedule spaces with less than 20
+by the rule-based scheduling mechanism or converted to matrix                schedules, the schedule spaces are ineffective and can not achieve
+multiplication to reuse existing templates (e.g., convolutions).             competitive performance (Figure 16).
+Platform. We conduct experiments on a server equipped with a 16-
+core 24-thread Intel i9-12900K CPU (with hyper-threading enabled),
+                                                                             6.3    Case Studies
+64 GiB DRAM, and one NVIDIA RTX 3090 GPU. The server has
+installed the Linux distribution Ubuntu LTS 20.04 with NVIDIA                In this subsection, we conduct several case studies to further de-
+driver 510.73.08 and CUDA 11.6.                                              mystify the effectiveness of Hidet.
+Workloads. We benchmark on a wide range of representative net-
+                                                                             6.3.1 Schedule Space Comparison. To compare the efficiency of
+works to demonstrate the optimization generality of Hidet. ResNet-
+                                                                             three schedule spaces adopted by AutoTVM, Ansor, and Hidet, we
+50 [25] is one of the most commonly used CNNs for image classi-
+                                                                             depict the latency distribution of schedules in the three schedule
+fication. Inception-V3 [50] is a CNN that employs multiple paths
+                                                                             spaces in Figure 18. The benchmark workload is a convolution in
+of convolutions with different kernel sizes. MobileNet-V2 [45] is a
+                                                                             ResNet50 with batch size 1, input image size 28x28, input channels
+lightweight CNN based on separable convolutions. Bert [16] is a
+                                                                             256, kernel size 3, padding 1, and stride 2. Because the schedule
+widely-used transformer-based natural language processing (NLP)
+                                                                             spaces of AutoTVM and Ansor are too large, we take the 1000 and
+model. GPT-2 [42] is an NLP model targeting sequence-to-sequence
+                                                                             800 schedules from the tuning process of AutoTVM and Ansor,
+tasks such as natural language translation and question answering.
+                                                                             respectively, as the samples in their schedule spaces. We compare
+We use 128 as the sequence length for the two language mod-
+                                                                             them with the entire space with only 180 schedules in Hidet sched-
+els throughout the experiments. We adopt the model implementa-
+                                                                             ule space. The figure shows that most schedules covered by Hidet
+tions in torchvision and transformers packages and export them to
+                                                                             schedule space have superior performance (latency < 73𝜇s) than
+ONNX [5] format for evaluation.
+                                                                             those in spaces adopted by AutoTVM and Ansor thanks to the better
+                                                                             expressiveness of the proposed paradigm.
+6.2     End-to-End Evaluation
+We evaluate all workloads on Hidet against PyTorch [41] 1.11, Onnx           6.3.2 Performance Sensitivity over Input Sizes. The quality of the
+Runtime [15] 1.11.1, AutoTVM [11] and Ansor [65] in TVM [9]                  final schedule derived from AutoTVM and Ansor is sensitive to
+0.9.dev with commit c07a46327. PyTorch is a widely used DNN                  the input size due to their input-centric schedule spaces. Even a
+framework. Onnx Runtime is a high-performance inference en-                  small change in the input size would result in a large performance
+gine. Both of them leverage high performance kernel libraries                difference. To compare the performance sensitivity over input sizes,
+                                                                        10
+Hidet: Task-Mapping Programming Paradigm for Deep Learning Tensor Programs                                                                                         ASPLOS ’23, March 25–29, 2023, Vancouver, BC, Canada
+
+
+                                                 (A) PyTorch                        (B) OnnxRuntime                           (C) AutoTVM                            (D) Ansor                     (E) Hidet (ours)
+                      1.0                                                                                                     6.0                   27
+                                                                                                                                                                   6.0          41
+                                                                                                                                                                                                  6.0
+                                                                                              4.0
+Latency (ms)
+
+
+
+
+                      4.0
+                                                                                                                              4.0                                  4.0                            4.0
+                      0.5                                     5.0                                                                                        1.13x                           1.19x
+                      2.0                                                                     2.0
+                                                   1.12x
+                                                                                     1.48x
+                                                                                                                              2.0                                  2.0                            2.0              1.26x
+                                                                                                                     0.88x
+                      0.0                                     0.0                             0.0                             0.0                                  0.0                            0.0
+                         0.0A B C D E                                  A0.2B C D E                    A B0.4C D E                              A B C0.6D E               A B C D0.8E                     A B C D E1.0
+                             ResNet50                                   Inception V3                  MobileNet V2                                Bert                     GPT-2                          Geo-Mean
+
+                            Figure 16: End-to-end comparison between state-of-the-art DNN inference frameworks and compilers with Hidet.
+
+                      18 h
+                                                                  AutoTVM                Ansor               Hidet                                       PyTorch                         AutoTVM                 Hidet
+                                                 15h
+Tuning Cost (Hours)
+
+
+
+
+                                                                                                                                              10         OnnxRuntime                     Ansor
+
+
+
+
+                                                                                                                               Latency (ms)
+                      12 h                                                  Hidet speedup tuning by
+                                                       9h         9h        20× (AutoTVM) and 11× (Ansor)
+                                 8h
+                                                                                                        6h                                     5
+                       6h
+                                      4h                               4h                                    4h
+
+                       1h                  20m              45m             22m 2m51m5m 2m52m5m                   19m                          0
+                                 ResNet50 InceptionV3 MbNetV2                     Bert        GPT-2      Average                                         1                           4                       8
+
+                      Figure 17: Tuning cost of AutoTVM, Ansor, and Hidet.                                                     Figure 20: Comparison on batch size 1, 4, and 8 of ResNet50.
+
+                                                                                                                                              0.2
+Distribution Density
+
+
+
+
+                                                                                                                                                                 OnnxRuntime                     Ansor           Hidet
+ Schedule Latency
+
+
+
+
+                                                                                                   AutoTVM
+                                                                  800 sch.
+                                                                                                                               Latency (ms)
+
+
+
+
+                          10                                                                       Ansor
+                                                                                                   Hidet                                      0.1
+                             5        180 sch.
+                                                                                             1000 sch.
+
+                             0                                                                                                                0.0
+                                                                                                                                                                   Conv2d-Bn-ReLU in ResNet50
+                                  39                   73 93                                                      800
+                                                                       Latency (µs)                                            Figure 21: Comparison of Onnx Runtime, Ansor, and Hidet
+                                                                                                                               on the Conv2d-Bn-ReLU sub-graphs in ResNet50.
+Figure 18: Schedule latency distribution of schedule spaces
+from AutoTVM, Ansor, and Hidet. X-axis is in log scale.
+                                                                                                                               2039), both schedulers failed to find a valid schedule. On the other
+                      6                                                                                                        hand, with the hardware-centric schedule space, Hidet achieves
+                                           AutoTVM            13            7                 38       27                      consistent performance on these input sizes.
+                                           Ansor
+Latency (ms)
+
+
+
+
+                      4                                                                                                        6.3.3 Evaluation on Different Batch Sizes. Figure 20 depicts the
+                                           Hidet
+                                                                                                                               latency of ResNet50 with different batch sizes. When batch size is
+                                                                                                                               small (1 and 4), AutoTVM and Ansor outperform Onnx Runtime as
+                      2                                                                                     Failed             they can find schedules that utilize the GPU computation resources
+                                                                                                                               well (e.g., enough thread blocks to saturate all SMs), while kernel
+                      0                                                                                                        libraries do not. At larger batch sizes (e.g., 8), we observe that
+                             2048          2047     2046 2045 2044 2043 2042                                 2039              although AutoTVM and Ansor can still find schedules that saturate
+                                                   Matrix Multiplication (M=N=K)                                               all SMs, they cannot outperform Onnx Runtime, because the latency
+                                                                                                                               of each thread block is longer than Onnx Runtime’s, due to the lack
+Figure 19: Comparison of AutoTVM, Ansor, and Hidet on                                                                          of important optimizations such as double buffering [32]. On the
+matrix multiplication with consecutive input sizes.                                                                            other hand, Hidet outperforms all of them as Hidet could perform
+                                                                                                                               well on both aspects (i.e., enough and efficient thread blocks).
+we benchmark matrix multiplications with consecutive input sizes.                                                              6.3.4 Post-Scheduling Fusion Evaluation. With post-scheduling fu-
+Figure 19 shows that the performance of AutoTVM and Ansor fluc-                                                                sion, we can implement an operator with a highly optimized sched-
+tuates significantly. Even worse, for a prime number input size (e.g.,                                                         ule template, and composite new operators with pre-implemented,
+                                                                                                                         11
+ASPLOS ’23, March 25–29, 2023, Vancouver, BC, Canada                    Yaoyao Ding, Cody Hao Yu, Bojian Zheng, Yizhi Liu, Yida Wang, and Gennady Pekhimenko
+
+
+               4                                                               the tensor programs. Roller [69] constructs the tensor program with
+                                              TensorRT          Hidet
+                                                                               a bottom-up approach and aligns the tile sizes with hardware spec-
+               3
+Latency (ms)
+
+
+
+
+                                                                               ifications. AI-Template [59] employs source-code level templates
+               2                                                               to construct tensor programs, which supports more fine-grained
+                                                                               optimizations but sacrifices the flexibility of program transform.
+               1                                                               TVM community also noticed the limited expressiveness problem
+                                                                               of the existing declarative loop-oriented scheduling mechanism.
+               0                                                               TensorIR [22], a concurrent work with Hidet, is recently proposed
+                   ResNet50 IncpV3 MbNetV2   Bert      GPT-2 Geo-Mean
+                                                                               to allow developers to directly write tensor programs instead of ap-
+                                                                               plying a series of declarative primitives to the auto-generated tensor
+                    Figure 22: Comparison of TensorRT and Hidet.
+                                                                               program. Moreover, XLA [44] is a domain-specific compiler for lin-
+                                                                               ear algebra. FreeTensor [51] and CoRa [20] study the compilation for
+highly optimized operators to save engineering efforts. For exam-              irregular or ragged tensor programs. AStitch [68] and Apollo [61]
+ple, in Hidet, we implement convolution through matrix multi-                  study the fusion of memory-intensive kernels to reduce memory
+plication, namely implicit general matrix multiplication (GEMM)                consumption. Fireiron [24] proposes a data-movement-aware sched-
+convolution, which is also known as img2col [8] algorithm. With                uling language for GPUs. Triton [52] proposes to write tensor pro-
+post-scheduling fusion, we are able to fuse the additional required            grams by taking tile as the basic data type and thread block as the
+operators in img2col into the matrix multiplication automatically              main parallel processing unit. Nimble [47], DISC [70], Cortex [21],
+and reuse the optimizations we implemented for it (e.g., parallel re-          and DietCode [63] study the compilation of dynamic models, which
+duction on k dimension [32]). The implicit GEMM convolution with               is also orthogonal with Hidet. Besides optimizing every single op-
+parallel k reduction allows Hidet’s generated kernels to saturate the          erator for DNN inference, Rammer [38] and IOS [18] propose to
+GPU computation resources and outperforms the existing kernel                  parallelize independent operators in a network. TASO [30], Fang
+libraries and DNN compilers. Figure 21 shows the performance of                et al. [19], TENSAT [60], and PET [56] apply auto-generated rewrit-
+the Conv-Bn-ReLU sub-graphs in ResNet50 among Onnx Runtime,                    ing rules to optimize DNN at the graph level. Checkmate [29], Chen
+Ansor, and Hidet. Hidet outperforms Onnx Runtime and Ansor on                  et al. [10], Echo [64], and DTR [33] are proposed to reduce mem-
+most convolutions as the convolution can also parallelize on the               ory footprint. These works are orthogonal to Hidet, and can be
+reduction dimensions (e.g., input channels, and kernel sizes).                 used to enhance different aspects of Hidet (e.g., the graph-level
+                                                                               optimizations, memory consumption, and dynamic-shape support).
+6.3.5 Comparison with TensorRT. We also compare Hidet with
+TensorRT [27] 8.4.1.5, a high-performance deep learning inference
+engine provided by NVIDIA. TensorRT applied both graph-level                   8    DISCUSSION
+and operator-level optimizations. Figure 22 shows the comparison               Optimization Expressiveness. The accelerators (e.g., GPUs and
+of TensorRT and Hidet. Hidet outperforms TensorRT on the three                 TPUs) usually have a hierarchical memory system and vector- or
+CNNs because Hidet is able to tune for the given input sizes and               tensor-based computation engines. Both demand dedicated opti-
+fuse operators automatically according to their mathematical def-              mizations to achieve peak performance, and these optimizations are
+inition. On the other hand, TensorRT outperforms Hidet on the                  usually hard to be expressed through a series of loop transforma-
+transformer [55] networks such as Bert and GPT-2. Since TensorRT               tions. The double buffering example we discussed in this paper is a
+is close-sourced, we speculate, by interpreting its optimization log,          good example of such a challenge. Instead of relying on a declara-
+that TensorRT recognizes self-attention layers in transformer mod-             tive style scheduling mechanism, Hidet proposes to directly express
+els and applies dedicated optimizations due to the popularity of               the task assignment and ordering with task mapping in a tensor
+these models. On the other hand, Hidet only has two schedule                   program, which greatly increases the expressiveness of Hidet while
+templates to cover all operators in benchmarked networks.                      reducing the complexity of tensor program writing.
+                                                                                  Support More Hardware. Although we only focus on GPUs in
+7                  RELATED WORK                                                this work, the concept of task mapping is general and can be used
+Many existing DL compilers adopt loop-oriented scheduling primi-               to describe the task assignment and ordering for other processors.
+tives [9, 43] and establish auto-tuning frameworks on top of them [2,          The worker in a task mapping can be (1) iterations in a loop for a
+11, 46, 54, 57, 58, 63, 65–67] with input-centric schedule spaces. In          single-core CPU, (2) CPU threads for a multi-core CPU, (3) threads,
+contrast, Hidet leverages task-mapping programming paradigm                    warps, or thread blocks for a GPU, and (4) parallel processing units
+with hardware-centric schedule spaces, so that it is able to achieve           in other accelerators. And the tasks of a task mapping could be
+better performance with a much shorter tuning time. In addition                arbitrary indexed, homogeneous, and parallelizable operations.
+to loop-oriented scheduling, there are more approaches to opti-                   Future Work. We plan to support CPU and other accelerators
+mize a tensor program. Deep learning frameworks such as Py-                    (e.g., Amazon Inferentia and Trainium) in the future. Besides this,
+Torch [41] and TensorFlow [1] leverage off-the-shelf kernel libraries          we also plan to support training. Due to the long tuning time of
+(e.g., cuDNN [12] and cuBLAS [26]) as well as hand-crafted kernels             TVM, it is hard to be directly used for accelerating training. Thanks
+to cover widely used operators. CUTLASS [32] is an open C++ tem-               to the hardware-centric schedule space adopted by Hidet, the tuning
+plate library with efficient matrix multiplication kernels on CUDA.            time has greatly been reduced for Hidet, which makes it possible
+Tiramisu [4] and AKG [62] employ the polyhedral model to schedule              to build a training system based on Hidet.
+                                                                          12
+Hidet: Task-Mapping Programming Paradigm for Deep Learning Tensor Programs                                ASPLOS ’23, March 25–29, 2023, Vancouver, BC, Canada
+
+
+9     CONCLUSION                                                                        • Code licenses (if publicly available)?: Apache 2.0.
+We observe that the state-of-the-art DNN compilers based on loop-                       • Archived (provide DOI)?: 10.5281/zenodo.7429879
+oriented scheduling cannot express important optimizations that
+require fine-grained manipulation of the tensor program. To address               A.3      Description
+this limitation, we propose task-mapping programming paradigm, a                  A.3.1 How to access. The source code can be downloaded from
+new paradigm to write and schedule tensor programs that simplifies                either the Zenodo archive (https://doi.org/10.5281/zenodo.7429879) or
+tensor program writing and scheduling without sacrificing the                     GitHub repository (https://github.com/yaoyaoding/hidet-artifacts).
+ability to express optimizations as in kernel libraries. Based on                 A.3.2 Hardware dependencies. To get the exact numbers in the
+this paradigm, we implemented a new DNN inference framework                       evaluation, the exact CPU and GPU is required: Intel Core i9-12900K
+called Hidet. Experiments show that Hidet achieves up to 1.48×                    CPU and NVIDIA RTX 3090 GPU. To functionally run the experi-
+speedup (1.22× on average), compared with state-of-the-art DNN                    ment, the only requirement is a modern NVIDIA GPU that supports
+inference frameworks (e.g., Onnx Runtime) and compilers (e.g.,                    CUDA 11.6+.
+TVM equipped with AutoTVM and Ansor). Hidet also reduces 11×
+tuning cost compared with Ansor.                                                  A.3.3    Software dependencies. The artifact requires:
+                                                                                       •   NVIDIA Driver 510.73.08
+ACKNOWLEDGEMENT                                                                        •   NVIDIA CUDA Toolkit 11.6 [39]
+We would like to thank the members of EcoSystem research lab-                          •   NVIDIA kernel library cuDNN 8.4 [12]
+oratory in University of Toronto for their feedback on the early                       •   Package torch 1.11 (PyTorch [41])
+manuscript, and special thanks to Xingyang Song, Christina Gi-                         •   Package torchvision 0.12 (CNN models [25, 45, 50])
+annoula, Anand Jayarajan, and Jiacheng Yang. We also want to                           •   Package transformers 4.19.2 (NLP models [16, 42])
+thank the anonymous ASPLOS reviewers for the valuable feedback                         •   Package onnxruntime-gpu 1.11.1 (ONNX Runtime [15])
+and suggestions, and the artifact evaluation reviewers for repro-                      •   Package nvidia-tensorrt 8.2.5.1 (Tensor RT [27])
+ducing our experiments. The authors with University of Toronto                         •   Apache TVM 0.9.dev with commit c07a46327 [9]
+were supported by the Canada Foundation for Innovation JELF                       A.3.4 Models. We conduct the experiments with five DNN models:
+grant, NSERC Discovery grant, AWS Machine Learning Research                       ResNet50 [25], InceptionV3 [50], MobileNetV2 [45], Bert [16], and
+Award (MLRA), Facebook Faculty Research Award, Google Scholar                     GPT-3 [42]. The three convolution networks are from torchvision
+Research Award, and VMware Early Career Faculty Grant.                            model zoo, and the two transformer models are from transformers
+                                                                                  package. All of them will be automatically downloaded.
+A ARTIFACT APPENDIX
+A.1 Abstract                                                                      A.4      Installation
+This appendix helps readers to reproduce all experiments in the                   Download the source code or clone the git repository in section A.3.1.
+evaluation section via the Hidet artifact [17]. In Section 6, there               Follow the commands of the installation section in README.md file
+are 6 experiments (one end to end experiment and 5 case studies).                 under the root of source code directory to build and install hidet
+These experiments compare Hidet with other DNN frameworks                         and baselines.
+and compilers on representative DNN models from the perspective
+of execution latency, optimization time, schedule space, input sen-               A.5      Experiment Workflow
+sitivity, and different batch sizes. In the public artifact, we provide           There are 6 sub-directories under hidet/artifacts directory start-
+scripts to launch the 6 experiments automatically. With the hard-                 ing with 0, 1, 2, 3, 4, and 5, corresponding the 6 experiments in
+ware and software described in Section A.3.2 and A.3.3, the artifact              Section 6.2, 6.3.1, 6.3.2, 6.3.3, 6.3.4, and 6.3.5. Each sub-directory
+should reproduce all experimental results in the evaluation section.              contains a python script main.py that can be directly launched to
+                                                                                  conduct corresponding experiment.
+A.2       Artifact Checklist
+      •   Compilation: NVIDIA CUDA compiler (nvcc).                               A.6      Evaluation and Expected Results
+      •   Model: ResNet50, InceptionV3, MobileNetV2, Bert, and GPT-2              Each experiment script would have multiple outputs like
+      •   Run-time environment: Linux Ubuntu 20.04+                               BatchSize       Model       Executor       Latency         Std
+      •   Hardware: A workstation equipped with Intel Core i9-12900K,                     1    resnet50          hidet         1.329       0.000
+          NVIDIA RTX 3090, and 64 GiB RAM.
+      •   Metrics: End-to-end inference latency and auto-tuning time.                 that represents the average latency of one executor on a model
+      •   How much disk space required (approximately)?: 2 GiB                    with a specific batch size in multiple runs. This example shows that
+      •   How much time is needed to prepare workflow (approximately)?:           it takes Hidet 1.329 ms on average (with standard deviation 0.000
+          2 hours.                                                                ms) to run a single batch of ResNet50 [25] model. Some column
+      •   How much time is needed to complete experiments (approx-                are omitted here for simplicity. When conducting the experiments
+          imately)?: 60 hours. Most of the time (about 50 hours) will be used     with the hardware and software described in Section A.3.2 and
+          for model tuning by baselines AutoTVM and Ansor.                        Section A.3.3, the artifact should reproduce all experimental results
+      •   Publicly available?: Yes                                                in each evaluation section.
+
+
+                                                                             13
+ASPLOS ’23, March 25–29, 2023, Vancouver, BC, Canada                                Yaoyao Ding, Cody Hao Yu, Bojian Zheng, Yizhi Liu, Yida Wang, and Gennady Pekhimenko
+
+
+REFERENCES                                                                                          Abstraction for Automatic Tensorized Program Optimization. https://doi.org/10.
+ [1] Martín Abadi, Ashish Agarwal, Paul Barham, Eugene Brevdo, Zhifeng Chen,                        48550/ARXIV.2207.04296
+     Craig Citro, Greg S. Corrado, Andy Davis, Jeffrey Dean, Matthieu Devin, San-            [23]   Guin Gilman, Samuel S. Ogden, Tian Guo, and Robert J. Walls. 2021. Demysti-
+     jay Ghemawat, Ian Goodfellow, Andrew Harp, Geoffrey Irving, Michael Isard,                     fying the Placement Policies of the NVIDIA GPU Thread Block Scheduler for
+     Yangqing Jia, Rafal Jozefowicz, Lukasz Kaiser, Manjunath Kudlur, Josh Levenberg,               Concurrent Kernels. SIGMETRICS Perform. Eval. Rev. 48, 3 (mar 2021), 81–88.
+     Dandelion Mané, Rajat Monga, Sherry Moore, Derek Murray, Chris Olah, Mike                      https://doi.org/10.1145/3453953.3453972
+     Schuster, Jonathon Shlens, Benoit Steiner, Ilya Sutskever, Kunal Talwar, Paul           [24]   Bastian Hagedorn, Archibald Samuel Elliott, Henrik Barthels, Rastislav Bodik, and
+     Tucker, Vincent Vanhoucke, Vijay Vasudevan, Fernanda Viégas, Oriol Vinyals,                    Vinod Grover. 2020. Fireiron: A Data-Movement-Aware Scheduling Language for
+     Pete Warden, Martin Wattenberg, Martin Wicke, Yuan Yu, and Xiaoqiang Zheng.                    GPUs. In Proceedings of the ACM International Conference on Parallel Architectures
+     2015. TensorFlow: Large-Scale Machine Learning on Heterogeneous Systems.                       and Compilation Techniques (Virtual Event, GA, USA) (PACT ’20). Association
+     https://www.tensorflow.org/ Software available from tensorflow.org.                            for Computing Machinery, New York, NY, USA, 71–82. https://doi.org/10.1145/
+ [2] Andrew Adams, Karima Ma, Luke Anderson, Riyadh Baghdadi, Tzu-Mao Li,                           3410463.3414632
+     Michaël Gharbi, Benoit Steiner, Steven Johnson, Kayvon Fatahalian, Frédo Du-            [25]   Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. 2016. Deep residual
+     rand, and Jonathan Ragan-Kelley. 2019. Learning to Optimize Halide with Tree                   learning for image recognition. In Proceedings of the IEEE conference on computer
+     Search and Random Programs. ACM Trans. Graph. 38, 4, Article 121 (jul 2019),                   vision and pattern recognition. 770–778.
+     12 pages. https://doi.org/10.1145/3306346.3322967                                       [26]   NVIDIA Inc. 2022. Basic Linear Algebra on NVIDIA GPUs. https://developer.
+ [3] Abien Fred Agarap. 2018. Deep Learning using Rectified Linear Units (ReLU).                    nvidia.com/cublas
+     ArXiv abs/1803.08375 (2018).                                                            [27]   NVIDIA Inc. 2022. NVIDIA TensorRT. https://developer.nvidia.com/tensorrt
+ [4] Riyadh Baghdadi, Jessica Ray, Malek Ben Romdhane, Emanuele Del Sozzo, Ab-               [28]   NVIDIA Inc. 2022. Parallel Thread Execution ISA. https://docs.nvidia.com/cuda/
+     durrahman Akkas, Yunming Zhang, Patricia Suriana, Shoaib Kamil, and Saman                      parallel-thread-execution/index.html
+     Amarasinghe. 2019. Tiramisu: A Polyhedral Compiler for Expressing Fast and              [29]   Paras Jain, Ajay Jain, Aniruddha Nrusimha, Amir Gholami, Pieter Abbeel,
+     Portable Code. In Proceedings of the 2019 IEEE/ACM International Symposium                     Joseph Gonzalez, Kurt Keutzer, and Ion Stoica. 2020. Checkmate: Break-
+     on Code Generation and Optimization (Washington, DC, USA) (CGO 2019). IEEE                     ing the Memory Wall with Optimal Tensor Rematerialization. In Proceed-
+     Press, 193–205.                                                                                ings of Machine Learning and Systems, I. Dhillon, D. Papailiopoulos, and
+ [5] Junjie Bai, Fang Lu, Ke Zhang, et al. 2019. ONNX: Open Neural Network Exchange.                V. Sze (Eds.), Vol. 2. 497–511. https://proceedings.mlsys.org/paper/2020/file/
+     https://github.com/onnx/onnx.                                                                  084b6fbb10729ed4da8c3d3f5a3ae7c9-Paper.pdf
+ [6] Michael Bauer, Henry Cook, and Brucek Khailany. 2011. CudaDMA: Optimizing               [30]   Zhihao Jia, Oded Padon, James Thomas, Todd Warszawski, Matei Zaharia, and
+     GPU memory bandwidth via warp specialization. In SC ’11: Proceedings of 2011                   Alex Aiken. 2019. TASO: optimizing deep learning computation with automatic
+     International Conference for High Performance Computing, Networking, Storage                   generation of graph substitutions. In Proceedings of the 27th ACM Symposium on
+     and Analysis. 1–11. https://doi.org/10.1145/2063384.2063400                                    Operating Systems Principles. 47–62.
+ [7] Louis Bavoil. 2020. Optimizing Compute Shaders for L2 Locality using Thread-            [31]   Norman P. Jouppi, Cliff Young, Nishant Patil, David Patterson, Gaurav Agrawal,
+     Group ID Swizzling. https://developer.nvidia.com/blog/optimizing-compute-                      Raminder Bajwa, Sarah Bates, Suresh Bhatia, Nan Boden, Al Borchers, Rick Boyle,
+     shaders-for-l2-locality-using-thread-group-id-swizzling/                                       Pierre-luc Cantin, Clifford Chao, Chris Clark, Jeremy Coriell, Mike Daley, Matt
+ [8] Kumar Chellapilla, Sidd Puri, and Patrice Simard. 2006. High performance convo-                Dau, Jeffrey Dean, Ben Gelb, Tara Vazir Ghaemmaghami, Rajendra Gottipati,
+     lutional neural networks for document processing. In Tenth international work-                 William Gulland, Robert Hagmann, C. Richard Ho, Doug Hogberg, John Hu,
+     shop on frontiers in handwriting recognition. Suvisoft.                                        Robert Hundt, Dan Hurt, Julian Ibarz, Aaron Jaffey, Alek Jaworski, Alexander
+ [9] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin Zheng, Eddie Q. Yan,                        Kaplan, Harshit Khaitan, Daniel Killebrew, Andy Koch, Naveen Kumar, Steve
+     Haichen Shen, Meghan Cowan, Leyuan Wang, Yuwei Hu, Luis Ceze, Carlos                           Lacy, James Laudon, James Law, Diemthu Le, Chris Leary, Zhuyuan Liu, Kyle
+     Guestrin, and Arvind Krishnamurthy. 2018. TVM: An Automated End-to-End                         Lucke, Alan Lundin, Gordon MacKean, Adriana Maggiore, Maire Mahony, Kieran
+     Optimizing Compiler for Deep Learning. In OSDI.                                                Miller, Rahul Nagarajan, Ravi Narayanaswami, Ray Ni, Kathy Nix, Thomas Norrie,
+[10] Tianqi Chen, Bing Xu, Chiyuan Zhang, and Carlos Guestrin. 2016. Training Deep                  Mark Omernick, Narayana Penukonda, Andy Phelps, Jonathan Ross, Matt Ross,
+     Nets with Sublinear Memory Cost. https://doi.org/10.48550/ARXIV.1604.06174                     Amir Salek, Emad Samadiani, Chris Severn, Gregory Sizikov, Matthew Snelham,
+[11] Tianqi Chen, Lianmin Zheng, Eddie Yan, Ziheng Jiang, Thierry Moreau, Luis Ceze,                Jed Souter, Dan Steinberg, Andy Swing, Mercedes Tan, Gregory Thorson, Bo
+     Carlos Guestrin, and Arvind Krishnamurthy. 2018. Learning to optimize tensor                   Tian, Horia Toma, Erick Tuttle, Vijay Vasudevan, Richard Walter, Walter Wang,
+     programs. In Advances in Neural Information Processing Systems. 3389–3400.                     Eric Wilcox, and Doe Hyun Yoon. 2017. In-Datacenter Performance Analysis of
+[12] Sharan Chetlur, Cliff Woolley, Philippe Vandermersch, Jonathan M. Cohen, John                  a Tensor Processing Unit. SIGARCH Comput. Archit. News 45, 2 (jun 2017), 1–12.
+     Tran, Bryan Catanzaro, and Evan Shelhamer. 2014. cuDNN: Efficient Primitives                   https://doi.org/10.1145/3140659.3080246
+     for Deep Learning. ArXiv abs/1410.0759 (2014).                                          [32]   Andrew Kerr, Duane Merrill, Julien Demouth, John Tran, Naila Farooqui, Markus
+[13] Jack Choquette, Wishwesh Gandhi, Olivier Giroux, Nick Stam, and Ronny                          Tavenrath, Vince Schuster, Eddie Gornish, Jerry Zheng, and Bageshri Sathe. 2018.
+     Krashinsky. 2021. Nvidia a100 tensor core gpu: Performance and innovation.                     CUTLASS: CUDA TEMPLATE LIBRARY FOR DENSE LINEAR ALGEBRA AT
+     IEEE Micro 41, 2 (2021), 29–35.                                                                ALL LEVELS AND SCALES.
+[14] Marius Cordts, Mohamed Omran, Sebastian Ramos, Timo Rehfeld, Markus En-                 [33]   Marisa Kirisame, Steven Lyubomirsky, Altan Haan, Jennifer Brennan, Mike
+     zweiler, Rodrigo Benenson, Uwe Franke, Stefan Roth, and Bernt Schiele. 2016.                   He, Jared Roesch, Tianqi Chen, and Zachary Tatlock. 2021. Dynamic Ten-
+     The cityscapes dataset for semantic urban scene understanding. In Proceedings of               sor Rematerialization. In 9th International Conference on Learning Representa-
+     the IEEE conference on computer vision and pattern recognition. 3213–3223.                     tions, ICLR 2021, Virtual Event, Austria, May 3-7, 2021. OpenReview.net. https:
+[15] ONNX Runtime developers. 2021. ONNX Runtime. https://onnxruntime.ai/.                          //openreview.net/forum?id=Vfs_2RnOD0H
+     Version: 1.11.1.                                                                        [34]   Alex Krizhevsky, Ilya Sutskever, and Geoffrey E Hinton. 2012. Imagenet classifica-
+[16] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. 2018. BERT:                  tion with deep convolutional neural networks. In Advances in neural information
+     Pre-training of Deep Bidirectional Transformers for Language Understanding.                    processing systems. 1097–1105.
+     CoRR abs/1810.04805 (2018). arXiv:1810.04805 http://arxiv.org/abs/1810.04805            [35]   Yann LeCun, Yoshua Bengio, and Geoffrey Hinton. 2015. Deep learning. nature
+[17] Yaoyao Ding. 2022. yaoyaoding/hidet-artifacts: DOI Release. https://doi.org/10.                521, 7553 (2015), 436–444.
+     5281/zenodo.7429879                                                                     [36]   Mike Lewis, Yinhan Liu, Naman Goyal, Marjan Ghazvininejad, Abdelrahman
+[18] Yaoyao Ding, Ligeng Zhu, Zhihao Jia, Gennady Pekhimenko, and Song Han.                         Mohamed, Omer Levy, Veselin Stoyanov, and Luke Zettlemoyer. 2020. BART:
+     2021. Ios: Inter-operator scheduler for cnn acceleration. Proceedings of Machine               Denoising Sequence-to-Sequence Pre-training for Natural Language Generation,
+     Learning and Systems 3 (2021), 167–180.                                                        Translation, and Comprehension. In ACL.
+[19] Jingzhi Fang, Yanyan Shen, Yue Wang, and Lei Chen. 2020. Optimizing DNN                 [37]   Yizhi Liu, Yao Wang, Ruofei Yu, Mu Li, Vin Sharma, and Yida Wang. 2019. Opti-
+     Computation Graph Using Graph Substitutions. Proc. VLDB Endow. 13, 12 (sep                     mizing {CNN } Model Inference on {CPUs }. In 2019 USENIX Annual Technical
+     2020), 2734–2746. https://doi.org/10.14778/3407790.3407857                                     Conference (USENIX ATC 19). 1025–1040.
+[20] Pratik Fegade, Tianqi Chen, Phillip Gibbons, and Todd Mowry. 2022. The                  [38]   Lingxiao Ma, Zhiqiang Xie, Zhi Yang, Jilong Xue, Youshan Miao, Wei Cui, Wenx-
+     CoRa Tensor Compiler: Compilation for Ragged Tensors with Minimal Padding.                     iang Hu, Fan Yang, Lintao Zhang, and Lidong Zhou. 2020. RAMMER: Enabling
+     In Proceedings of Machine Learning and Systems, D. Marculescu, Y. Chi, and                     Holistic Deep Learning Compiler Optimizations with Rtasks. USENIX Association,
+     C. Wu (Eds.), Vol. 4. 721–747. https://proceedings.mlsys.org/paper/2022/file/                  USA, 17.
+     d3d9446802a44259755d38e6d163e820-Paper.pdf                                              [39]   John Nickolls, Ian Buck, Michael Garland, and Kevin Skadron. 2008. Scalable
+[21] Pratik Fegade, Tianqi Chen, Phil Gibbons, and Todd C. Mowry. 2020. Cortex: A                   parallel programming with cuda: Is cuda the parallel programming model that
+     Compiler for Recursive Deep Learning Models. ArXiv abs/2011.01383 (2020).                      application developers have been waiting for? Queue 6, 2 (2008), 40–53.
+[22] Siyuan Feng, Bohan Hou, Hongyi Jin, Wuwei Lin, Junru Shao, Ruihang Lai, Zihao           [40]   John Nickolls and William J. Dally. 2010. The GPU Computing Era. IEEE Micro
+     Ye, Lianmin Zheng, Cody Hao Yu, Yong Yu, and Tianqi Chen. 2022. TensorIR: An                   30, 2 (2010), 56–69. https://doi.org/10.1109/MM.2010.41
+
+                                                                                        14
+Hidet: Task-Mapping Programming Paradigm for Deep Learning Tensor Programs                                                ASPLOS ’23, March 25–29, 2023, Vancouver, BC, Canada
+
+
+[41] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James Bradbury, Gregory              [58] Jiarong Xing, Leyuan Wang, Shang Zhang, Jack Chen, Ang Chen, and Yibo
+     Chanan, Trevor Killeen, Zeming Lin, Natalia Gimelshein, Luca Antiga, Alban Des-                Zhu. 2022. Bolt: Bridging the Gap between Auto-tuners and Hardware-native
+     maison, Andreas Kopf, Edward Yang, Zachary DeVito, Martin Raison, Alykhan                      Performance. In Proceedings of Machine Learning and Systems, Vol. 4.
+     Tejani, Sasank Chilamkurthy, Benoit Steiner, Lu Fang, Junjie Bai, and Soumith             [59] Bing Xu, Ying Zhang, Hao Lu, Yang Chen, Terry Chen, Mike Iovine, Mu-Chu
+     Chintala. 2019. PyTorch: An Imperative Style, High-Performance Deep Learning                   Lee, and Zhijing Li. 2022. AITemplate. https://github.com/facebookincubator/
+     Library. In Advances in Neural Information Processing Systems 32, H. Wallach,                  AITemplate
+     H. Larochelle, A. Beygelzimer, F. d'Alché-Buc, E. Fox, and R. Garnett (Eds.). Cur-        [60] Yichen Yang, Phitchaya Phothilimthana, Yisu Wang, Max Willsey, Sudip Roy, and
+     ran Associates, Inc., 8024–8035. http://papers.neurips.cc/paper/9015-pytorch-                  Jacques Pienaar. 2021. Equality Saturation for Tensor Graph Superoptimization.
+     an-imperative-style-high-performance-deep-learning-library.pdf                                 In Proceedings of Machine Learning and Systems, A. Smola, A. Dimakis, and
+[42] Alec Radford, Jeffrey Wu, Rewon Child, David Luan, Dario Amodei, Ilya Sutskever,               I. Stoica (Eds.), Vol. 3. 255–268. https://proceedings.mlsys.org/paper/2021/file/
+     et al. 2019. Language models are unsupervised multitask learners. OpenAI blog                  65ded5353c5ee48d0b7d48c591b8f430-Paper.pdf
+     1, 8 (2019), 9.                                                                           [61] Jie Zhao, Xiong Gao, Ruijie Xia, Zhaochuang Zhang, Deshi Chen, Lei Chen,
+[43] Jonathan Ragan-Kelley, Connelly Barnes, Andrew Adams, Sylvain Paris, Frédo                     Renwei Zhang, Zhen Geng, Bin Cheng, and Xuefeng Jin. 2022. Apollo: Au-
+     Durand, and Saman Amarasinghe. 2013. Halide: a language and compiler for                       tomatic Partition-based Operator Fusion through Layer by Layer Optimiza-
+     optimizing parallelism, locality, and recomputation in image processing pipelines.             tion. In Proceedings of Machine Learning and Systems, D. Marculescu, Y. Chi,
+     In Acm Sigplan Notices, Vol. 48. ACM, 519–530.                                                 and C. Wu (Eds.), Vol. 4. 1–19. https://proceedings.mlsys.org/paper/2022/file/
+[44] Amit Sabne. 2020. XLA : Compiling Machine Learning for Peak Performance.                       069059b7ef840f0c74a814ec9237b6ec-Paper.pdf
+[45] Mark Sandler, Andrew Howard, Menglong Zhu, Andrey Zhmoginov, and Liang-                   [62] Jie Zhao, Bojie Li, Wang Nie, Zhenglin Geng, Renwei Zhang, Xiong Gao, Bin
+     Chieh Chen. 2018. Mobilenetv2: Inverted residuals and linear bottlenecks. In                   Cheng, Chen Wu, Yun Cheng, Zheng Li, Peng Di, Kun Zhang, and Xuefeng
+     Proceedings of the IEEE conference on computer vision and pattern recognition.                 Jin. 2021. AKG: automatic kernel generation for neural processing units using
+     4510–4520.                                                                                     polyhedral transformations. Proceedings of the 42nd ACM SIGPLAN International
+[46] Junru Shao, Xiyou Zhou, Siyuan Feng, Bohan Hou, Ruihang Lai, Hongyi Jin,                       Conference on Programming Language Design and Implementation (2021).
+     Wuwei Lin, Masahiro Masuda, Cody Hao Yu, and Tianqi Chen. 2022. Tensor                    [63] Bojian Zheng, Ziheng Jiang, Cody Hao Yu, Haichen Shen, Joshua Fromm,
+     Program Optimization with Probabilistic Programs. ArXiv abs/2205.13603 (2022).                 Yizhi Liu, Yida Wang, Luis Ceze, Tianqi Chen, and Gennady Pekhimenko.
+[47] Haichen Shen, Jared Roesch, Zhi Chen, Wei Chen, Yong Wu, Mu Li,                                2022. DietCode: Automatic Optimization for Dynamic Tensor Programs. In
+     Vin Sharma, Zachary Tatlock, and Yida Wang. 2021. Nimble: Efficiently                          Proceedings of Machine Learning and Systems, D. Marculescu, Y. Chi, and
+     Compiling Dynamic Neural Networks for Model Inference. In Proceed-                             C. Wu (Eds.), Vol. 4. 848–863. https://proceedings.mlsys.org/paper/2022/file/
+     ings of Machine Learning and Systems, A. Smola, A. Dimakis, and I. Sto-                        fa7cdfad1a5aaf8370ebeda47a1ff1c3-Paper.pdf
+     ica (Eds.), Vol. 3. 208–222.       https://proceedings.mlsys.org/paper/2021/file/         [64] Bojian Zheng, Nandita Vijaykumar, and Gennady Pekhimenko. 2020. Echo:
+     4e732ced3463d06de0ca9a15b6153677-Paper.pdf                                                     Compiler-Based GPU Memory Footprint Reduction for LSTM RNN Training. In
+[48] Ilya Sutskever, Oriol Vinyals, and Quoc V Le. 2014. Sequence to sequence learning              Proceedings of the ACM/IEEE 47th Annual International Symposium on Computer
+     with neural networks. In Advances in neural information processing systems. 3104–              Architecture (Virtual Event) (ISCA ’20). IEEE Press, 1089–1102. https://doi.org/
+     3112.                                                                                          10.1109/ISCA45697.2020.00092
+[49] Christian Szegedy, Wei Liu, Yangqing Jia, Pierre Sermanet, Scott Reed, Dragomir           [65] Lianmin Zheng, Chengfan Jia, Minmin Sun, Zhao Wu, Cody Hao Yu, Ameer
+     Anguelov, Dumitru Erhan, Vincent Vanhoucke, and Andrew Rabinovich. 2015.                       Haj-Ali, Yida Wang, Jun Yang, Danyang Zhuo, Koushik Sen, Joseph E. Gonzalez,
+     Going deeper with convolutions. In Proceedings of the IEEE conference on computer              and Ion Stoica. 2020. Ansor: Generating High-Performance Tensor Programs
+     vision and pattern recognition. 1–9.                                                           for Deep Learning. In 14th USENIX Symposium on Operating Systems Design and
+[50] Christian Szegedy, Vincent Vanhoucke, Sergey Ioffe, Jon Shlens, and Zbigniew                   Implementation (OSDI 20). 863–879.
+     Wojna. 2016. Rethinking the inception architecture for computer vision. In                [66] Size Zheng, Renze Chen, Anjiang Wei, Yicheng Jin, Qin Han, Liqiang Lu, Bingyang
+     Proceedings of the IEEE conference on computer vision and pattern recognition.                 Wu, Xiuhong Li, Shengen Yan, and Yun Liang. 2022. AMOS: Enabling automatic
+     2818–2826.                                                                                     mapping for Tensor Computations on spatial Accelerators with Hardware Ab-
+[51] Shizhi Tang, Jidong Zhai, Haojie Wang, Lin Jiang, Liyan Zheng, Zhenhao Yuan,                   straction. In Proceedings of the 49th Annual International Symposium on Computer
+     and Chen Zhang. 2022. FreeTensor: A Free-Form DSL with Holistic Optimiza-                      Architecture (New York, New York) (ISCA ’22). Association for Computing Ma-
+     tions for Irregular Tensor Programs. In Proceedings of the 43rd ACM SIGPLAN                    chinery, New York, NY, USA, 874–887. https://doi.org/10.1145/3470496.3527440
+     International Conference on Programming Language Design and Implementa-                   [67] Size Zheng, Yun Liang, Shuo Wang, Renze Chen, and Kaiwen Sheng. 2020. Flex-
+     tion (PLDI ’22) (San Diego, CA, USA) (PLDI ’22). New York, NY, USA, 16 pages.                  Tensor: An Automatic Schedule Exploration and Optimization Framework for
+     https://doi.org/10.1145/3519939.3523448                                                        Tensor Computation on Heterogeneous System. Proceedings of the Twenty-Fifth
+[52] Philippe Tillet, H. T. Kung, and David Cox. 2019. Triton: An Intermediate Lan-                 International Conference on Architectural Support for Programming Languages and
+     guage and Compiler for Tiled Neural Network Computations. In Proceedings of                    Operating Systems (2020).
+     the 3rd ACM SIGPLAN International Workshop on Machine Learning and Program-               [68] Zhen Zheng, Xuanda Yang, Pengzhan Zhao, Guoping Long, Kai Zhu, Feiwen Zhu,
+     ming Languages (Phoenix, AZ, USA) (MAPL 2019). Association for Computing                       Wenyi Zhao, Xiaoyong Liu, Jun Yang, Jidong Zhai, Shuaiwen Leon Song, and Wei
+     Machinery, New York, NY, USA, 10–19. https://doi.org/10.1145/3315508.3329973                   Lin. 2022. AStitch: Enabling a New Multi-Dimensional Optimization Space for
+[53] Aditya Ukarande, Suryakant Patidar, and Ram Rangan. 2021. Locality-Aware                       Memory-Intensive ML Training and Inference on Modern SIMT Architectures. In
+     CTA Scheduling for Gaming Applications. ACM Trans. Archit. Code Optim. 19, 1,                  Proceedings of the 27th ACM International Conference on Architectural Support for
+     Article 1 (dec 2021), 26 pages. https://doi.org/10.1145/3477497                                Programming Languages and Operating Systems (Lausanne, Switzerland) (ASPLOS
+[54] Nicolas Vasilache, Oleksandr Zinenko, Theodoros Theodoridis, Priya Goyal, Zach                 ’22). Association for Computing Machinery, New York, NY, USA, 359–373. https:
+     DeVito, William S. Moses, Sven Verdoolaege, Andrew Adams, and Albert Cohen.                    //doi.org/10.1145/3503222.3507723
+     2018. Tensor Comprehensions: Framework-Agnostic High-Performance Machine                  [69] Hongyu Zhu, Ruofan Wu, Yijia Diao, Shanbin Ke, Haoyu Li, Chen Zhang, Jilong
+     Learning Abstractions. ArXiv abs/1802.04730 (2018).                                            Xue, Lingxiao Ma, Yuqing Xia, Wei Cui, Fan Yang, Mao Yang, Lidong Zhou, Asaf
+[55] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones,                       Cidon, and Gennady Pekhimenko. 2022. ROLLER: Fast and Efficient Tensor
+     Aidan N Gomez, Ł ukasz Kaiser, and Illia Polosukhin. 2017. Attention is All                    Compilation for Deep Learning. In 16th USENIX Symposium on Operating Systems
+     you Need. In Advances in Neural Information Processing Systems, I. Guyon, U. Von               Design and Implementation (OSDI 22). USENIX Association, Carlsbad, CA, 233–
+     Luxburg, S. Bengio, H. Wallach, R. Fergus, S. Vishwanathan, and R. Garnett (Eds.),             248. https://www.usenix.org/conference/osdi22/presentation/zhu
+     Vol. 30. Curran Associates, Inc. https://proceedings.neurips.cc/paper/2017/file/          [70] K. Zhu, W.Y. Zhao, Z. Zheng, T.Y. Guo, P.Z. Zhao, J.J. Bai, J. Yang, X.Y. Liu,
+     3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf                                                     L.S. Diao, and W. Lin. 2021. DISC: A Dynamic Shape Compiler for Machine
+[56] Haojie Wang, Jidong Zhai, Mingyu Gao, Zixuan Ma, Shizhi Tang, Liyan Zheng,                     Learning Workloads. In Proceedings of the 1st Workshop on Machine Learning and
+     Yuanzhi Li, Kaiyuan Rong, Yuanyong Chen, and Zhihao Jia. 2021. PET: Optimiz-                   Systems (Online, United Kingdom) (EuroMLSys ’21). Association for Computing
+     ing Tensor Programs with Partially Equivalent Transformations and Automated                    Machinery, New York, NY, USA, 89–95. https://doi.org/10.1145/3437984.3458838
+     Corrections. In USENIX Symposium on Operating Systems Design and Implemen-                [71] Barret Zoph and Quoc V Le. 2016. Neural architecture search with reinforcement
+     tation.                                                                                        learning. arXiv preprint arXiv:1611.01578 (2016).
+[57] Jian Weng, Animesh Jain, Jie Wang, Leyuan Wang, Yida Wang, and Tony
+     Nowatzki. 2021. UNIT: Unifying Tensorized Instruction Compilation. IEEE Press,            Received 2022-07-07; accepted 2022-09-22
+     77–89. https://doi.org/10.1109/CGO51591.2021.9370330
+
+
+
+
+                                                                                          15
+

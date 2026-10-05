@@ -1,0 +1,962 @@
+                                            Swin Transformer: Hierarchical Vision Transformer using Shifted Windows
+
+                                                                      Ze Liu†*         Yutong Lin†* Yue Cao* Han Hu*‡ Yixuan Wei†
+                                                                                       Zheng Zhang Stephen Lin Baining Guo
+                                                                                               Microsoft Research Asia
+                                                       {v-zeliu1,v-yutlin,yuecao,hanhu,v-yixwe,zhez,stevelin,bainguo}@microsoft.com
+arXiv:2103.14030v2 [cs.CV] 17 Aug 2021
+
+
+
+
+                                                                        Abstract
+
+                                             This paper presents a new vision Transformer, called
+                                         Swin Transformer, that capably serves as a general-purpose
+                                         backbone for computer vision. Challenges in adapting
+                                         Transformer from language to vision arise from differences
+                                         between the two domains, such as large variations in the
+                                         scale of visual entities and the high resolution of pixels
+                                         in images compared to words in text. To address these
+                                         differences, we propose a hierarchical Transformer whose
+                                         representation is computed with Shifted windows. The
+                                         shifted windowing scheme brings greater efficiency by lim-
+                                         iting self-attention computation to non-overlapping local        Figure 1. (a) The proposed Swin Transformer builds hierarchical
+                                         windows while also allowing for cross-window connection.         feature maps by merging image patches (shown in gray) in deeper
+                                         This hierarchical architecture has the flexibility to model      layers and has linear computation complexity to input image size
+                                                                                                          due to computation of self-attention only within each local win-
+                                         at various scales and has linear computational complexity
+                                                                                                          dow (shown in red). It can thus serve as a general-purpose back-
+                                         with respect to image size. These qualities of Swin Trans-
+                                                                                                          bone for both image classification and dense recognition tasks.
+                                         former make it compatible with a broad range of vision           (b) In contrast, previous vision Transformers [20] produce fea-
+                                         tasks, including image classification (87.3 top-1 accuracy       ture maps of a single low resolution and have quadratic compu-
+                                         on ImageNet-1K) and dense prediction tasks such as object        tation complexity to input image size due to computation of self-
+                                         detection (58.7 box AP and 51.1 mask AP on COCO test-            attention globally.
+                                         dev) and semantic segmentation (53.5 mIoU on ADE20K
+                                         val). Its performance surpasses the previous state-of-the-       greater scale [30, 76], more extensive connections [34], and
+                                         art by a large margin of +2.7 box AP and +2.6 mask AP on         more sophisticated forms of convolution [70, 18, 84]. With
+                                         COCO, and +3.2 mIoU on ADE20K, demonstrating the po-             CNNs serving as backbone networks for a variety of vision
+                                         tential of Transformer-based models as vision backbones.         tasks, these architectural advances have led to performance
+                                         The hierarchical design and the shifted window approach          improvements that have broadly lifted the entire field.
+                                         also prove beneficial for all-MLP architectures. The code            On the other hand, the evolution of network architectures
+                                         and models are publicly available at https://github.             in natural language processing (NLP) has taken a different
+                                         com/microsoft/Swin-Transformer.                                  path, where the prevalent architecture today is instead the
+                                                                                                          Transformer [64]. Designed for sequence modeling and
+                                                                                                          transduction tasks, the Transformer is notable for its use
+                                         1. Introduction                                                  of attention to model long-range dependencies in the data.
+                                                                                                          Its tremendous success in the language domain has led re-
+                                            Modeling in computer vision has long been dominated
+                                                                                                          searchers to investigate its adaptation to computer vision,
+                                         by convolutional neural networks (CNNs). Beginning with
+                                                                                                          where it has recently demonstrated promising results on cer-
+                                         AlexNet [39] and its revolutionary performance on the
+                                                                                                          tain tasks, specifically image classification [20] and joint
+                                         ImageNet image classification challenge, CNN architec-
+                                                                                                          vision-language modeling [47].
+                                         tures have evolved to become increasingly powerful through
+                                                                                                              In this paper, we seek to expand the applicability of
+                                           * Equal   contribution. † Interns at MSRA. ‡ Contact person.   Transformer such that it can serve as a general-purpose
+backbone for computer vision, as it does for NLP and
+as CNNs do in vision. We observe that significant chal-
+lenges in transferring its high performance in the language
+domain to the visual domain can be explained by differ-
+ences between the two modalities. One of these differ-
+ences involves scale. Unlike the word tokens that serve
+as the basic elements of processing in language Trans-
+formers, visual elements can vary substantially in scale, a
+problem that receives attention in tasks such as object de-                    Figure 2. An illustration of the shifted window approach for com-
+tection [42, 53, 54]. In existing Transformer-based mod-                       puting self-attention in the proposed Swin Transformer architec-
+                                                                               ture. In layer l (left), a regular window partitioning scheme is
+els [64, 20], tokens are all of a fixed scale, a property un-
+                                                                               adopted, and self-attention is computed within each window. In
+suitable for these vision applications. Another difference                     the next layer l + 1 (right), the window partitioning is shifted, re-
+is the much higher resolution of pixels in images com-                         sulting in new windows. The self-attention computation in the new
+pared to words in passages of text. There exist many vi-                       windows crosses the boundaries of the previous windows in layer
+sion tasks such as semantic segmentation that require dense                    l, providing connections among them.
+prediction at the pixel level, and this would be intractable
+for Transformer on high-resolution images, as the compu-                       shifted window approach has much lower latency than the
+tational complexity of its self-attention is quadratic to im-                  sliding window method, yet is similar in modeling power
+age size. To overcome these issues, we propose a general-                      (see Tables 5 and 6). The shifted window approach also
+purpose Transformer backbone, called Swin Transformer,                         proves beneficial for all-MLP architectures [61].
+which constructs hierarchical feature maps and has linear                          The proposed Swin Transformer achieves strong perfor-
+computational complexity to image size. As illustrated in                      mance on the recognition tasks of image classification, ob-
+Figure 1(a), Swin Transformer constructs a hierarchical rep-                   ject detection and semantic segmentation. It outperforms
+resentation by starting from small-sized patches (outlined in                  the ViT / DeiT [20, 63] and ResNe(X)t models [30, 70] sig-
+gray) and gradually merging neighboring patches in deeper                      nificantly with similar latency on the three tasks. Its 58.7
+Transformer layers. With these hierarchical feature maps,                      box AP and 51.1 mask AP on the COCO test-dev set sur-
+the Swin Transformer model can conveniently leverage ad-                       pass the previous state-of-the-art results by +2.7 box AP
+vanced techniques for dense prediction such as feature pyra-                   (Copy-paste [26] without external data) and +2.6 mask AP
+mid networks (FPN) [42] or U-Net [51]. The linear compu-                       (DetectoRS [46]). On ADE20K semantic segmentation, it
+tational complexity is achieved by computing self-attention                    obtains 53.5 mIoU on the val set, an improvement of +3.2
+locally within non-overlapping windows that partition an                       mIoU over the previous state-of-the-art (SETR [81]). It also
+image (outlined in red). The number of patches in each                         achieves a top-1 accuracy of 87.3% on ImageNet-1K image
+window is fixed, and thus the complexity becomes linear                        classification.
+to image size. These merits make Swin Transformer suit-                            It is our belief that a unified architecture across com-
+able as a general-purpose backbone for various vision tasks,                   puter vision and natural language processing could benefit
+in contrast to previous Transformer based architectures [20]                   both fields, since it would facilitate joint modeling of vi-
+which produce feature maps of a single resolution and have                     sual and textual signals and the modeling knowledge from
+quadratic complexity.                                                          both domains can be more deeply shared. We hope that
+    A key design element of Swin Transformer is its shift                      Swin Transformer’s strong performance on various vision
+of the window partition between consecutive self-attention                     problems can drive this belief deeper in the community and
+layers, as illustrated in Figure 2. The shifted windows                        encourage unified modeling of vision and language signals.
+bridge the windows of the preceding layer, providing con-
+nections among them that significantly enhance modeling                        2. Related Work
+power (see Table 4). This strategy is also efficient in re-                    CNN and variants CNNs serve as the standard network
+gards to real-world latency: all query patches within a win-                   model throughout computer vision. While the CNN has ex-
+dow share the same key set1 , which facilitates memory ac-                     isted for several decades [40], it was not until the introduc-
+cess in hardware. In contrast, earlier sliding window based                    tion of AlexNet [39] that the CNN took off and became
+self-attention approaches [33, 50] suffer from low latency                     mainstream. Since then, deeper and more effective con-
+on general hardware due to different key sets for different                    volutional neural architectures have been proposed to fur-
+query pixels2 . Our experiments show that the proposed                         ther propel the deep learning wave in computer vision, e.g.,
+   1 The
+                                                                               VGG [52], GoogleNet [57], ResNet [30], DenseNet [34],
+        query and key are projection vectors in a self-attention layer.
+   2 Whilethere are efficient methods to implement a sliding-window            weights across a feature map, it is difficult for a sliding-window based
+based convolution layer on general hardware, thanks to its shared kernel       self-attention layer to have efficient memory access in practice.
+
+
+                                                                           2
+HRNet [65], and EfficientNet [58]. In addition to these                resolution is high, due to its low-resolution feature maps
+architectural advances, there has also been much work on               and the quadratic increase in complexity with image size.
+improving individual convolution layers, such as depth-                There are a few works applying ViT models to the dense
+wise convolution [70] and deformable convolution [18, 84].             vision tasks of object detection and semantic segmenta-
+While the CNN and its variants are still the primary back-             tion by direct upsampling or deconvolution but with rela-
+bone architectures for computer vision applications, we                tively lower performance [2, 81]. Concurrent to our work
+highlight the strong potential of Transformer-like architec-           are some that modify the ViT architecture [72, 15, 28]
+tures for unified modeling between vision and language.                for better image classification. Empirically, we find our
+Our work achieves strong performance on several basic vi-              Swin Transformer architecture to achieve the best speed-
+sual recognition tasks, and we hope it will contribute to a            accuracy trade-off among these methods on image classi-
+modeling shift.                                                        fication, even though our work focuses on general-purpose
+                                                                       performance rather than specifically on classification. An-
+Self-attention based backbone architectures Also in-                   other concurrent work [66] explores a similar line of think-
+spired by the success of self-attention layers and Trans-              ing to build multi-resolution feature maps on Transform-
+former architectures in the NLP field, some works employ               ers. Its complexity is still quadratic to image size, while
+self-attention layers to replace some or all of the spatial con-       ours is linear and also operates locally which has proven
+volution layers in the popular ResNet [33, 50, 80]. In these           beneficial in modeling the high correlation in visual sig-
+works, the self-attention is computed within a local window            nals [36, 25, 41]. Our approach is both efficient and ef-
+of each pixel to expedite optimization [33], and they achieve          fective, achieving state-of-the-art accuracy on both COCO
+slightly better accuracy/FLOPs trade-offs than the counter-            object detection and ADE20K semantic segmentation.
+part ResNet architecture. However, their costly memory
+access causes their actual latency to be significantly larger          3. Method
+than that of the convolutional networks [33]. Instead of us-
+ing sliding windows, we propose to shift windows between               3.1. Overall Architecture
+consecutive layers, which allows for a more efficient imple-               An overview of the Swin Transformer architecture is pre-
+mentation in general hardware.                                         sented in Figure 3, which illustrates the tiny version (Swin-
+                                                                       T). It first splits an input RGB image into non-overlapping
+Self-attention/Transformers to complement CNNs An-                     patches by a patch splitting module, like ViT. Each patch is
+other line of work is to augment a standard CNN architec-              treated as a “token” and its feature is set as a concatenation
+ture with self-attention layers or Transformers. The self-             of the raw pixel RGB values. In our implementation, we use
+attention layers can complement backbones [67, 7, 3, 71,               a patch size of 4 × 4 and thus the feature dimension of each
+23, 74, 55] or head networks [32, 27] by providing the ca-             patch is 4 × 4 × 3 = 48. A linear embedding layer is ap-
+pability to encode distant dependencies or heterogeneous               plied on this raw-valued feature to project it to an arbitrary
+interactions. More recently, the encoder-decoder design in             dimension (denoted as C).
+Transformer has been applied for the object detection and                  Several Transformer blocks with modified self-attention
+instance segmentation tasks [8, 13, 85, 56]. Our work ex-              computation (Swin Transformer blocks) are applied on these
+plores the adaptation of Transformers for basic visual fea-            patch tokens. The Transformer blocks maintain the number
+ture extraction and is complementary to these works.                   of tokens ( H      W
+                                                                                     4 × 4 ), and together with the linear embedding
+                                                                       are referred to as “Stage 1”.
+Transformer based vision backbones Most related to                         To produce a hierarchical representation, the number of
+our work is the Vision Transformer (ViT) [20] and its                  tokens is reduced by patch merging layers as the network
+follow-ups [63, 72, 15, 28, 66]. The pioneering work of                gets deeper. The first patch merging layer concatenates the
+ViT directly applies a Transformer architecture on non-                features of each group of 2 × 2 neighboring patches, and
+overlapping medium-sized image patches for image clas-                 applies a linear layer on the 4C-dimensional concatenated
+sification. It achieves an impressive speed-accuracy trade-            features. This reduces the number of tokens by a multiple
+off on image classification compared to convolutional net-             of 2 × 2 = 4 (2× downsampling of resolution), and the out-
+works. While ViT requires large-scale training datasets                put dimension is set to 2C. Swin Transformer blocks are
+(i.e., JFT-300M) to perform well, DeiT [63] introduces sev-            applied afterwards for feature transformation, with the res-
+eral training strategies that allow ViT to also be effective           olution kept at H        W
+                                                                                          8 × 8 . This first block of patch merging
+using the smaller ImageNet-1K dataset. The results of ViT              and feature transformation is denoted as “Stage 2”. The pro-
+on image classification are encouraging, but its architec-             cedure is repeated twice, as “Stage 3” and “Stage 4”, with
+                                                                                                 H
+ture is unsuitable for use as a general-purpose backbone               output resolutions of 16     × W       H      W
+                                                                                                      16 and 32 × 32 , respectively.
+network on dense vision tasks or when the input image                  These stages jointly produce a hierarchical representation,
+
+
+                                                                   3
+                                                                                                                                                                                  MLP                 MLP
+
+                                               Stage 1                         Stage 2                            Stage 3                                Stage 4
+                                                                                                                                                                                   LN                  LN
+                            Linear Embedding
+          Patch Partition
+
+
+
+
+                                                               Patch Merging
+
+
+
+
+                                                                                                  Patch Merging
+
+
+
+
+                                                                                                                                         Patch Merging
+                                                    Swin                            Swin                               Swin                                   Swin
+ Images                                          Transformer                     Transformer                        Transformer                            Transformer           W-MSA              SW-MSA
+                                                    Block                           Block                              Block                                  Block
+                                                                                                                                                                                   LN                  LN
+
+                                                         2                               2                                  6                                      2
+
+                                                                               (a) Architecture                                                                          (b) Two Successive Swin Transformer Blocks
+Figure 3. (a) The architecture of a Swin Transformer (Swin-T); (b) two successive Swin Transformer Blocks (notation presented with
+Eq. (3)). W-MSA and SW-MSA are multi-head self attention modules with regular and shifted windowing configurations, respectively.
+
+
+with the same feature map resolutions as those of typical                                                                   on an image of h × w patches are3 :
+convolutional networks, e.g., VGG [52] and ResNet [30].
+As a result, the proposed architecture can conveniently re-                                                                                              Ω(MSA) = 4hwC 2 + 2(hw)2 C,                          (1)
+place the backbone networks in existing methods for vari-                                                                                                                          2         2
+                                                                                                                                                         Ω(W-MSA) = 4hwC + 2M hwC,                            (2)
+ous vision tasks.
+                                                                                                                            where the former is quadratic to patch number hw, and the
+                                                                                                                            latter is linear when M is fixed (set to 7 by default). Global
+                                                                                                                            self-attention computation is generally unaffordable for a
+Swin Transformer block Swin Transformer is built by                                                                         large hw, while the window based self-attention is scalable.
+replacing the standard multi-head self attention (MSA)
+module in a Transformer block by a module based on
+                                                                                                                            Shifted window partitioning in successive blocks The
+shifted windows (described in Section 3.2), with other lay-
+                                                                                                                            window-based self-attention module lacks connections
+ers kept the same. As illustrated in Figure 3(b), a Swin
+                                                                                                                            across windows, which limits its modeling power. To intro-
+Transformer block consists of a shifted window based MSA
+                                                                                                                            duce cross-window connections while maintaining the effi-
+module, followed by a 2-layer MLP with GELU non-
+                                                                                                                            cient computation of non-overlapping windows, we propose
+linearity in between. A LayerNorm (LN) layer is applied
+                                                                                                                            a shifted window partitioning approach which alternates be-
+before each MSA module and each MLP, and a residual
+                                                                                                                            tween two partitioning configurations in consecutive Swin
+connection is applied after each module.
+                                                                                                                            Transformer blocks.
+                                                                                                                               As illustrated in Figure 2, the first module uses a regular
+3.2. Shifted Window based Self-Attention                                                                                    window partitioning strategy which starts from the top-left
+                                                                                                                            pixel, and the 8 × 8 feature map is evenly partitioned into
+    The standard Transformer architecture [64] and its adap-                                                                2 × 2 windows of size 4 × 4 (M = 4). Then, the next mod-
+tation for image classification [20] both conduct global self-                                                              ule adopts a windowing configuration that is shifted from
+attention, where the relationships between a token and all                                                                  that of the preceding layer, by displacing the windows by
+other tokens are computed. The global computation leads to                                                                  (b M     M
+                                                                                                                               2 c, b 2 c) pixels from the regularly partitioned windows.
+quadratic complexity with respect to the number of tokens,                                                                     With the shifted window partitioning approach, consec-
+making it unsuitable for many vision problems requiring an                                                                  utive Swin Transformer blocks are computed as
+immense set of tokens for dense prediction or to represent a
+                                                                                                                                         ẑl = W-MSA LN zl−1 + zl−1 ,
+                                                                                                                                                                    
+high-resolution image.
+                                                                                                                                         zl = MLP LN ẑl + ẑl ,
+                                                                                                                                                             
+
+                                                                                                                                         ẑl+1 = SW-MSA LN zl + zl ,
+                                                                                                                                                                     
+Self-attention in non-overlapped windows For efficient
+                                                                                                                                         zl+1 = MLP LN ẑl+1 + ẑl+1 ,
+                                                                                                                                                                   
+                                                                                                                                                                                       (3)
+modeling, we propose to compute self-attention within lo-
+cal windows. The windows are arranged to evenly partition
+                                                                                                                            where ẑl and zl denote the output features of the (S)W-
+the image in a non-overlapping manner. Supposing each
+                                                                                                                            MSA module and the MLP module for block l, respectively;
+window contains M × M patches, the computational com-
+plexity of a global MSA module and a window based one                                                                           3 We   omit SoftMax computation in determining complexity.
+
+
+                                                                                                                       4
+                   A      C                              A     C                    We observe significant improvements over counterparts
+                                            masked
+                                             MSA                                without this bias term or that use absolute position embed-
+                   B              B                      B          B
+
+
+
+
+                                      ...
+                                                                                ding, as shown in Table 4. Further adding absolute posi-
+                                            masked
+window partition          C       A                            C    A           tion embedding to the input as in [20] drops performance
+                                             MSA
+                       cyclic shift                  reverse cyclic shift       slightly, thus it is not adopted in our implementation.
+Figure 4. Illustration of an efficient batch computation approach                   The learnt relative position bias in pre-training can be
+for self-attention in shifted window partitioning.                              also used to initialize a model for fine-tuning with a differ-
+                                                                                ent window size through bi-cubic interpolation [20, 63].
+W-MSA and SW-MSA denote window based multi-head                                 3.3. Architecture Variants
+self-attention using regular and shifted window partitioning
+                                                                                   We build our base model, called Swin-B, to have of
+configurations, respectively.
+                                                                                model size and computation complexity similar to ViT-
+   The shifted window partitioning approach introduces
+                                                                                B/DeiT-B. We also introduce Swin-T, Swin-S and Swin-L,
+connections between neighboring non-overlapping win-
+                                                                                which are versions of about 0.25×, 0.5× and 2× the model
+dows in the previous layer and is found to be effective in im-
+                                                                                size and computational complexity, respectively. Note that
+age classification, object detection, and semantic segmenta-
+                                                                                the complexity of Swin-T and Swin-S are similar to those
+tion, as shown in Table 4.
+                                                                                of ResNet-50 (DeiT-S) and ResNet-101, respectively. The
+                                                                                window size is set to M = 7 by default. The query dimen-
+Efficient batch computation for shifted configuration                           sion of each head is d = 32, and the expansion layer of
+An issue with shifted window partitioning is that it will re-                   each MLP is α = 4, for all experiments. The architecture
+                                 h         w         h
+sult in more windows, from d M      e × dM   e to (d M e + 1) ×                 hyper-parameters of these model variants are:
+   w
+(d M e+1) in the shifted configuration, and some of the win-
+dows will be smaller than M × M 4 . A naive solution is to                         • Swin-T: C = 96, layer numbers = {2, 2, 6, 2}
+pad the smaller windows to a size of M × M and mask                                • Swin-S: C = 96, layer numbers ={2, 2, 18, 2}
+out the padded values when computing attention. When
+the number of windows in regular partitioning is small, e.g.                       • Swin-B: C = 128, layer numbers ={2, 2, 18, 2}
+2 × 2, the increased computation with this naive solution is
+considerable (2 × 2 → 3 × 3, which is 2.25 times greater).                         • Swin-L: C = 192, layer numbers ={2, 2, 18, 2}
+Here, we propose a more efficient batch computation ap-                         where C is the channel number of the hidden layers in the
+proach by cyclic-shifting toward the top-left direction, as il-                 first stage. The model size, theoretical computational com-
+lustrated in Figure 4. After this shift, a batched window may                   plexity (FLOPs), and throughput of the model variants for
+be composed of several sub-windows that are not adjacent                        ImageNet image classification are listed in Table 1.
+in the feature map, so a masking mechanism is employed to
+limit self-attention computation to within each sub-window.                     4. Experiments
+With the cyclic-shift, the number of batched windows re-
+mains the same as that of regular window partitioning, and                         We conduct experiments on ImageNet-1K image classi-
+thus is also efficient. The low latency of this approach is                     fication [19], COCO object detection [43], and ADE20K
+shown in Table 5.                                                               semantic segmentation [83]. In the following, we first com-
+                                                                                pare the proposed Swin Transformer architecture with the
+                                                                                previous state-of-the-arts on the three tasks. Then, we ab-
+Relative position bias In computing self-attention, we
+                                                                                late the important design elements of Swin Transformer.
+follow [49, 1, 32, 33] by including a relative position bias
+         2    2
+B ∈ RM ×M to each head in computing similarity:                                 4.1. Image Classification on ImageNet-1K
+                                          √                                     Settings For image classification, we benchmark the pro-
+  Attention(Q, K, V ) = SoftMax(QK T / d + B)V, (4)
+                                                                                posed Swin Transformer on ImageNet-1K [19], which con-
+                              2
+where Q, K, V ∈ RM ×d are the query, key and value ma-                          tains 1.28M training images and 50K validation images
+trices; d is the query/key dimension, and M 2 is the number                     from 1,000 classes. The top-1 accuracy on a single crop
+of patches in a window. Since the relative position along                       is reported. We consider two training settings:
+each axis lies in the range [−M + 1, M − 1], we parameter-                         • Regular ImageNet-1K training. This setting mostly
+ize a smaller-sized bias matrix B̂ ∈ R(2M −1)×(2M −1) , and                          follows [63]. We employ an AdamW [37] optimizer
+values in B are taken from B̂.                                                       for 300 epochs using a cosine decay learning rate
+   4 To make the window size (M, M ) divisible by the feature map size of            scheduler and 20 epochs of linear warm-up. A batch
+(h, w), bottom-right padding is employed on the feature map if needed.               size of 1024, an initial learning rate of 0.001, and a
+
+
+                                                                            5
+    weight decay of 0.05 are used. We include most of                          (a) Regular ImageNet-1K trained models
+    the augmentation and regularization strategies of [63]                              image                 throughput ImageNet
+                                                                           method             #param. FLOPs
+    in training, except for repeated augmentation [31] and                               size                 (image / s) top-1 acc.
+    EMA [45], which do not enhance performance. Note                RegNetY-4G [48] 2242 21M 4.0G               1156.7       80.0
+                                                                    RegNetY-8G [48] 2242 39M 8.0G                591.6       81.7
+    that this is contrary to [63] where repeated augmenta-
+                                                                    RegNetY-16G [48] 2242 84M 16.0G              334.7       82.9
+    tion is crucial to stabilize the training of ViT.
+                                                                      EffNet-B3 [58] 3002 12M 1.8G               732.1       81.6
+                                                                      EffNet-B4 [58] 3802 19M 4.2G               349.4       82.9
+  • Pre-training on ImageNet-22K and fine-tuning on                   EffNet-B5 [58] 4562 30M 9.9G               169.1       83.6
+    ImageNet-1K. We also pre-train on the larger                      EffNet-B6 [58] 5282 43M 19.0G               96.9       84.0
+    ImageNet-22K dataset, which contains 14.2 million                 EffNet-B7 [58] 6002 66M 37.0G               55.1       84.3
+    images and 22K classes. We employ an AdamW opti-                   ViT-B/16 [20] 3842 86M 55.4G               85.9       77.9
+    mizer for 90 epochs using a linear decay learning rate             ViT-L/16 [20]     3842 307M 190.7G        27.3        76.5
+    scheduler with a 5-epoch linear warm-up. A batch size               DeiT-S [63]      2242 22M 4.6G           940.4       79.8
+                                                                        DeiT-B [63]      2242 86M 17.5G          292.3       81.8
+    of 4096, an initial learning rate of 0.001, and a weight
+                                                                        DeiT-B [63]      3842 86M 55.4G           85.9       83.1
+    decay of 0.01 are used. In ImageNet-1K fine-tuning,
+                                                                           Swin-T        2242 29M 4.5G           755.2       81.3
+    we train the models for 30 epochs with a batch size of                 Swin-S        2242 50M 8.7G           436.9       83.0
+    1024, a constant learning rate of 10−5 , and a weight                  Swin-B        2242 88M 15.4G          278.1       83.5
+    decay of 10−8 .                                                        Swin-B        3842 88M 47.0G           84.7       84.5
+                                                                                 (b) ImageNet-22K pre-trained models
+                                                                                        image                 throughput ImageNet
+                                                                           method             #param. FLOPs
+Results with regular ImageNet-1K training Table 1(a)                                     size                 (image / s) top-1 acc.
+presents comparisons to other backbones, including both                R-101x3 [38]      3842 388M 204.6G          -         84.4
+Transformer-based and ConvNet-based, using regular                     R-152x4 [38]      4802 937M 840.5G          -         85.4
+ImageNet-1K training.                                                  ViT-B/16 [20] 3842 86M 55.4G               85.9       84.0
+                                                                       ViT-L/16 [20]     3842 307M 190.7G        27.3        85.2
+   Compared to the previous state-of-the-art Transformer-
+                                                                           Swin-B        2242 88M 15.4G          278.1       85.2
+based architecture, i.e. DeiT [63], Swin Transformers no-
+                                                                           Swin-B        3842 88M 47.0G           84.7       86.4
+ticeably surpass the counterpart DeiT architectures with                   Swin-L        3842 197M 103.9G        42.1        87.3
+similar complexities: +1.5% for Swin-T (81.3%) over                Table 1. Comparison of different backbones on ImageNet-1K clas-
+DeiT-S (79.8%) using 2242 input, and +1.5%/1.4% for                sification. Throughput is measured using the GitHub repository
+Swin-B (83.3%/84.5%) over DeiT-B (81.8%/83.1%) using               of [68] and a V100 GPU, following [63].
+2242 /3842 input, respectively.
+   Compared with the state-of-the-art ConvNets, i.e. Reg-
+Net [48] and EfficientNet [58], the Swin Transformer               4.2. Object Detection on COCO
+achieves a slightly better speed-accuracy trade-off. Not-
+ing that while RegNet [48] and EfficientNet [58] are ob-           Settings Object detection and instance segmentation ex-
+tained via a thorough architecture search, the proposed            periments are conducted on COCO 2017, which contains
+Swin Transformer is adapted from the standard Transformer          118K training, 5K validation and 20K test-dev images. An
+and has strong potential for further improvement.                  ablation study is performed using the validation set, and a
+                                                                   system-level comparison is reported on test-dev. For the
+                                                                   ablation study, we consider four typical object detection
+Results with ImageNet-22K pre-training We also pre-                frameworks: Cascade Mask R-CNN [29, 6], ATSS [79],
+train the larger-capacity Swin-B and Swin-L on ImageNet-           RepPoints v2 [12], and Sparse RCNN [56] in mmdetec-
+22K. Results fine-tuned on ImageNet-1K image classifica-           tion [10]. For these four frameworks, we utilize the same
+tion are shown in Table 1(b). For Swin-B, the ImageNet-            settings: multi-scale training [8, 56] (resizing the input such
+22K pre-training brings 1.8%∼1.9% gains over training              that the shorter side is between 480 and 800 while the longer
+on ImageNet-1K from scratch. Compared with the previ-              side is at most 1333), AdamW [44] optimizer (initial learn-
+ous best results for ImageNet-22K pre-training, our mod-           ing rate of 0.0001, weight decay of 0.05, and batch size of
+els achieve significantly better speed-accuracy trade-offs:        16), and 3x schedule (36 epochs). For system-level compar-
+Swin-B obtains 86.4% top-1 accuracy, which is 2.4% higher          ison, we adopt an improved HTC [9] (denoted as HTC++)
+than that of ViT with similar inference throughput (84.7           with instaboost [22], stronger multi-scale training [7], 6x
+vs. 85.9 images/sec) and slightly lower FLOPs (47.0G vs.           schedule (72 epochs), soft-NMS [5], and ImageNet-22K
+55.4G). The larger Swin-L model achieves 87.3% top-1 ac-           pre-trained model as initialization.
+curacy, +0.9% better than that of the Swin-B model.                   We compare our Swin Transformer to standard Con-
+
+
+                                                               6
+                  (a) Various frameworks                                             ADE20K                 val test
+                                                                                                                       #param. FLOPs FPS
+    Method Backbone APbox APbox             box
+                                     50 AP75 #param. FLOPs FPS                Method         Backbone mIoU score
+    Cascade       R-50     46.3 64.3 50.5 82M 739G 18.0                     DANet [23] ResNet-101 45.2             -     69M 1119G 15.2
+Mask R-CNN Swin-T 50.5 69.3 54.9 86M 745G 15.3                             DLab.v3+ [11] ResNet-101 44.1           -     63M 1021G 16.0
+                  R-50     43.5 61.9 47.0 32M 205G 28.3                     ACNet [24] ResNet-101 45.9 38.5                -
+     ATSS
+                 Swin-T 47.2 66.5 51.3 36M 215G 22.3                         DNL [71]       ResNet-101 46.0 56.2 69M 1249G 14.8
+                  R-50     46.5 64.6 50.3 42M 274G 13.6                    OCRNet [73] ResNet-101 45.3 56.0 56M 923G 19.3
+ RepPointsV2                                                               UperNet [69] ResNet-101 44.9            -     86M 1029G 20.1
+                 Swin-T 50.0 68.5 54.2 45M 283G 12.0
+     Sparse       R-50     44.5 63.4 48.2 106M 166G 21.0                   OCRNet [73] HRNet-w48 45.7              -     71M 664G 12.5
+    R-CNN        Swin-T 47.9 67.3 52.3 110M 172G 18.4                      DLab.v3+ [11] ResNeSt-101 46.9 55.1 66M 1051G 11.9
+      (b) Various backbones w. Cascade Mask R-CNN                          DLab.v3+ [11] ResNeSt-200 48.4          -     88M 1381G 8.1
+          APbox APbox   box    mask
+                                    APmask      mask                         SETR [81]       T-Large‡      50.3 61.7 308M           -     -
+                   50 AP75 AP          50 AP75 paramFLOPsFPS
+        †
+ DeiT-S 48.0 67.2 51.7 41.4 64.2 44.3 80M 889G 10.4                           UperNet         DeiT-S†      44.0    -     52M 1099G 16.2
+   R50 46.3 64.3 50.5 40.1 61.7 43.4 82M 739G 18.0                            UperNet         Swin-T       46.1    -     60M 945G 18.5
+ Swin-T 50.5 69.3 54.9 43.7 66.6 47.1 86M 745G 15.3                           UperNet         Swin-S       49.3    -     81M 1038G 15.2
+X101-32 48.1 66.5 52.4 41.6 63.9 45.2 101M 819G 12.8                          UperNet         Swin-B‡      51.6    -    121M 1841G 8.7
+ Swin-S 51.8 70.4 56.3 44.7 67.9 48.5 107M 838G 12.0                          UperNet         Swin-L‡      53.5 62.8 234M 3230G 6.2
+X101-64 48.3 66.4 52.3 41.7 64.0 45.1 140M 972G 10.4                      Table 3. Results of semantic segmentation on the ADE20K val
+ Swin-B 51.9 70.9 56.5 45.0 68.4 48.7 145M 982G 11.6                      and test set. † indicates additional deconvolution layers are used
+                  (c) System-level Comparison                             to produce hierarchical feature maps. ‡ indicates that the model is
+                         mini-val        test-dev                         pre-trained on ImageNet-22K.
+        Method                                       #param. FLOPs
+                       APbox APmask APbox APmask
+ RepPointsV2* [12]       -      -      52.1      -       -     -          under different model capacity using Cascade Mask R-
+      GCNet* [7]       51.8 44.7 52.3 45.4               -   1041G
+                                                                          CNN. Swin Transformer achieves a high detection accuracy
+RelationNet++* [13] -           -      52.7      -       -     -
+  SpineNet-190 [21] 52.6        -      52.8      -    164M 1885G
+                                                                          of 51.9 box AP and 45.0 mask AP, which are significant
+ ResNeSt-200* [78] 52.5         -      53.3 47.1         -     -          gains of +3.6 box AP and +3.3 mask AP over ResNeXt101-
+ EfficientDet-D7 [59] 54.4      -      55.1      -     77M 410G           64x4d, which has similar model size, FLOPs and latency.
+   DetectoRS* [46]       -      -      55.7 48.5         -     -          On a higher baseline of 52.3 box AP and 46.0 mask AP us-
+   YOLOv4 P7* [4]        -      -      55.8      -       -     -          ing an improved HTC framework, the gains by Swin Trans-
+   Copy-paste [26]     55.9 47.2 56.0 47.4 185M 1440G                     former are also high, at +4.1 box AP and +3.1 mask AP (see
+  X101-64 (HTC++) 52.3 46.0             -        -    155M 1033G          Table 2(c)). Regarding inference speed, while ResNe(X)t is
+  Swin-B (HTC++) 56.4 49.1              -        -    160M 1043G          built by highly optimized Cudnn functions, our architecture
+  Swin-L (HTC++) 57.1 49.5 57.7 50.2 284M 1470G                           is implemented with built-in PyTorch functions that are not
+  Swin-L (HTC++)* 58.0 50.4 58.7 51.1 284M                     -          all well-optimized. A thorough kernel optimization is be-
+Table 2. Results on COCO object detection and instance segmen-            yond the scope of this paper.
+tation. † denotes that additional decovolution layers are used to
+produce hierarchical feature maps. * indicates multi-scale testing.
+                                                                          Comparison to DeiT The performance of DeiT-S us-
+                                                                          ing the Cascade Mask R-CNN framework is shown in Ta-
+vNets, i.e. ResNe(X)t, and previous Transformer networks,                 ble 2(b). The results of Swin-T are +2.5 box AP and +2.3
+e.g. DeiT. The comparisons are conducted by changing only                 mask AP higher than DeiT-S with similar model size (86M
+the backbones with other settings unchanged. Note that                    vs. 80M) and significantly higher inference speed (15.3 FPS
+while Swin Transformer and ResNe(X)t are directly appli-                  vs. 10.4 FPS). The lower inference speed of DeiT is mainly
+cable to all the above frameworks because of their hierar-                due to its quadratic complexity to input image size.
+chical feature maps, DeiT only produces a single resolu-
+tion of feature maps and cannot be directly applied. For fair             Comparison to previous state-of-the-art Table 2(c)
+comparison, we follow [81] to construct hierarchical feature              compares our best results with those of previous state-of-
+maps for DeiT using deconvolution layers.                                 the-art models. Our best model achieves 58.7 box AP and
+                                                                          51.1 mask AP on COCO test-dev, surpassing the previous
+Comparison to ResNe(X)t Table 2(a) lists the results of                   best results by +2.7 box AP (Copy-paste [26] without exter-
+Swin-T and ResNet-50 on the four object detection frame-                  nal data) and +2.6 mask AP (DetectoRS [46]).
+works. Our Swin-T architecture brings consistent +3.4∼4.2
+                                                                          4.3. Semantic Segmentation on ADE20K
+box AP gains over ResNet-50, with slightly larger model
+size, FLOPs and latency.                                                  Settings ADE20K [83] is a widely-used semantic seg-
+   Table 2(b) compares Swin Transformer and ResNe(X)t                     mentation dataset, covering a broad range of 150 semantic
+
+
+                                                                      7
+                           ImageNet        COCO        ADE20k                                          MSA in a stage (ms) Arch. (FPS)
+                                                                                    method
+                         top-1 top-5 APbox APmask mIoU                                                  S1 S2 S3 S4 T S B
+      w/o shifting        80.2 95.1 47.7        41.5     43.3                sliding window (naive) 122.5 38.3 12.1 7.6 183 109 77
+    shifted windows 81.3 95.6 50.5              43.7     46.1               sliding window (kernel) 7.6 4.7 2.7 1.8 488 283 187
+          no pos.         80.1 94.9 49.2        42.6     43.8                     Performer [14]        4.8 2.8 1.8 1.5 638 370 241
+        abs. pos.         80.5 95.2 49.0        42.4     43.2                window (w/o shifting)      2.8 1.7 1.2 0.9 770 444 280
+     abs.+rel. pos.       81.3 95.6 50.2        43.4     44.0              shifted window (padding) 3.3 2.3 1.9 2.2 670 371 236
+   rel. pos. w/o app. 79.3 94.7 48.2            41.9     44.1               shifted window (cyclic) 3.0 1.9 1.3 1.0 755 437 278
+         rel. pos.        81.3 95.6 50.5        43.7     46.1             Table 5. Real speed of different self-attention computation meth-
+Table 4. Ablation study on the shifted windows approach and dif-          ods and implementations on a V100 GPU.
+ferent position embedding methods on three benchmarks, using
+the Swin-T architecture. w/o shifting: all self-attention modules
+adopt regular window partitioning, without shifting; abs. pos.: ab-       on COCO, and +2.3/+2.9 mIoU on ADE20K in relation to
+solute position embedding term of ViT; rel. pos.: the default set-        those without position encoding and with absolute position
+tings with an additional relative position bias term (see Eq. (4));       embedding, respectively, indicating the effectiveness of the
+app.: the first scaled dot-product term in Eq. (4).                       relative position bias. Also note that while the inclusion of
+                                                                          absolute position embedding improves image classification
+                                                                          accuracy (+0.4%), it harms object detection and semantic
+categories. It has 25K images in total, with 20K for training,
+                                                                          segmentation (-0.2 box/mask AP on COCO and -0.6 mIoU
+2K for validation, and another 3K for testing. We utilize
+                                                                          on ADE20K).
+UperNet [69] in mmseg [16] as our base framework for its
+                                                                              While the recent ViT/DeiT models abandon translation
+high efficiency. More details are presented in the Appendix.
+                                                                          invariance in image classification even though it has long
+                                                                          been shown to be crucial for visual modeling, we find that
+Results Table 3 lists the mIoU, model size (#param),                      inductive bias that encourages certain translation invariance
+FLOPs and FPS for different method/backbone pairs. From                   is still preferable for general-purpose visual modeling, par-
+these results, it can be seen that Swin-S is +5.3 mIoU higher             ticularly for the dense prediction tasks of object detection
+(49.3 vs. 44.0) than DeiT-S with similar computation cost.                and semantic segmentation.
+It is also +4.4 mIoU higher than ResNet-101, and +2.4
+mIoU higher than ResNeSt-101 [78]. Our Swin-L model                       Different self-attention methods The real speed of dif-
+with ImageNet-22K pre-training achieves 53.5 mIoU on the                  ferent self-attention computation methods and implementa-
+val set, surpassing the previous best model by +3.2 mIoU                  tions are compared in Table 5. Our cyclic implementation
+(50.3 mIoU by SETR [81] which has a larger model size).                   is more hardware efficient than naive padding, particularly
+4.4. Ablation Study                                                       for deeper stages. Overall, it brings a 13%, 18% and 18%
+                                                                          speed-up on Swin-T, Swin-S and Swin-B, respectively.
+   In this section, we ablate important design elements in                   The self-attention modules built on the proposed
+the proposed Swin Transformer, using ImageNet-1K image                    shifted window approach are 40.8×/2.5×, 20.2×/2.5×,
+classification, Cascade Mask R-CNN on COCO object de-                     9.3×/2.1×, and 7.6×/1.8× more efficient than those of slid-
+tection, and UperNet on ADE20K semantic segmentation.                     ing windows in naive/kernel implementations on four net-
+                                                                          work stages, respectively. Overall, the Swin Transformer
+Shifted windows Ablations of the shifted window ap-                       architectures built on shifted windows are 4.1/1.5, 4.0/1.5,
+proach on the three tasks are reported in Table 4. Swin-T                 3.6/1.5 times faster than variants built on sliding windows
+with the shifted window partitioning outperforms the coun-                for Swin-T, Swin-S, and Swin-B, respectively. Table 6 com-
+terpart built on a single window partitioning at each stage by            pares their accuracy on the three tasks, showing that they are
++1.1% top-1 accuracy on ImageNet-1K, +2.8 box AP/+2.2                     similarly accurate in visual modeling.
+mask AP on COCO, and +2.8 mIoU on ADE20K. The re-                            Compared to Performer [14], which is one of the fastest
+sults indicate the effectiveness of using shifted windows to              Transformer architectures (see [60]), the proposed shifted
+build connections among windows in the preceding layers.                  window based self-attention computation and the overall
+The latency overhead by shifted window is also small, as                  Swin Transformer architectures are slightly faster (see Ta-
+shown in Table 5.                                                         ble 5), while achieving +2.3% top-1 accuracy compared to
+                                                                          Performer on ImageNet-1K using Swin-T (see Table 6).
+Relative position bias Table 4 shows comparisons of dif-                  5. Conclusion
+ferent position embedding approaches. Swin-T with rela-
+tive position bias yields +1.2%/+0.8% top-1 accuracy on                      This paper presents Swin Transformer, a new vision
+ImageNet-1K, +1.3/+1.5 box AP and +1.1/+1.3 mask AP                       Transformer which produces a hierarchical feature repre-
+
+
+                                                                      8
+                              ImageNet       COCO   ADE20k             When training from scratch with a 2242 input, we em-
+                   Backbone top-1 top-5 APbox APmask mIoU           ploy an AdamW [37] optimizer for 300 epochs using a co-
+ sliding window Swin-T 81.4 95.6 50.2 43.5            45.8          sine decay learning rate scheduler with 20 epochs of linear
+  Performer [14] Swin-T 79.0 94.2           -    -     -            warm-up. A batch size of 1024, an initial learning rate of
+ shifted window Swin-T 81.3 95.6 50.5 43.7            46.1          0.001, a weight decay of 0.05, and gradient clipping with
+Table 6. Accuracy of Swin Transformer using different methods
+                                                                    a max norm of 1 are used. We include most of the aug-
+for self-attention computation on three benchmarks.
+                                                                    mentation and regularization strategies of [63] in training,
+                                                                    including RandAugment [17], Mixup [77], Cutmix [75],
+sentation and has linear computational complexity with re-          random erasing [82] and stochastic depth [35], but not re-
+spect to input image size. Swin Transformer achieves the            peated augmentation [31] and Exponential Moving Average
+state-of-the-art performance on COCO object detection and           (EMA) [45] which do not enhance performance. Note that
+ADE20K semantic segmentation, significantly surpassing              this is contrary to [63] where repeated augmentation is cru-
+previous best methods. We hope that Swin Transformer’s              cial to stabilize the training of ViT. An increasing degree of
+strong performance on various vision problems will encour-          stochastic depth augmentation is employed for larger mod-
+age unified modeling of vision and language signals.                els, i.e. 0.2, 0.3, 0.5 for Swin-T, Swin-S, and Swin-B, re-
+   As a key element of Swin Transformer, the shifted win-           spectively.
+dow based self-attention is shown to be effective and effi-            For fine-tuning on input with larger resolution, we em-
+cient on vision problems, and we look forward to investi-           ploy an adamW [37] optimizer for 30 epochs with a con-
+gating its use in natural language processing as well.              stant learning rate of 10−5 , weight decay of 10−8 , and
+                                                                    the same data augmentation and regularizations as the first
+Acknowledgement                                                     stage except for setting the stochastic depth ratio to 0.1.
+
+   We thank many colleagues at Microsoft for their help,
+                                                                    ImageNet-22K pre-training We also pre-train on the
+in particular, Li Dong and Furu Wei for useful discussions;
+                                                                    larger ImageNet-22K dataset, which contains 14.2 million
+Bin Xiao, Lu Yuan and Lei Zhang for help on datasets.
+                                                                    images and 22K classes. The training is done in two stages.
+                                                                    For the first stage with 2242 input, we employ an AdamW
+A1. Detailed Architectures                                          optimizer for 90 epochs using a linear decay learning rate
+    The detailed architecture specifications are shown in Ta-       scheduler with a 5-epoch linear warm-up. A batch size of
+ble 7, where an input image size of 224×224 is assumed for          4096, an initial learning rate of 0.001, and a weight decay
+all architectures. “Concat n × n” indicates a concatenation         of 0.01 are used. In the second stage of ImageNet-1K fine-
+of n × n neighboring features in a patch. This operation            tuning with 2242 /3842 input, we train the models for 30
+results in a downsampling of the feature map by a rate of n.        epochs with a batch size of 1024, a constant learning rate of
+“96-d” denotes a linear layer with an output dimension of           10−5 , and a weight decay of 10−8 .
+96. “win. sz. 7 × 7” indicates a multi-head self-attention
+                                                                    A2.2. Object detection on COCO
+module with window size of 7 × 7.
+                                                                        For an ablation study, we consider four typical ob-
+A2. Detailed Experimental Settings                                  ject detection frameworks: Cascade Mask R-CNN [29, 6],
+                                                                    ATSS [79], RepPoints v2 [12], and Sparse RCNN [56] in
+A2.1. Image classification on ImageNet-1K                           mmdetection [10]. For these four frameworks, we utilize
+                                                                    the same settings: multi-scale training [8, 56] (resizing the
+   The image classification is performed by applying a
+                                                                    input such that the shorter side is between 480 and 800
+global average pooling layer on the output feature map of
+                                                                    while the longer side is at most 1333), AdamW [44] opti-
+the last stage, followed by a linear classifier. We find this
+                                                                    mizer (initial learning rate of 0.0001, weight decay of 0.05,
+strategy to be as accurate as using an additional class to-
+                                                                    and batch size of 16), and 3x schedule (36 epochs with the
+ken as in ViT [20] and DeiT [63]. In evaluation, the top-1
+                                                                    learning rate decayed by 10× at epochs 27 and 33).
+accuracy using a single crop is reported.
+                                                                        For system-level comparison, we adopt an improved
+                                                                    HTC [9] (denoted as HTC++) with instaboost [22], stronger
+Regular ImageNet-1K training The training settings                  multi-scale training [7] (resizing the input such that the
+mostly follow [63]. For all model variants, we adopt a de-          shorter side is between 400 and 1400 while the longer side
+fault input image resolution of 2242 . For other resolutions        is at most 1600), 6x schedule (72 epochs with the learning
+such as 3842 , we fine-tune the models trained at 2242 reso-        rate decayed at epochs 63 and 69 by a factor of 0.1), soft-
+lution, instead of training from scratch, to reduce GPU con-        NMS [5], and an extra global self-attention layer appended
+sumption.                                                           at the output of last stage and ImageNet-22K pre-trained
+
+
+                                                                9
+            downsp. rate
+                                    Swin-T                     Swin-S                     Swin-B                      Swin-L
+            (output size)
+                              concat 4×4, 96-d,
+                                               LN       concat 4×4, 96-d, LN        concat 4×4, 128-d,
+                                                                                                        LN     concat 4×4, 192-d,
+                                                                                                                                  LN
+                4×                                                                                           
+  stage 1                       win. sz. 7×7,               win. sz. 7×7,                win. sz. 7×7,             win. sz. 7×7,
+              (56×56)                           ×2                          ×2                            ×2                       ×2
+                                dim 96, head 3             dim 96, head 3               dim 128, head 4          dim 192, head 6
+                             concat 2×2, 192-d , LN concat     2×2, 192-d , LN      concat 2×2, 256-d , LN  concat 2×2, 384-d, LN
+                8×                                                                  
+  stage 2                       win. sz. 7×7,               win. sz. 7×7,                win. sz. 7×7,             win. sz. 7×7,
+              (28×28)                            ×2                          ×2                           ×2                        ×2
+                               dim 192, head 6             dim 192, head 6              dim 256, head 8          dim 384, head 12
+                16×         concat 2×2, 384-d, LN concat 2×2, 384-d , LN concat 2×2, 512-d , LN concat 2×2, 768-d , LN
+  stage 3                       win. sz. 7×7,              win. sz. 7×7,                win. sz. 7×7,             win. sz. 7×7,
+              (14×14)                             ×6                         × 18                         × 18                     × 18
+                              dim 384, head 12           dim 384, head 12             dim 512, head 16          dim 768, head 24
+                32×         concat 2×2, 768-d, LN concat 2×2, 768-d, LN concat 2×2, 1024-d, LN concat 2×2, 1536-d, LN
+  stage 4                       win. sz. 7×7,               win. sz. 7×7,                win. sz. 7×7,             win. sz. 7×7,
+               (7×7)                              ×2                          ×2                           ×2                       ×2
+                              dim 768, head 24            dim 768, head 24            dim 1024, head 32         dim 1536, head 48
+                                                Table 7. Detailed architecture specifications.
+
+
+model as initialization. We adopt stochastic depth with ra-                          Swin-T              Swin-S           Swin-B
+tio of 0.2 for all Swin Transformer models.                               input top-1 throughput top-1 throughput top-1 throughput
+                                                                           size acc (image / s) acc (image / s) acc (image / s)
+A2.3. Semantic segmentation on ADE20K                                     2242 81.3      755.2      83.0    436.9    83.3    278.1
+                                                                          2562 81.6      580.9      83.4    336.7    83.7    208.1
+    ADE20K [83] is a widely-used semantic segmentation                    3202 82.1      342.0      83.7    198.2    84.0    132.0
+dataset, covering a broad range of 150 semantic categories.               3842 82.2      219.5      83.9    127.6    84.5     84.7
+It has 25K images in total, with 20K for training, 2K for val-           Table 8. Swin Transformers with different input image size on
+idation, and another 3K for testing. We utilize UperNet [69]             ImageNet-1K classification.
+in mmsegmentation [16] as our base framework for its high
+efficiency.                                                               Backbone Optimizer APbox APbox    box
+                                                                                                      50 AP75 AP
+                                                                                                                  mask
+                                                                                                                       APmask
+                                                                                                                          50  APmask
+                                                                                                                                 75
+
+    In training, we employ the AdamW [44] optimizer with                               SGD     45.0 62.9 48.8 38.5 59.9 41.4
+                                                                             R50
+                                                                                     AdamW 46.3 64.3 50.5 40.1 61.7 43.4
+an initial learning rate of 6 × 10−5 , a weight decay of 0.01,
+                                                                                       SGD     47.8 65.9 51.9 40.4 62.9 43.5
+a scheduler that uses linear learning rate decay, and a lin-             X101-32x4d
+                                                                                     AdamW 48.1 66.5 52.4 41.6 63.9 45.2
+ear warmup of 1,500 iterations. Models are trained on 8
+                                                                                       SGD     48.8 66.9 53.0 41.4 63.9 44.7
+GPUs with 2 images per GPU for 160K iterations. For aug-                 X101-64x4d
+                                                                                     AdamW 48.3 66.4 52.3 41.7 64.0 45.1
+mentations, we adopt the default setting in mmsegmentation               Table 9. Comparison of the SGD and AdamW optimizers for
+of random horizontal flipping, random re-scaling within                  ResNe(X)t backbones on COCO object detection using the Cas-
+ratio range [0.5, 2.0] and random photometric distortion.                cade Mask R-CNN framework.
+Stochastic depth with ratio of 0.2 is applied for all Swin
+Transformer models. Swin-T, Swin-S are trained on the
+standard setting as the previous approaches with an input                A3.2. Different Optimizers for ResNe(X)t on COCO
+of 512×512. Swin-B and Swin-L with ‡ indicate that these                    Table 9 compares the AdamW and SGD optimizers of
+two models are pre-trained on ImageNet-22K, and trained                  the ResNe(X)t backbones on COCO object detection. The
+with the input of 640×640.                                               Cascade Mask R-CNN framework is used in this compar-
+    In inference, a multi-scale test using resolutions that are          ison. While SGD is used as a default optimizer for Cas-
+[0.5, 0.75, 1.0, 1.25, 1.5, 1.75]× of that in training is em-            cade Mask R-CNN framework, we generally observe im-
+ployed. When reporting test scores, both the training im-                proved accuracy by replacing it with an AdamW optimizer,
+ages and validation images are used for training, following              particularly for smaller backbones. We thus use AdamW
+common practice [71].                                                    for ResNe(X)t backbones when compared to the proposed
+                                                                         Swin Transformer architectures.
+A3. More Experiments
+                                                                         A3.3. Swin MLP-Mixer
+A3.1. Image classification with different input size
+                                                                            We apply the proposed hierarchical design and the
+   Table 8 lists the performance of Swin Transformers with               shifted window approach to the MLP-Mixer architec-
+different input image sizes from 2242 to 3842 . In general,              tures [61], referred to as Swin-Mixer. Table 10 shows the
+a larger input resolution leads to better top-1 accuracy but             performance of Swin-Mixer compared to the original MLP-
+with slower inference speed.                                             Mixer architectures MLP-Mixer [61] and a follow-up ap-
+
+
+                                                                    10
+                         image                throughput ImageNet                end object detection with transformers. In European Confer-
+       method                  #param. FLOPs
+                          size                (image / s) top-1 acc.             ence on Computer Vision, pages 213–229. Springer, 2020. 3,
+MLP-Mixer-B/16 [61] 2242 59M 12.7G                 -         76.4                6, 9
+   ResMLP-S24 [62] 2242 30M 6.0G                  715        79.4          [9]   Kai Chen, Jiangmiao Pang, Jiaqi Wang, Yu Xiong, Xiaox-
+   ResMLP-B24 [62] 2242 116M 23.0G                231        81.0                iao Li, Shuyang Sun, Wansen Feng, Ziwei Liu, Jianping
+      Swin-T/D24             2                                                   Shi, Wanli Ouyang, et al. Hybrid task cascade for instance
+                          256   28M 5.9G          563        81.6
+     (Transformer)                                                               segmentation. In Proceedings of the IEEE/CVF Conference
+                             2
+  Swin-Mixer-T/D24 256          20M 4.0G          807        79.4                on Computer Vision and Pattern Recognition, pages 4974–
+  Swin-Mixer-T/D12 2562 21M 4.0G                  792        79.6                4983, 2019. 6, 9
+   Swin-Mixer-T/D6 2562 23M 4.0G                  766        79.7         [10]   Kai Chen, Jiaqi Wang, Jiangmiao Pang, Yuhang Cao, Yu
+  Swin-Mixer-B/D24           2                                                   Xiong, Xiaoxiao Li, Shuyang Sun, Wansen Feng, Ziwei Liu,
+                          224   61M 10.4G         409        80.3
+        (no shift)                                                               Jiarui Xu, et al. Mmdetection: Open mmlab detection tool-
+                             2
+  Swin-Mixer-B/D24 224          61M 10.4G         409        81.3                box and benchmark. arXiv preprint arXiv:1906.07155, 2019.
+Table 10. Performance of Swin MLP-Mixer on ImageNet-1K clas-                     6, 9
+sification. D indictes the number of channels per head. Through-          [11]   Liang-Chieh Chen, Yukun Zhu, George Papandreou, Florian
+put is measured using the GitHub repository of [68] and a V100                   Schroff, and Hartwig Adam. Encoder-decoder with atrous
+GPU, following [63].                                                             separable convolution for semantic image segmentation. In
+                                                                                 Proceedings of the European conference on computer vision
+                                                                                 (ECCV), pages 801–818, 2018. 7
+proach, ResMLP [61]. Swin-Mixer performs significantly
+                                                                          [12]   Yihong Chen, Zheng Zhang, Yue Cao, Liwei Wang, Stephen
+better than MLP-Mixer (81.3% vs. 76.4%) using slightly
+                                                                                 Lin, and Han Hu. Reppoints v2: Verification meets regres-
+smaller computation budget (10.4G vs. 12.7G). It also has
+                                                                                 sion for object detection. In NeurIPS, 2020. 6, 7, 9
+better speed accuracy trade-off compared to ResMLP [62].
+                                                                          [13]   Cheng Chi, Fangyun Wei, and Han Hu. Relationnet++:
+These results indicate the proposed hierarchical design and                      Bridging visual representations for object detection via trans-
+the shifted window approach are generalizable.                                   former decoder. In NeurIPS, 2020. 3, 7
+                                                                          [14]   Krzysztof Marcin Choromanski, Valerii Likhosherstov,
+References                                                                       David Dohan, Xingyou Song, Andreea Gane, Tamas Sar-
+ [1] Hangbo Bao, Li Dong, Furu Wei, Wenhui Wang, Nan Yang,                       los, Peter Hawkins, Jared Quincy Davis, Afroz Mohiuddin,
+     Xiaodong Liu, Yu Wang, Jianfeng Gao, Songhao Piao, Ming                     Lukasz Kaiser, David Benjamin Belanger, Lucy J Colwell,
+     Zhou, et al. Unilmv2: Pseudo-masked language models for                     and Adrian Weller. Rethinking attention with performers.
+     unified language model pre-training. In International Con-                  In International Conference on Learning Representations,
+     ference on Machine Learning, pages 642–652. PMLR, 2020.                     2021. 8, 9
+     5                                                                    [15]   Xiangxiang Chu, Bo Zhang, Zhi Tian, Xiaolin Wei, and
+ [2] Josh Beal, Eric Kim, Eric Tzeng, Dong Huk Park, Andrew                      Huaxia Xia. Do we really need explicit position encodings
+     Zhai, and Dmitry Kislyuk. Toward transformer-based object                   for vision transformers? arXiv preprint arXiv:2102.10882,
+     detection. arXiv preprint arXiv:2012.09958, 2020. 3                         2021. 3
+ [3] Irwan Bello, Barret Zoph, Ashish Vaswani, Jonathon Shlens,           [16]   MMSegmentation Contributors.               MMSegmentation:
+     and Quoc V. Le. Attention augmented convolutional net-                      Openmmlab semantic segmentation toolbox and bench-
+     works, 2020. 3                                                              mark.           https://github.com/open-mmlab/
+ [4] Alexey Bochkovskiy, Chien-Yao Wang, and Hong-                               mmsegmentation, 2020. 8, 10
+     Yuan Mark Liao. Yolov4: Optimal speed and accuracy of                [17]   Ekin D Cubuk, Barret Zoph, Jonathon Shlens, and Quoc V
+     object detection. arXiv preprint arXiv:2004.10934, 2020. 7                  Le. Randaugment: Practical automated data augmenta-
+ [5] Navaneeth Bodla, Bharat Singh, Rama Chellappa, and                          tion with a reduced search space. In Proceedings of the
+     Larry S. Davis. Soft-nms – improving object detection with                  IEEE/CVF Conference on Computer Vision and Pattern
+     one line of code. In Proceedings of the IEEE International                  Recognition Workshops, pages 702–703, 2020. 9
+     Conference on Computer Vision (ICCV), Oct 2017. 6, 9                 [18]   Jifeng Dai, Haozhi Qi, Yuwen Xiong, Yi Li, Guodong
+ [6] Zhaowei Cai and Nuno Vasconcelos. Cascade r-cnn: Delv-                      Zhang, Han Hu, and Yichen Wei. Deformable convolutional
+     ing into high quality object detection. In Proceedings of the               networks. In Proceedings of the IEEE International Confer-
+     IEEE Conference on Computer Vision and Pattern Recogni-                     ence on Computer Vision, pages 764–773, 2017. 1, 3
+     tion, pages 6154–6162, 2018. 6, 9                                    [19]   Jia Deng, Wei Dong, Richard Socher, Li-Jia Li, Kai Li,
+ [7] Yue Cao, Jiarui Xu, Stephen Lin, Fangyun Wei, and Han                       and Li Fei-Fei. Imagenet: A large-scale hierarchical image
+     Hu. Gcnet: Non-local networks meet squeeze-excitation net-                  database. In 2009 IEEE conference on computer vision and
+     works and beyond. In Proceedings of the IEEE/CVF Inter-                     pattern recognition, pages 248–255. Ieee, 2009. 5
+     national Conference on Computer Vision (ICCV) Workshops,             [20]   Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov,
+     Oct 2019. 3, 6, 7, 9                                                        Dirk Weissenborn, Xiaohua Zhai, Thomas Unterthiner,
+ [8] Nicolas Carion, Francisco Massa, Gabriel Synnaeve, Nicolas                  Mostafa Dehghani, Matthias Minderer, Georg Heigold, Syl-
+     Usunier, Alexander Kirillov, and Sergey Zagoruyko. End-to-                  vain Gelly, Jakob Uszkoreit, and Neil Houlsby. An image is
+
+
+                                                                     11
+       worth 16x16 words: Transformers for image recognition at                    the IEEE/CVF International Conference on Computer Vision
+       scale. In International Conference on Learning Representa-                  (ICCV), pages 3464–3473, October 2019. 2, 3, 5
+       tions, 2021. 1, 2, 3, 4, 5, 6, 9                                     [34]   Gao Huang, Zhuang Liu, Laurens Van Der Maaten, and Kil-
+[21]   Xianzhi Du, Tsung-Yi Lin, Pengchong Jin, Golnaz Ghiasi,                     ian Q Weinberger. Densely connected convolutional net-
+       Mingxing Tan, Yin Cui, Quoc V Le, and Xiaodan Song.                         works. In Proceedings of the IEEE conference on computer
+       Spinenet: Learning scale-permuted backbone for recogni-                     vision and pattern recognition, pages 4700–4708, 2017. 1, 2
+       tion and localization. In Proceedings of the IEEE/CVF Con-           [35]   Gao Huang, Yu Sun, Zhuang Liu, Daniel Sedra, and Kil-
+       ference on Computer Vision and Pattern Recognition, pages                   ian Q Weinberger. Deep networks with stochastic depth. In
+       11592–11601, 2020. 7                                                        European conference on computer vision, pages 646–661.
+[22]   Hao-Shu Fang, Jianhua Sun, Runzhong Wang, Minghao                           Springer, 2016. 9
+       Gou, Yong-Lu Li, and Cewu Lu. Instaboost: Boosting                   [36]   David H Hubel and Torsten N Wiesel. Receptive fields,
+       instance segmentation via probability map guided copy-                      binocular interaction and functional architecture in the cat’s
+       pasting. In Proceedings of the IEEE/CVF International Con-                  visual cortex. The Journal of physiology, 160(1):106–154,
+       ference on Computer Vision, pages 682–691, 2019. 6, 9                       1962. 3
+[23]   Jun Fu, Jing Liu, Haijie Tian, Yong Li, Yongjun Bao, Zhi-            [37]   Diederik P Kingma and Jimmy Ba. Adam: A method for
+       wei Fang, and Hanqing Lu. Dual attention network for                        stochastic optimization. arXiv preprint arXiv:1412.6980,
+       scene segmentation. In Proceedings of the IEEE Conference                   2014. 5, 9
+       on Computer Vision and Pattern Recognition, pages 3146–              [38]   Alexander Kolesnikov, Lucas Beyer, Xiaohua Zhai, Joan
+       3154, 2019. 3, 7                                                            Puigcerver, Jessica Yung, Sylvain Gelly, and Neil Houlsby.
+[24]   Jun Fu, Jing Liu, Yuhang Wang, Yong Li, Yongjun Bao, Jin-                   Big transfer (bit): General visual representation learning.
+       hui Tang, and Hanqing Lu. Adaptive context network for                      arXiv preprint arXiv:1912.11370, 6(2):8, 2019. 6
+       scene parsing. In Proceedings of the IEEE/CVF Interna-               [39]   Alex Krizhevsky, Ilya Sutskever, and Geoffrey E Hinton.
+       tional Conference on Computer Vision, pages 6748–6757,                      Imagenet classification with deep convolutional neural net-
+       2019. 7                                                                     works. In Advances in neural information processing sys-
+[25]   Kunihiko Fukushima. Cognitron: A self-organizing multi-                     tems, pages 1097–1105, 2012. 1, 2
+       layered neural network. Biological cybernetics, 20(3):121–           [40]   Yann LeCun, Léon Bottou, Yoshua Bengio, Patrick Haffner,
+       136, 1975. 3                                                                et al. Gradient-based learning applied to document recog-
+                                                                                   nition. Proceedings of the IEEE, 86(11):2278–2324, 1998.
+[26]   Golnaz Ghiasi, Yin Cui, Aravind Srinivas, Rui Qian, Tsung-
+                                                                                   2
+       Yi Lin, Ekin D Cubuk, Quoc V Le, and Barret Zoph. Simple
+                                                                            [41]   Yann LeCun, Patrick Haffner, Léon Bottou, and Yoshua Ben-
+       copy-paste is a strong data augmentation method for instance
+                                                                                   gio. Object recognition with gradient-based learning. In
+       segmentation. arXiv preprint arXiv:2012.07177, 2020. 2, 7
+                                                                                   Shape, contour and grouping in computer vision, pages 319–
+[27]   Jiayuan Gu, Han Hu, Liwei Wang, Yichen Wei, and Jifeng
+                                                                                   345. Springer, 1999. 3
+       Dai. Learning region features for object detection. In Pro-
+                                                                            [42]   Tsung-Yi Lin, Piotr Dollar, Ross Girshick, Kaiming He,
+       ceedings of the European Conference on Computer Vision
+                                                                                   Bharath Hariharan, and Serge Belongie. Feature pyramid
+       (ECCV), 2018. 3
+                                                                                   networks for object detection. In The IEEE Conference
+[28]   Kai Han, An Xiao, Enhua Wu, Jianyuan Guo, Chunjing Xu,                      on Computer Vision and Pattern Recognition (CVPR), July
+       and Yunhe Wang. Transformer in transformer. arXiv preprint                  2017. 2
+       arXiv:2103.00112, 2021. 3
+                                                                            [43]   Tsung-Yi Lin, Michael Maire, Serge Belongie, James Hays,
+[29]   Kaiming He, Georgia Gkioxari, Piotr Dollár, and Ross Gir-                  Pietro Perona, Deva Ramanan, Piotr Dollár, and C Lawrence
+       shick. Mask r-cnn. In Proceedings of the IEEE international                 Zitnick. Microsoft coco: Common objects in context. In
+       conference on computer vision, pages 2961–2969, 2017. 6,                    European conference on computer vision, pages 740–755.
+       9                                                                           Springer, 2014. 5
+[30]   Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun.               [44]   Ilya Loshchilov and Frank Hutter. Decoupled weight de-
+       Deep residual learning for image recognition. In Proceed-                   cay regularization. In International Conference on Learning
+       ings of the IEEE conference on computer vision and pattern                  Representations, 2019. 6, 9, 10
+       recognition, pages 770–778, 2016. 1, 2, 4                            [45]   Boris T Polyak and Anatoli B Juditsky. Acceleration of
+[31]   Elad Hoffer, Tal Ben-Nun, Itay Hubara, Niv Giladi, Torsten                  stochastic approximation by averaging. SIAM journal on
+       Hoefler, and Daniel Soudry. Augment your batch: Improving                   control and optimization, 30(4):838–855, 1992. 6, 9
+       generalization through instance repetition. In Proceedings of        [46]   Siyuan Qiao, Liang-Chieh Chen, and Alan Yuille. Detectors:
+       the IEEE/CVF Conference on Computer Vision and Pattern                      Detecting objects with recursive feature pyramid and switch-
+       Recognition, pages 8129–8138, 2020. 6, 9                                    able atrous convolution. arXiv preprint arXiv:2006.02334,
+[32]   Han Hu, Jiayuan Gu, Zheng Zhang, Jifeng Dai, and Yichen                     2020. 2, 7
+       Wei. Relation networks for object detection. In Proceed-             [47]   Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya
+       ings of the IEEE Conference on Computer Vision and Pattern                  Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry,
+       Recognition, pages 3588–3597, 2018. 3, 5                                    Amanda Askell, Pamela Mishkin, Jack Clark, Gretchen
+[33]   Han Hu, Zheng Zhang, Zhenda Xie, and Stephen Lin. Local                     Krueger, and Ilya Sutskever. Learning transferable visual
+       relation networks for image recognition. In Proceedings of                  models from natural language supervision, 2021. 1
+
+
+                                                                       12
+[48] Ilija Radosavovic, Raj Prateek Kosaraju, Ross Girshick,                      mark for efficient transformers. In International Conference
+     Kaiming He, and Piotr Dollár. Designing network design                      on Learning Representations, 2021. 8
+     spaces. In Proceedings of the IEEE/CVF Conference on                  [61]   Ilya Tolstikhin, Neil Houlsby, Alexander Kolesnikov, Lu-
+     Computer Vision and Pattern Recognition, pages 10428–                        cas Beyer, Xiaohua Zhai, Thomas Unterthiner, Jessica Yung,
+     10436, 2020. 6                                                               Andreas Steiner, Daniel Keysers, Jakob Uszkoreit, Mario
+[49] Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee,                     Lucic, and Alexey Dosovitskiy. Mlp-mixer: An all-mlp ar-
+     Sharan Narang, Michael Matena, Yanqi Zhou, Wei Li, and                       chitecture for vision, 2021. 2, 10, 11
+     Peter J. Liu. Exploring the limits of transfer learning with a        [62]   Hugo Touvron, Piotr Bojanowski, Mathilde Caron, Matthieu
+     unified text-to-text transformer. Journal of Machine Learn-                  Cord, Alaaeldin El-Nouby, Edouard Grave, Gautier Izac-
+     ing Research, 21(140):1–67, 2020. 5                                          ard, Armand Joulin, Gabriel Synnaeve, Jakob Verbeek, and
+[50] Prajit Ramachandran, Niki Parmar, Ashish Vaswani, Irwan                      Hervé Jégou. Resmlp: Feedforward networks for image clas-
+     Bello, Anselm Levskaya, and Jon Shlens. Stand-alone self-                    sification with data-efficient training, 2021. 11
+     attention in vision models. In Advances in Neural Informa-            [63]   Hugo Touvron, Matthieu Cord, Matthijs Douze, Francisco
+     tion Processing Systems, volume 32. Curran Associates, Inc.,                 Massa, Alexandre Sablayrolles, and Hervé Jégou. Training
+     2019. 2, 3                                                                   data-efficient image transformers & distillation through at-
+[51] Olaf Ronneberger, Philipp Fischer, and Thomas Brox. U-                       tention. arXiv preprint arXiv:2012.12877, 2020. 2, 3, 5, 6,
+     net: Convolutional networks for biomedical image segmen-                     9, 11
+     tation. In International Conference on Medical image com-             [64]   Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszko-
+     puting and computer-assisted intervention, pages 234–241.                    reit, Llion Jones, Aidan N Gomez, Łukasz Kaiser, and Illia
+     Springer, 2015. 2                                                            Polosukhin. Attention is all you need. In Advances in Neural
+[52] K. Simonyan and A. Zisserman. Very deep convolutional                        Information Processing Systems, pages 5998–6008, 2017. 1,
+     networks for large-scale image recognition. In International                 2, 4
+     Conference on Learning Representations, May 2015. 2, 4                [65]   Jingdong Wang, Ke Sun, Tianheng Cheng, Borui Jiang,
+                                                                                  Chaorui Deng, Yang Zhao, Dong Liu, Yadong Mu, Mingkui
+[53] Bharat Singh and Larry S Davis. An analysis of scale in-
+                                                                                  Tan, Xinggang Wang, et al. Deep high-resolution represen-
+     variance in object detection snip. In Proceedings of the
+                                                                                  tation learning for visual recognition. IEEE transactions on
+     IEEE conference on computer vision and pattern recogni-
+                                                                                  pattern analysis and machine intelligence, 2020. 3
+     tion, pages 3578–3587, 2018. 2
+                                                                           [66]   Wenhai Wang, Enze Xie, Xiang Li, Deng-Ping Fan, Kaitao
+[54] Bharat Singh, Mahyar Najibi, and Larry S Davis. Sniper:
+                                                                                  Song, Ding Liang, Tong Lu, Ping Luo, and Ling Shao.
+     Efficient multi-scale training. In Advances in Neural Infor-
+                                                                                  Pyramid vision transformer: A versatile backbone for
+     mation Processing Systems, volume 31. Curran Associates,
+                                                                                  dense prediction without convolutions. arXiv preprint
+     Inc., 2018. 2
+                                                                                  arXiv:2102.12122, 2021. 3
+[55] Aravind Srinivas, Tsung-Yi Lin, Niki Parmar, Jonathon                 [67]   Xiaolong Wang, Ross Girshick, Abhinav Gupta, and Kaim-
+     Shlens, Pieter Abbeel, and Ashish Vaswani.             Bottle-               ing He. Non-local neural networks. In IEEE Conference
+     neck transformers for visual recognition. arXiv preprint                     on Computer Vision and Pattern Recognition, CVPR 2018,
+     arXiv:2101.11605, 2021. 3                                                    2018. 3
+[56] Peize Sun, Rufeng Zhang, Yi Jiang, Tao Kong, Chen-                    [68]   Ross      Wightman.                 Pytorch    image   mod-
+     feng Xu, Wei Zhan, Masayoshi Tomizuka, Lei Li, Zehuan                        els.              https://github.com/rwightman/
+     Yuan, Changhu Wang, et al. Sparse r-cnn: End-to-end                          pytorch-image-models, 2019. 6, 11
+     object detection with learnable proposals. arXiv preprint             [69]   Tete Xiao, Yingcheng Liu, Bolei Zhou, Yuning Jiang, and
+     arXiv:2011.12450, 2020. 3, 6, 9                                              Jian Sun. Unified perceptual parsing for scene understand-
+[57] Christian Szegedy, Wei Liu, Yangqing Jia, Pierre Sermanet,                   ing. In Proceedings of the European Conference on Com-
+     Scott Reed, Dragomir Anguelov, Dumitru Erhan, Vincent                        puter Vision (ECCV), pages 418–434, 2018. 7, 8, 10
+     Vanhoucke, and Andrew Rabinovich. Going deeper with                   [70]   Saining Xie, Ross Girshick, Piotr Dollár, Zhuowen Tu, and
+     convolutions. In Proceedings of the IEEE conference on                       Kaiming He. Aggregated residual transformations for deep
+     computer vision and pattern recognition, pages 1–9, 2015.                    neural networks. In Proceedings of the IEEE Conference
+     2                                                                            on Computer Vision and Pattern Recognition, pages 1492–
+[58] Mingxing Tan and Quoc Le. Efficientnet: Rethinking model                     1500, 2017. 1, 2, 3
+     scaling for convolutional neural networks. In International           [71]   Minghao Yin, Zhuliang Yao, Yue Cao, Xiu Li, Zheng Zhang,
+     Conference on Machine Learning, pages 6105–6114. PMLR,                       Stephen Lin, and Han Hu. Disentangled non-local neural
+     2019. 3, 6                                                                   networks. In Proceedings of the European conference on
+[59] Mingxing Tan, Ruoming Pang, and Quoc V Le. Efficientdet:                     computer vision (ECCV), 2020. 3, 7, 10
+     Scalable and efficient object detection. In Proceedings of            [72]   Li Yuan, Yunpeng Chen, Tao Wang, Weihao Yu, Yujun Shi,
+     the IEEE/CVF conference on computer vision and pattern                       Francis EH Tay, Jiashi Feng, and Shuicheng Yan. Tokens-
+     recognition, pages 10781–10790, 2020. 7                                      to-token vit: Training vision transformers from scratch on
+[60] Yi Tay, Mostafa Dehghani, Samira Abnar, Yikang Shen,                         imagenet. arXiv preprint arXiv:2101.11986, 2021. 3
+     Dara Bahri, Philip Pham, Jinfeng Rao, Liu Yang, Sebastian             [73]   Yuhui Yuan, Xilin Chen, and Jingdong Wang. Object-
+     Ruder, and Donald Metzler. Long range arena : A bench-                       contextual representations for semantic segmentation. In
+
+
+                                                                      13
+       16th European Conference Computer Vision (ECCV 2020),
+       August 2020. 7
+[74]   Yuhui Yuan and Jingdong Wang. Ocnet: Object context net-
+       work for scene parsing. arXiv preprint arXiv:1809.00916,
+       2018. 3
+[75]   Sangdoo Yun, Dongyoon Han, Seong Joon Oh, Sanghyuk
+       Chun, Junsuk Choe, and Youngjoon Yoo. Cutmix: Regular-
+       ization strategy to train strong classifiers with localizable fea-
+       tures. In Proceedings of the IEEE/CVF International Con-
+       ference on Computer Vision, pages 6023–6032, 2019. 9
+[76]   Sergey Zagoruyko and Nikos Komodakis. Wide residual net-
+       works. In BMVC, 2016. 1
+[77]   Hongyi Zhang, Moustapha Cisse, Yann N Dauphin, and
+       David Lopez-Paz. mixup: Beyond empirical risk minimiza-
+       tion. arXiv preprint arXiv:1710.09412, 2017. 9
+[78]   Hang Zhang, Chongruo Wu, Zhongyue Zhang, Yi Zhu, Zhi
+       Zhang, Haibin Lin, Yue Sun, Tong He, Jonas Mueller, R
+       Manmatha, et al. Resnest: Split-attention networks. arXiv
+       preprint arXiv:2004.08955, 2020. 7, 8
+[79]   Shifeng Zhang, Cheng Chi, Yongqiang Yao, Zhen Lei, and
+       Stan Z Li. Bridging the gap between anchor-based and
+       anchor-free detection via adaptive training sample selection.
+       In Proceedings of the IEEE/CVF Conference on Computer
+       Vision and Pattern Recognition, pages 9759–9768, 2020. 6,
+       9
+[80]   Hengshuang Zhao, Jiaya Jia, and Vladlen Koltun. Explor-
+       ing self-attention for image recognition. In Proceedings of
+       the IEEE/CVF Conference on Computer Vision and Pattern
+       Recognition, pages 10076–10085, 2020. 3
+[81]   Sixiao Zheng, Jiachen Lu, Hengshuang Zhao, Xiatian Zhu,
+       Zekun Luo, Yabiao Wang, Yanwei Fu, Jianfeng Feng, Tao
+       Xiang, Philip HS Torr, et al. Rethinking semantic segmen-
+       tation from a sequence-to-sequence perspective with trans-
+       formers. arXiv preprint arXiv:2012.15840, 2020. 2, 3, 7,
+       8
+[82]   Zhun Zhong, Liang Zheng, Guoliang Kang, Shaozi Li, and
+       Yi Yang. Random erasing data augmentation. In Proceedings
+       of the AAAI Conference on Artificial Intelligence, volume 34,
+       pages 13001–13008, 2020. 9
+[83]   Bolei Zhou, Hang Zhao, Xavier Puig, Tete Xiao, Sanja Fi-
+       dler, Adela Barriuso, and Antonio Torralba. Semantic under-
+       standing of scenes through the ade20k dataset. International
+       Journal on Computer Vision, 2018. 5, 7, 10
+[84]   Xizhou Zhu, Han Hu, Stephen Lin, and Jifeng Dai. De-
+       formable convnets v2: More deformable, better results. In
+       Proceedings of the IEEE Conference on Computer Vision
+       and Pattern Recognition, pages 9308–9316, 2019. 1, 3
+[85]   Xizhou Zhu, Weijie Su, Lewei Lu, Bin Li, Xiaogang Wang,
+       and Jifeng Dai. Deformable {detr}: Deformable transform-
+       ers for end-to-end object detection. In International Confer-
+       ence on Learning Representations, 2021. 3
+
+
+
+
+                                                                            14
+

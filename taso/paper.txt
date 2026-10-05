@@ -1,0 +1,1071 @@
+  TASO: Optimizing Deep Learning Computation with
+    Automatic Generation of Graph Substitutions
+                    Zhihao Jia                                           Oded Padon                                   James Thomas
+              Stanford University                                    Stanford University                              Stanford University
+            zhihao@cs.stanford.edu                                 padon@cs.stanford.edu                           jjthomas@stanford.edu
+
+              Todd Warszawski                                          Matei Zaharia                                    Alex Aiken
+              Stanford University                                   Stanford University                              Stanford University
+            twarszaw@stanford.edu                                  matei@cs.stanford.edu                           aiken@cs.stanford.edu
+Abstract                                                                               ACM Reference Format:
+Existing deep neural network (DNN) frameworks optimize                                 Zhihao Jia, Oded Padon, James Thomas, Todd Warszawski, Matei
+                                                                                       Zaharia, and Alex Aiken. 2019. TASO: Optimizing Deep Learning
+the computation graph of a DNN by applying graph transfor-
+                                                                                       Computation with Automatic Generation of Graph Substitutions.
+mations manually designed by human experts. This approach                              In ACM SIGOPS 27th Symposium on Operating Systems Principles
+misses possible graph optimizations and is difficult to scale,                         (SOSP ’19), October 27–30, 2019, Huntsville, ON, Canada. ACM, New
+as new DNN operators are introduced on a regular basis.                                York, NY, USA, 16 pages. https://doi.org/10.1145/3341301.3359630
+   We propose TASO, the first DNN computation graph op-
+timizer that automatically generates graph substitutions.
+TASO takes as input a list of operator specifications and
+                                                                                       1    Introduction
+generates candidate substitutions using the given operators                            Deep neural network (DNN) frameworks represent a neural
+as basic building blocks. All generated substitutions are for-                         architecture as a computation graph, where each node is a
+mally verified against the operator specifications using an                            mathematical tensor operator (e.g., matrix multiplication,
+automated theorem prover. To optimize a given DNN com-                                 convolution, etc.). To improve the runtime performance of a
+putation graph, TASO performs a cost-based backtracking                                computation graph, the most common form of optimization
+search, applying the substitutions to find an optimized graph,                         is graph substitutions that replace a subgraph matching a
+which can be directly used by existing DNN frameworks.                                 specific pattern with a functionally equivalent subgraph with
+   Our evaluation on five real-world DNN architectures shows                           improved performance.
+that TASO outperforms existing DNN frameworks by up to                                    Existing DNN frameworks optimize a computation graph
+2.8×, while requiring significantly less human effort. For ex-                         by applying graph substitutions that are manually designed
+ample, TensorFlow currently contains approximately 53,000                              by domain experts, as depicted in Figure 1a. For example,
+lines of manual optimization rules, while the operator speci-                          TensorFlow, PyTorch, TensorRT, and TVM use a greedy
+fications needed by TASO are only 1,400 lines of code.                                 rule-based optimization strategy and directly perform all
+                                                                                       applicable substitutions (i.e., rules) on an input computation
+CCS Concepts • Computing methodologies → Neural                                        graph [6, 8, 31, 36]. MetaFlow [21] allows substitutions that
+networks; • Computer systems organization → Neural                                     may either increase or decrease performance to enable a
+networks; • Software and its engineering → Formal soft-                                larger search space of equivalent computation graphs and
+ware verification.                                                                     uses back-tracking search to explore this space, but it still
+                                                                                       requires manually specified substitutions. Although manu-
+Keywords deep neural network, computation graph sub-                                   ally designed substitutions improve the performance of DNN
+stitutions, superoptimization, formal verification                                     computations, they fall short in several respects.
+                                                                                       Maintainability. Hand-written graph substitutions require
+Permission to make digital or hard copies of all or part of this work for
+                                                                                       significant engineering effort. For example, TensorFlow r1.14
+personal or classroom use is granted without fee provided that copies are not
+made or distributed for profit or commercial advantage and that copies bear
+                                                                                       includes 155 substitutions implemented in approximately
+this notice and the full citation on the first page. Copyrights for components         53K lines of C++ code. The maintenance problem is ag-
+of this work owned by others than ACM must be honored. Abstracting with                gravated by the fact that new operators are continuously
+credit is permitted. To copy otherwise, or republish, to post on servers or to         introduced; for example, recent work has proposed depth-
+redistribute to lists, requires prior specific permission and/or a fee. Request
+                                                                                       wise [19], grouped [38], and transposed convolutions [16]
+permissions from permissions@acm.org.
+SOSP ’19, October 27–30, 2019, Huntsville, ON, Canada
+                                                                                       for different image classification tasks. TensorFlow r1.14 cur-
+© 2019 Association for Computing Machinery.                                            rently includes 17 graph substitutions (written in 4K lines of
+ACM ISBN 978-1-4503-6873-5/19/10. . . $15.00                                           code) to optimize ordinary convolution (e.g., fusing it with
+https://doi.org/10.1145/3341301.3359630                                                different types of operators). With the existing approach,
+
+
+
+                                                                                  47
+SOSP ’19, October 27–30, 2019, Huntsville, ON, Canada                                                                      Z. Jia et al.
+
+                                                                      treating data layout and graph substitution as separate op-
+                                                                      timization problems and solve them sequentially [8, 27], as
+                                                                      shown in Figure 1a, but this separation misses many possible
+                                                    optimization opportunities.
+                     
+
+                                                                      Correctness. Hand-written graph substitutions are error-
+                                                      prone, and a bug in graph substitutions can lead to incorrect
+                                                                      computation graphs [2, 4]. The same issue arises in com-
+                                                                      piler optimization, where an incorrect optimization leads
+                                                     to incorrect programs. In the compiler literature, signifi-
+                                                                      cant effort has been devoted to formally verifying optimiza-
+                                                    tions [7, 11, 13, 23, 29, 30, 33, 35]. However, to the best of our
+                                                                      knowledge, such techniques have not been applied to graph
+                  (a) Existing DNN frameworks.                        substitution optimizations performed by DNN frameworks.
+
+
+                                                                      1.1 Our Approach
+                                     In this paper, we present TASO (Tensor Algebra SuperOp-
+                                                                      timizer), the first DNN computation graph optimizer that
+                                                                      automatically generates graph substitutions. Figure 1b shows
+                                               an overview of TASO, which differs from existing frame-
+                                             
+                                                                      works in three aspects. First, TASO only requires operator
+                                              
+                                              definitions and specifications, and automatically generates
+                                             
+                                                                      graph substitutions, reducing manual effort. Second, TASO
+                                                  
+                                                                      employs formal verification to ensure correctness of the gen-
+             
+                                                                      erated graph substitutions. Finally, TASO jointly optimizes
+                                                                      graph substitution and data layout, achieving significantly
+                                                    better runtime performance.
+
+                            (b) TASO.
+                                                                      Generating substitutions. TASO’s graph substitution gen-
+Figure 1. Comparing computation graph optimization in                 erator enumerates all possible computation graphs over a
+existing DNN frameworks with TASO.                                    given set of DNN operators (e.g., the cuDNN kernels [10]) up
+                                                                      to a fixed size, and executes them on a set of random input
+                                                                      tensors. Any pair of computation graphs that have identical
+supporting each new convolution variant would require a               results on the random inputs are considered as a candidate
+similar implementation effort, as each has slightly different         substitution. To efficiently find all such pairs, TASO con-
+semantics and cannot be directly optimized using existing             structs a hash table where computation graphs are stored
+substitutions.                                                        based on the hash of their outputs for the random inputs.
+Data layout. Tensor data can be stored in memory in vari-
+ous layouts, and this choice has a high impact on runtime             Formal verification. TASO’s graph substitution verifier is
+performance. The best layout depends on both the operator             used to ensure correctness of the generated graph substitu-
+and the hardware. For example, on a P100 GPU, convolution             tions, relying on user provided operator properties. Operator
+performs best with row-major layout (i.e., the inner-most di-         properties capture mathematical properties of operators, e.g.,
+mension is contiguously stored), while matrix multiplication          linearity of convolution. The full list of 43 operator proper-
+performs best with column-major layout (i.e., the outer-most          ties we used appears in Table 2. As our evaluation shows, a
+dimension is contiguously stored). On a Tesla V100 GPU                small set of properties for each operator suffices to prove the
+with tensor cores [5] supporting 4×4 matrix operations, opti-         correctness of complex substitutions.
+mal performance may require tiling tensors into 4×4 chunks.              Formally, we model tensor operators using a symbolic
+However, considering layout transformations together with             representation based on first-order logic that is agnostic to
+graph substitutions adds another level of complexity. For ex-         the size of the underlying tensors, and can succinctly express
+ample, a graph substitution may only improve performance              operator properties. The verifier uses the specified properties
+if it is combined with a particular layout transformation (see        to check the correctness of all generated graph substitutions
+Section 7.5). Current frameworks avoid this complexity by             using an automated theorem prover.
+
+
+
+                                                                 48
+TASO                                                                          SOSP ’19, October 27–30, 2019, Huntsville, ON, Canada
+
+   We also present a methodology for developing operator
+properties, which assists the developer in two ways: (1) dis-                                                                            
+covery of required properties is guided by the graph substi-
+                                                                                                                                
+tution generator, and (2) operator properties are subject to
+further validation using symbolic execution on tensors of
+small sizes. During the development process, we found that                                                               
+the our verification methodology uncovered several bugs,
+both in the operator specifications and in the implementation                                                                                
+of the graph substitution generator.                                                                        
+
+                                                                                            (a) Associativity of matrix multiplication.
+Joint optimization. TASO jointly optimizes graph substi-
+tutions and data layout transformations by integrating them                                                                                  
+into a common representation. TASO uses the cost-based
+backtracking search algorithm of MetaFlow [21] and extends                                                                          
+its cost model to also capture performance differences that
+                                                                                                                                  
+arise from different data layouts. During the search, TASO                                     
+measures the performance of a proposed DNN operator with                                                                                  
+a specific proposed data layout on the hardware. These indi-
+vidual measurements are used to predict the performance of                                                                                   
+an entire computation graph with specific data layouts.                                                                      
+
+                                                                               (b) Fusing two matrix multiplications using concatenation and split.
+Evaluation. We evaluate TASO on five real-world DNN ar-
+chitectures. For widely used DNNs optimized by existing                                Figure 2. Graph substitution examples.
+frameworks, such as ResNet-50 [18], TASO matches the per-
+formance of these frameworks with hand-written rules by
+using operator definitions and specifications 1,400 lines long.        2.1      Graph Substitution Definition
+   For new DNN architectures such as ResNeXt-50 [38], Nas-             A graph substitution consists of three components: (1) a source
+RNN [39], NasNet-A [40], and BERT [15], TASO is up to                  graph that is matched to subgraphs in a computation graph;
+2.8× faster than state-of-the-art frameworks, by automati-             (2) a target graph1 that defines a functionally equivalent new
+cally discovering novel graph substitutions to optimize these          subgraph to replace the matched subgraph; and (3) a mapping
+architectures. Compared to sequentially optimizing graph               relation between input/output tensors in the source and tar-
+substitutions and data layout, we show that the joint opti-            get graphs. Figure 2a shows an example graph substitution
+mization can further improve performance by 1.2×. In all               using the associativity of matrix multiplication. Figure 2b
+experiments, TASO discovered an optimized graph in less                fuses two matrix multiplications into one using concatena-
+than ten minutes, making it feasible to use when optimizing            tion and split along the row dimension. A, B, C, X , and Y
+a DNN architecture before large-scale deployment.                      identify the mapping between input and output tensors in
+                                                                       the source and target graphs.
+2   Graph Substitution Generator                                          A graph substitution is specified independently of the con-
+This section describes the TASO substitution generator that            crete tensor shapes. For example, the substitutions of Figure 2
+automatically generates potential substitutions given a list           can be applied to tensors A, B, and C of any concrete shape.
+of primitive operators. The generation algorithm finds all             Some operators also depend on configuration parameters to
+valid substitutions up to a certain size.                              determine the behavior of the operator. For example, the
+   To find all potential substitutions, a straightforward ap-          parameters of convolution determine the strides, padding,
+proach is to test all pairs of graphs for equivalence, which           and activation (e.g., applying the relu function [28] as part
+requires a quadratic number of tests between graphs. We                of convolution); and the parameters of split or concatenation
+adopt an idea from compiler superoptimization [7] and com-             determine the axis along which to apply the operator.
+pute a fingerprint for each graph, which is a hash of the graph        Concatenation and split operators. Concatenation and
+outputs on some specific inputs. Two graphs are certainly              split operators are commonly used in fusing operators with
+not equivalent if they have different fingerprints, and so by          shared inputs, as illustrated in Figure 2b. A split operator
+only comparing graphs with the same fingerprint, TASO                  partitions a tensor into two disjoint sub-tensors along a
+significantly reduces the number of equivalence tests. In
+the experiments, we observe that all graphs with the same              1 Insome of the superoptimization literature, what we call the source is
+fingerprint are verified equivalent by TASO.                           called the target, and what we call the target is called the rewrite.
+
+
+
+
+                                                                  49
+SOSP ’19, October 27–30, 2019, Huntsville, ON, Canada                                                                                Z. Jia et al.
+
+
+
+                                                         
+                                                                                           
+                                                     
+                                                                                              
+                                                            
+                                                        
+                                                                                                      
+                                                                                                                                   
+                                                  
+                                                                                                                         
+                                                                                                               
+                                                    
+                          
+                                                                                                                                    
+                                 
+                                                                                                                                
+                                                           
+
+
+Figure 3. A graph substitution for fusing matrix multiplications with a shared input. The target graph has a concat and a
+split operator, both of which are performed along the row dimension of a matrix. The split tree of the row dimension for
+each tensor is shown in a gray box.
+
+dimension determined by its parameter. This presents a com-                Algorithm 1 Graph substitution generation algorithm.
+plication, as the split point cannot be inferred from the input             1:   Input: A set of operators P, and a set of input tensors I.
+tensors or the parameter. To solve this problem, we observe                 2:   Output: Candidate graph substitutions S.
+that a split operator always partitions a tensor at previous                3:
+concatenation points to “undo” the most recent concatena-                   4:   // Step 1: enumerating potential graphs.
+tion operator. We use this fact to define a suitable semantics              5:   D = {} // D is a graph hash table indexed by their fingerprints.
+for the split operator.                                                     6:   Build(1, ∅, I)
+   Formally, we maintain a split tree for each dimension of a               7:   function Build(n, G, I)
+tensor to track the concatenation history. Figure 3 shows the               8:        if G contains duplicated computation then
+                                                                            9:            return
+split trees of the row dimension for all tensors in Figure 2b.
+                                                                           10:        D = D + (FingerPrint(G), G)
+The split trees allow the substitution to recover the split
+                                                                           11:        if n < threshold then
+point without introducing any additional parameters. Our                   12:            for op ∈ P do
+approach also supports multi-way concatenation and split                   13:                for i ∈ I and i is a valid input to op do
+by nesting of concatenation and split operators.                           14:                    Add operator op into graph G.
+                                                                           15:                    Add the output tensors of op into I.
+2.2   Generation Algorithm                                                 16:                    Build(n + 1, G, I)
+                                                                           17:                    Remove operator op from G.
+For a given set of operator specifications, TASO generates
+                                                                           18:                    Remove the output tensors of op from I.
+potential graph substitutions in two steps, as shown in Al-
+                                                                           19:
+gorithm 1.
+                                                                           20: // Step 2: testing graphs with identical fingerprint.
+   Step 1: Enumerating potential graphs and collect-                       21: S = {}
+ing their fingerprints. TASO first enumerates all potential                22: for G1 , G2 ∈ D with the same FingerPrint(·) do
+graphs up to a certain size by using a given set of operators.             23:      if G1 and G2 are equivalent for all test cases then
+To construct a graph, TASO iteratively adds an operator in                 24:          S = S + (G1 , G2 )
+the current graph by enumerating the type of the operator                  25: return S
+and the input tensors to the operator. The input tensors can
+be initial input tensors to the graph (e.g., A, B, and C in Fig-
+ure 2) or the output tensors of previous operators (e.g., the
+output of the matmul and concat operators in Figure 2).                    some input tensors. TASO uses both randomly initialized
+   Algorithm 1 (line 7-18) shows a depth-first search algo-                tensors and a number of constants as inputs to allow finding
+rithm for constructing all acyclic computation graphs that do              substitutions involving constant tensors, such as the identity
+not contain duplicated computation. We say a graph contains                matrix (see examples in Section 7.3). To avoid floating-point
+duplicated computation if it has two operators performing                  errors in computing a fingerprint, all tensors are represented
+the same computation on the same input tensors. The gen-                   with integers, following the method introduced in [37].
+erator ignores such graphs as they do not represent useful                    Since a graph can have an arbitrary number of output
+computation graphs.                                                        tensors, the hash function must ensure the fingerprint is
+   For each graph, we collect its fingerprint, which is a hash             independent of any permutation of the output tensors. To
+of the output tensors obtained by evaluating the graph on                  guarantee this property, TASO employs a two-step hash
+
+
+
+                                                                     50
+TASO                                                                             SOSP ’19, October 27–30, 2019, Huntsville, ON, Canada
+
+function to compute fingerprints as follows.                             Table 1. Tensor operators and constant tensors included
+                                                                         in TASO. Similar to existing DNN frameworks [6, 31], pool-
+ FingerPrint(G) = hash2 ({hash1 (ti ) | i ∈ Outputs(G)})                 ing and convolution operators support different strides and
+where ti are the output tensors of graph G. hash1 computes               padding modes (i.e., Psame and Pvalid ); convolution supports
+the states and content of an output tensor, including the size,          different activation functions (i.e., Anone and Arelu ). Section 6
+shape, and content of the tensor. hash2 is a symmetric hash              provides more details on the usage of the constants.
+function applied to an unordered set of hash values.
+   Step 2: Testing graphs with identical fingerprint. For                    Name            Description                        Parameters
+                                                                                                            Tensor Operators
+graphs with the same fingerprint, TASO further examines                      ewadd           Element-wise addition
+their equivalence on a set of test cases. Similar to collecting              ewmul           Element-wise multiplication
+fingerprints, each test case contains a set of randomized                    smul            Scalar multiplication
+input tensors, and two graphs pass if they produce equivalent                transpose       Transpose
+                                                                             matmul          Batch matrix multiplication#
+output tensors for all test cases. Unlike the fingerprints, these            conv            Grouped convolution%               stride, padding, activation
+tests use floating point numbers ranging between −1 and 1,                   enlarge         Pad conv. kernel with zeros†       kernel size
+and classify two output tensors as equivalent if their outputs               relu            Relu operator
+                                                                             poolavg         Average pooling                    kernel size, stride, padding
+differ by no more than a small threshold value, which is
+                                                                             poolmax         Max pooling                        kernel size, stride, padding
+10−5 in the evaluation. For this threshold, we observed no                   concat          Concatenation of two tensors       concatenation axis
+discrepancy from the integer tests. However, it is possible                  split{0, 1}     Split into two tensors             split axis
+to use a smaller threshold to filter out substitutions that are                                             Constant Tensors
+                                                                             Cpool           Average pooling constant           kernel size
+valid for real numbers but result in floating point errors.
+                                                                             Iconv           Convolution id. kernel             kernel size
+   Each pair of graphs passing the random testing becomes                    Imatmul         Matrix multiplication id.
+the source and target graphs of a candidate graph substi-                    Iewmul          Tensor with 1 entries
+tution, and the mapping relation between the input/output                    #   Normal matrix multiplication is considered as batch size equals 1.
+                                                                             %
+tensors in the source and target graphs can be automatically                     Normal and depth-wise conv. are special cases of grouped conv.
+                                                                             †   Increase the size of a conv. kernel, restricted to operate on input tensors.
+inferred from the test cases. All candidate graph substitutions
+are then sent to the substitution verifier to check their cor-
+rectness (Section 3), and later pruned to eliminate redundant
+substitutions (Section 4).                                               passing the test case are correct and verified by the substitu-
+   The algorithm described so far is generic, in the sense               tion verifier. This is likely due to the high arithmetic density
+that it does not depend on the specific tensor operators used.           of DNN operators and the lack of branching (if statements)
+However, we observed that for DNN applications, there are                in computation graphs. As a reference, [17] shows that for
+two operators that require special handling. The relu op-                programs with only linear operators, the probability that
+erator [28], which is commonly used in DNN applications,                 two nonequivalent programs produce identical output on a
+returns 0 for all negative inputs. As relu often returns 0,              random input is at most d1 , where d is the number of possible
+it results in many superfluous substitutions being valid. To             values for a variable (i.e., d = 232 in TASO).
+prevent these substitutions from being generated, the gen-
+erator replaces relu by an arbitrary non-linear function                 3        Graph Substitution Verifier
+(our implementation uses x → x(x + 1) + 1). The enlarge                 The key idea behind our approach to formally verifying sub-
+operator increases the size of a tensor by padding it with               stitutions is to use a small set of operator properties expressed
+zeros, which is useful for fusing convolutions with differ-              in first-order logic. These properties are manually written
+ent kernel sizes [21]. However, the presence of zeros also               and reviewed, and are further validated by symbolically ex-
+results in many superfluous substitutions. To overcome this,             ecuting operators on tensors of small sizes and confirming
+the generator only considers computation graphs in which                 that the operator properties are satisfied for these tensor
+enlarge is applied to an input tensor, i.e., not to the output           sizes. Development of operator properties is guided by the
+of another operator. This restriction captures the intended              substitutions discovered by the substitution generator.
+use of enlarge for fusing convolutions, while avoiding the                  For purposes of verification, we model tensor operators us-
+superfluous substitutions.                                               ing first-order logic, where operators are represented using
+   It is worth noting that prior work [7] reported false posi-           functions of both their parameters and their input tensors.
+tives in using random testing to examine code transforma-                For example conv(s, p, c, x, y) represents the convolution op-
+tions in compiler superoptimization. They observed that a                erator applied to tensors x and y, where the parameter s
+number of incorrect code transformations passed a set of                 determines the stride, p determines padding mode, and c
+test cases. We have not observed any false positive cases in             determines the activation mode, e.g., applying a relu acti-
+all the experiments. We use a single test case to examine all            vation function as part of the convolution operator kernel.
+graph pairs with the same fingerprint, and all substitutions             For example, the fact that convolution without activation
+
+
+
+                                                                    51
+SOSP ’19, October 27–30, 2019, Huntsville, ON, Canada                                                                                    Z. Jia et al.
+
+Table 2. Operator properties used for verification. The operators are defined in Table 1, and the properties are grouped by the
+operators they involve. Logical variables w, x, y, and z are of type tensor, and variables a, c, k, p, and s are of type parameter.
+The variable a is used for the axis of concatenation and split, c for the activation mode of convolution, k for the kernel shape
+of pooling, p for the padding mode of convolution and pooling, and s for the strides of convolution and pooling.
+
+   Operator Property                                                                                                Comment
+   ∀x, y, z. ewadd(x, ewadd(y, z)) = ewadd(ewadd(x, y), z)                                                          ewadd is associative
+   ∀x, y. ewadd(x, y) = ewadd(y, x)                                                                                 ewadd is commutative
+   ∀x, y, z. ewmul(x, ewmul(y, z)) = ewmul(ewmul(x, y), z)                                                          ewmul is associative
+   ∀x, y. ewmul(x, y) = ewmul(y, x)                                                                                 ewmul is commutative
+   ∀x, y, z. ewmul(ewadd(x, y), z) = ewadd(ewmul(x, z), ewmul(y, z))                                                distributivity
+   ∀x, y, w. smul(smul(x, y), w) = smul(x, smul(y, w))                                                              smul is associative
+   ∀x, y, w. smul(ewadd(x, y), w) = ewadd(smul(x, w), smul(y, w))                                                   distributivity
+   ∀x, y, w. smul(ewmul(x, y), w) = ewmul(x, smul(y, w))                                                            operator commutativity
+   ∀x . transpose(transpose(x)) = x                                                                                 transpose is its own inverse
+   ∀x, y. transpose(ewadd(x, y)) = ewadd(transpose(x), transpose(y))                                                operator commutativity
+   ∀x, y. transpose(ewmul(x, y)) = ewmul(transpose(x), transpose(y))                                                operator commutativity
+   ∀x, w. smul(transpose(x), w) = transpose(smul(x, w))                                                             operator commutativity
+   ∀x, y, z. matmul(x, matmul(y, z)) = matmul(matmul(x, y), z)                                                      matmul is associative
+   ∀x, y, w. smul(matmul(x, y), w) = matmul(x, smul(y, w))                                                          matmul is linear
+   ∀x, y, z. matmul(x, ewadd(y, z)) = ewadd(matmul(x, y), matmul(x, z))                                             matmul is linear
+   ∀x, y. transpose(matmul(x, y)) = matmul(transpose(y), transpose(x))                                              matmul and transpose
+   ∀s, p, c, x, y, w. conv(s, p, c, smul(x, w), y) = conv(s, p, c, x, smul(y, w))                                   conv is bilinear
+   ∀s, p, x, y, w. smul(conv(s, p, Anone , x, y), w) = conv(s, p, Anone , smul(x, w), y)                            conv is bilinear
+   ∀s, p, x, y, z. conv(s, p, Anone , x, ewadd(y, z)) = ewadd(conv(s, p, Anone , x, y), conv(s, p, Anone , x, z))   conv is bilinear
+   ∀s, p, x, y, z. conv(s, p, Anone , ewadd(x, y), z) = ewadd(conv(s, p, Anone , x, z), conv(s, p, Anone , y, z))   conv is bilinear
+   ∀s, c, k, x, y. conv(s, Psame , c, x, y) = conv(s, Psame , c, x, enlarge(k, y)),                                 enlarge convolution kernel
+   ∀s, p, x, y. conv(s, p, Arelu , x, y) = relu(conv(s, p, Anone , x, y))                                           conv with Arelu applies relu
+   ∀x . relu(transpose(x)) = transpose(relu(x))                                                                     operator commutativity
+   ∀s, p, x, k. conv(s, p, Anone , x, Cpool (k)) = poolavg (k, s, p, x)                                             pooling by conv. with Cpool
+   ∀k, x . conv(1, Psame , Anone , x, Iconv (k)) = x                                                                identity kernel
+   ∀x . matmul(x, Imatmul ) = x                                                                                     identity matrix
+   ∀x . ewmul(x, Iewmul ) = x                                                                                       ewmul identity
+   ∀a, x, y. split0 (a, concat(a, x, y)) = x                                                                        split definition
+   ∀a, x, y. split1 (a, concat(a, x, y)) = y                                                                        split definition
+   ∀x, y, z, w. concat(0, concat(1, x, y), concat(1, z, w)) = concat(1, concat(0, x, z), concat(0, y, w))           geometry of concatenation
+   ∀a, x, y, w. concat(a, smul(x, w), smul(y, w)) = smul(concat(a, x, y), w)                                        operator commutativity
+   ∀a, x, y, z, w. concat(a, ewadd(x, y), ewadd(z, w)) = ewadd(concat(a, x, z), concat(a, y, w))                    operator commutativity
+   ∀a, x, y, z, w. concat(a, ewmul(x, y), ewmul(z, w)) = ewmul(concat(a, x, z), concat(a, y, w))                    operator commutativity
+   ∀a, x, y. concat(a, relu(x), relu(y)) = relu(concat(a, x, y))                                                    operator commutativity
+   ∀x, y. concat(1, transpose(x), transpose(y)) = transpose(concat(0, x, y))                                        concatenation and transpose
+   ∀x, y, z. concat(1, matmul(x, y), matmul(x, z)) = matmul(x, concat(1, y, z))                                     concatenation and matrix mul.
+   ∀x, y, z, w. matmul(concat(1, x, z), concat(0, y, w)) = ewadd(matmul(x, y), matmul(z, w))                        concatenation and matrix mul.
+   ∀s, p, c, x, y, z. concat(0, conv(s, p, c, x, z), conv(s, p, c, y, z)) = conv(s, p, c, concat(0, x, y), z)       concatenation and conv.
+   ∀s, p, c, x, y, z. concat(1, conv(s, p, c, x, y), conv(s, p, c, x, z)) = conv(s, p, c, x, concat(0, y, z))       concatenation and conv.
+   ∀s, p, x, y, z, w. conv(s, p, Anone ,concat(1, x, z), concat(1, y, w)) =
+                                                                                                                    concatenation and conv.
+                                                      ewadd(conv(s, p, Anone , x, y), conv(s, p, Anone , z, w))
+   ∀k, s, p, x, y. concat(1, poolavg (k, s, p, x), poolavg (k, s, p, y)) = poolavg (k, s, p, concat(1, x, y))       concatenation and pooling
+   ∀k, s, p, x, y. concat(0, poolmax (k, s, p, x), poolmax (k, s, p, y)) = poolmax (k, s, p, concat(0, x, y))       concatenation and pooling
+   ∀k, s, p, x, y. concat(1, poolmax (k, s, p, x), poolmax (k, s, p, y)) = poolmax (k, s, p, concat(1, x, y))       concatenation and pooling
+
+
+(denoted by Anone ) is linear in its first argument is captured                 Table 1 lists all operators and tensor constants used in our
+by the following operator property (where ewadd represents                      evaluation, and Table 2 shows the full list of operator prop-
+element-wise tensor addition):                                                  erties used in our evaluation to verify graph substitutions.
+                                                                                   Given the operator properties, we use a first-order theo-
+    ∀s, p, x, y, z. conv(s, p, Anone , ewadd(x, y), z) =
+                                                                                rem prover—our implementation uses Z3 [14]—to verify all
+       ewadd(conv(s, p, Anone , x, z), conv(s, p, Anone , y, z))
+
+
+
+
+                                                                           52
+TASO                                                                       SOSP ’19, October 27–30, 2019, Huntsville, ON, Canada
+
+generated substitutions. This verification amounts to entail-
+ment checking in first-order logic, checking that the operator                                                                              
+properties entail functional equivalence of the source and
+                                                                                                                                
+target graphs of each generated substitution.
+   Modeling the operators using first-order logic involves
+                                                                                                                         
+a degree of abstraction (e.g., the shapes of tensors are not
+modeled). We found this level of abstraction to be suitable
+                                                                                                                                      
+for verifying graph substitutions. We also note that the data
+layout is abstracted for verification purposes—layout does                                            
+not affect operator semantics, and the optimizer (Section 5)
+                                                                       (a) A redundant substitution that is equivalent to Figure 2a by renaming
+ensures that layouts are used consistently.                            input tensor C with A.
+
+
+Methodology for developing operator properties. We de-
+veloped operator properties as needed to determine the cor-                                                                           
+rectness of generated graph substitutions using an iterative
+process. During the development process, we ran the sub-                                                                 
+stitution generator and tried to verify all discovered substi-
+tutions. If a substitution could not be verified and appeared                                                                               
+correct, we added an appropriate property (or properties). To                                             
+safeguard against mistakes in operator properties, we used
+                                                                                  (b) A redundant substitution with a common subgraph.
+further validation steps.
+   To validate operator properties, TASO verifies the opera-
+tor properties themselves for all combinations of parameter
+values and tensor sizes up to a small bound—in our evalu-                                                                      
+ation the bound was 4×4×4×4. For this, TASO requires a
+basic symbolic implementation of each tensor operator in                                                                    
+Python. TASO symbolically executes this implementation
+for tensors of small size, effectively elaborating the tensor
+                                                                                                                                            
+operations into symbolic real arithmetic expressions, where
+activation functions (e.g., relu) are modeled using uninter-                                              
+preted functions. TASO then uses Z3, here as an SMT solver                         (c) A redundant substitution with a common subgraph.
+for the theory of real arithmetic, to verify the operator prop-
+erties. For example, if a user would try to add the (wrong)            Figure 4. Example redundant substitutions pruned by TASO.
+property stating the convolution operator is linear for all            Matmul and Add refer to matrix multiplication and element-
+activation modes (including relu activation), then this check          wise addition, respectively. For each subgraph, A, B, and C
+would show that this property is not satisfied by the actual           refer to its input tensors, while X refers to the output tensor.
+operators.
+   As an additional validation step that assists the develop-
+ment process, TASO checks that the set of operator prop-               verify all 743 generated graph substitutions using 43 operator
+erties is consistent and does not contain redundancies (i.e.,          properties (see Table 2).
+a property entailed by other properties), which amounts to
+first-order entailment checks. These checks are also useful            4    Pruning Redundant Substitutions
+for discovering erroneous properties, and are cheaper to               A graph substitution is redundant if it is subsumed by a
+perform than the verification for small tensor sizes.                  more general valid substitution. This section describes the
+   During our development process, the verification method-            pruning techniques used by TASO to eliminate redundant
+ology revealed several subtle bugs. Some bugs in the graph             graph substitutions. All pruning steps preserve all optimiza-
+substitution generator were found when it generated substi-            tion opportunities: if graph G can be transformed into graph
+tutions that could not be verified, and the validation steps           G  using a sequence of substitutions, then G can always be
+described above revealed several bugs in candidate operator            transformed into G  after pruning (possibly using a different
+properties. In our experience, a new operator can be sup-              set of transformations).
+ported with a small amount of effort, usually a few hours
+of work by an expert. Typically a few properties must be               Input tensor renaming. TASO eliminates graph substitu-
+written for each operator. In our evaluation, we were able to          tions identical to other substitutions modulo input tensor
+
+
+
+                                                                  53
+SOSP ’19, October 27–30, 2019, Huntsville, ON, Canada                                                                              Z. Jia et al.
+
+Table 3. The number of remaining graph substitutions after
+applying the pruning techniques in order.                                                                                 
+                                                                                                                      
+    Pruning                   Remaining Reduction
+    Techniques              Substitutions v.s. Initial                                                                           
+    Initial                         28744          1×                                                                  
+    Input tensor renaming           17346        1.7×                                                                     
+    Common subgraph                   743         39×                                                                              
+
+                                                                                                
+renaming. For example, Figure 4a shows a redundant substi-
+tution equivalent to Figure 2a by renaming input tensor C
+with A. For substitutions that are equivalent through input           Figure 5. A graph substitution using the transpose of ma-
+tensor renaming, TASO prunes all but a single most general            trix multiplication. matmul and transpose indicate matrix
+substitution.                                                         multiplication and transpose, respectively. The parentheses
+                                                                      show the potential layouts for each tensor in the source and
+Common subgraph. TASO also tries to eliminate substi-                 target graphs, where C and R indicate the column-major and
+tutions whose source and target graphs have a common                  row-major layouts of a tensor.
+subgraph. TASO identifies two forms of common subgraphs
+that can lead to pruning.
+   The first form of common subgraph is illustrated in Fig-           Algorithm 2 Cost-Based Backtracking Search
+ure 4b. Here, the source and target graphs both contain a              1: Input: an input graph Gin , verified substitutions S, a cost
+common operator with the same input tensors (highlighted                    model Cost(·), and a hyper parameter α.
+in gray boxes). The common subgraph represents an input to             2: Output: an optimized graph.
+                                                                       3:
+other operators in both the source and target graphs. There-
+                                                                       4: P = {Gin } // P is a priority queue sorted by Cost.
+fore, we can obtain a more general substitution by replacing
+                                                                       5: while P  {} do
+the common subgraph with a fresh input tensor. If this more            6:    G = P.dequeue()
+general substitution is indeed valid, then TASO prunes the             7:    for substitution s ∈ S do
+less general substitution.                                             8:        // Layout(G, s) returns possible layouts applying s on G.
+   The second form of common subgraph is demonstrated in               9:        for layout l ∈ Layout(G, s) do
+Figure 4c. Here, the common subgraph (highlighted in gray             10:            // Apply(G, s, l) applies s on G with layout l.
+boxes) includes all the outputs in both the source and target         11:            G  = Apply(G, s, l)
+graphs. In this case, a more general substitution can be ob-          12:            if G  is valid then
+tained by completely removing the common subgraph, mak-               13:                if Cost(G  ) < Cost(Gopt ) then
+ing its inputs new outputs of the source and target graphs.           14:                     Gopt = G 
+TASO prunes the less general substitution if the more general         15:                   if Cost(G  ) < α × Cost(Gopt ) then
+one is valid.                                                         16:                       P.enqueue(G  )
+   Table 3 shows the effect of the TASO pruning techniques            17: return Gopt
+on the number of substitutions. We observe that both prun-
+ing techniques play an important role in eliminating redun-
+dant substitutions and their combination reduces the number           applying a substitution on a matched computation graph
+of substitutions TASO must consider by 39×.                           may result in multiple graphs with identical graph structure
+                                                                      but different data layouts.
+5    Joint Optimizer                                                     For example, Figure 5 shows the potential computation
+We now describe the TASO optimizer for jointly optimiz-               graphs that can be derived by applying the transpose of ma-
+ing data layout and graph substitution. The optimizer uses            trix multiplication on a source graph with a default column-
+the MetaFlow [21] cost-based backtracking search algorithm            major layout (shown as C). Both the matrix multiplication and
+to search for an optimized computation graph by applying              transpose operators also support an alternative row-major
+verified substitutions. TASO extends MetaFlow’s search al-            layout (shown as R). The data layouts for all mapped tensors
+gorithm to also consider possible layout optimization oppor-          in the target graph (i.e., A, B, and X) must match the layouts
+tunities when performing substitutions.                               in the source graph. The two intermediate tensors in the
+   When applying a substitution on a matched subgraph,                target graph can have either a row-major or a column-major
+based on the data layouts of tensors in the source graph and          layout, therefore TASO considers four different computation
+the layouts supported by the operators, TASO enumerates               graphs (i.e., CC, CR, RC, and RR for the two intermediate ten-
+possible layouts for tensors in the target graph. As a result,        sors) when applying this substitution. This allows TASO to
+
+
+
+                                                                 54
+TASO                                                                     SOSP ’19, October 27–30, 2019, Huntsville, ON, Canada
+
+                                                                     to a simple greedy algorithm without backtracking, and a
+                                                                  high value for α makes the search explore more possible
+                                                                     candidates and causes more backtracking. We observe that
+                                                                α = 1.05 achieves good performance in our evaluation.
+                                                
+                                                             6    Implementation
+                                                     
+                                                                     TASO is designed and implemented as a generic and extensi-
+                                                                     ble computation graph optimizer for tensor computations,
+                                              
+                                                                     such that new tensor operators can be easily added. Table 1
+                                      lists the tensor operators included in the current implemen-
+                                                                     tation of TASO. Some operators also depend on additional
+Figure 6. A graph substitution example that introduces a cy-         parameters to determine the behavior of the operator, such as
+cle into a computation graph, where A, B are the inputs, and         the strides, padding, and activation of a convolution. In addi-
+X is the output. The original graph computes A×relu(A×B),            tion to operators, TASO also includes four types of constant
+and the new graph is the result of applying the substitution         tensors that are useful in substitutions. In particular, Iewmul ,
+shown in Figure 2b that fuses the two matrix multiplications         Imatmul , and Iconv are identity tensors for element-wise mul-
+using concatenation and split. The source and target graphs          tiplication, matrix multiplication, and convolution, respec-
+of the substitution are shown in the dotted boxes. Both the          tively. Cpool allows converting an average pooling operator
+original graph and the substitution are acyclic. However, the        to a depth-wise convolution (see examples in Section 7.3).
+resulting graph contains a cycle (highlighted in red).                  As explained in Section 3, TASO uses operator proper-
+                                                                     ties specified by the user to verify the generated graph sub-
+                                                                     stitutions. Table 2 lists the 43 properties used to verify all
+capture potential layout transformation opportunities when           substitutions in our evaluation.
+performing graph substitutions.                                         TASO can easily be extended to include new tensor oper-
+   Algorithm 2 shows our cost-based backtracking search al-          ators. For each operator, TASO requires two forms of input:
+gorithm for jointly optimizing substitution and data layout.         (1) reference implementations for the operator, and (2) spec-
+The cost model is motivated by the fact that DNN operators           ifications of operator properties. (1) consists of a concrete
+perform dense linear algebra with no branches, and there-            implementation (in C++) used by the substitution generator
+fore their performance on hardware is highly consistent and          and a symbolic implementation (in Python) used to validate
+predictable given the same data layouts and configuration            the operator specifications. In our experience, adding a new
+parameters (e.g., the strides and padding of a convolution).         operator requires a few hours of work by an expert.
+Similar to MetaFlow [21], TASO measures the execution time              For a new operator whose specifications are currently
+of a DNN operator once for each configuration and data lay-          missing, TASO treats it as an opaque operator and can still
+out, and estimates the performance of a graph by summing             optimize the rest of the graph using verified substitutions.
+up the measured execution time of its operators.                        TASO is implemented on top of MetaFlow, and reuses
+   To search for an optimized graph, all candidate graphs            the MetaFlow cost-based backtracking search [21]. Overall,
+are maintained in a priority queue P and are dequeued in             our implementation of TASO contains around 8,000 lines
+increasing order of cost. For each dequeued graph G, TASO            of code for the core components (i.e., the substitution gen-
+considers each verified substitution and possible layouts            erator, verifier, and optimizer), and 1,400 lines of code for
+applicable to the substitution, and applies them to obtain           the operator reference implementations, including the 43
+functionally equivalent new graphs G .                              operator properties.
+   A non-obvious property of graph substitutions is that ap-            TASO is framework-agnostic and can be plugged in to
+plying them can introduce cycles into a graph. Figure 6 shows        existing DNN frameworks such as TensorRT and TVM by
+one example where applying a valid substitution results in           simply emitting the optimized graph in the target frame-
+a cyclic graph. Since computation graphs must be acyclic,            work’s input format. In the evaluation, we demonstrate this
+TASO checks the acyclicity of G  (line 12 of Algorithm 2)           portability on TensorRT and TVM, and show that they can
+before enqueuing it in P.                                            directly use TASO’s optimizations to improve performance.
+   Finally, the best discovered graph Gopt is returned by the
+search algorithm. The search space is pruned by a hyper              7    Evaluation
+parameter α, which directly eliminates all graphs whose              In this section we aim to evaluate the following points:
+cost is α times worse than the best discovered graph. The
+parameter α trades off between the search time and the                   • Can TASO automatically generate and verify graph
+best discovered graph. Setting α = 1 reduces the search                    substitutions in acceptable run time?
+
+
+
+                                                                55
+SOSP ’19, October 27–30, 2019, Huntsville, ON, Canada                                                                          Z. Jia et al.
+
+      • Can TASO improve the end-to-end performance of                     Among the five DNN architectures, ResNet-50 has been
+        real-world DNN architectures, especially for emerging           commonly used and heavily optimized by existing DNN
+        architectures with recently introduced operators?               frameworks. TASO achieves on-par performance for ResNet-
+      • Can TASO’s joint optimization of computation graphs             50 with existing frameworks, showing that TASO is able
+        and data layouts achieve better performance than sep-           to automatically discover graph substitutions manually de-
+        arate optimizations?                                            signed by domain experts. For the remaining four DNN ar-
+                                                                        chitectures with new operators and graph structures, TASO
+7.1 Experimental Setup                                                  outperforms existing DNN frameworks with speedups rang-
+DNNs. We use five real-world DNN architectures to evaluate              ing from 1.3× to 2.8× on the cuDNN backend and 1.1× to
+TASO. ResNet-50 [18] is a widely used convolutional neu-                1.8× on the TVM backend. The speedup is achieved by (1)
+ral network for image classification and achieved the best              automatically discovering optimizing substitutions for the
+classification performance in the ILSVRC [32] competition.              new operators and (2) jointly optimizing graph substitution
+ResNeXt-50 [38] improves the model accuracy and runtime                 and data layout. We analyze the substitutions discovered by
+efficiency of ResNet-50 by introducing a new grouped con-               TASO in Sections 7.3 and 7.4, and the joint optimization of
+volution operator. NasNet-A [40] and NasRNN [39] are two                substitution and data layout in Section 7.5.
+DNN architectures automatically discovered by machines
+through neural architecture search. NasNet-A and NasRNN                 7.3 Substitution Case Study
+exceed the best human-designed DNN architectures for im-                To understand how the substitutions generated and verified
+age classification and language modeling tasks, respectively.           by TASO improve runtime performance, we study a few
+Finally, BERT [15] is a new language representation archi-              graph substitution examples in detail.
+tecture that obtained the state-of-the-art model accuracy on               NasNet-A is the best discovered CNN architecture for the
+a spectrum of language tasks.                                           CIFAR-10 dataset, obtained by neural architecture search.
+   All experiments were performed on an Amazon p3.2xlarge               Figure 8a shows a convolutional cell in NasNet-A. Unlike
+instance [1] with an 8-core Intel E5-2600 CPU, 64 GB DRAM,              human-designed architectures, NasNet-A contains uncon-
+and one NVIDIA Tesla V100 GPU.                                          ventional graph structures, making it hard to optimize with
+   To generate candidate graph substitutions, TASO enumer-              manual substitutions designed for more standard DNN archi-
+ates all potential graphs with up to four operators by using            tectures. To illustrate how TASO optimizes this architecture,
+all DNN operators listed in Table 1. TASO generated 743                 we show two example substitutions discovered by TASO;
+candidate substitutions in around 5 minutes.                            neither is present in any existing DNN framework.
+   In the cost-based backtracking search for optimized DNN                 Figure 8b shows graph substitutions that transform two
+graphs, we set the hyperparameter α to be 1.05, which is                average pooling operators followed by element-wise addi-
+identical to the value used in MetaFlow [21]. In all experi-            tion to a single depth-wise convolution, by using a constant
+ments, the end-to-end search time to discover an optimized              tensor Cpool defined in Table 1. The mathematical formula
+computation graph is less than ten minutes.                             for average pooling is:
+                                                                                              1    
+7.2    End-to-End Evaluation                                              o(n, c, x, y) =                i(n, c, x + k x , y + ky )
+                                                                                          K X × KY
+We first compare the end-to-end inference performance among                                          kx   ky
+
+TensorFlow [6], TensorFlow XLA [3], TensorRT [36], TVM [8],             where, K X and KY are the height and width of the pooling
+MetaFlow [21], and TASO on a V100 GPU. Figure 7 shows                   filter. Similarly, the formula for depth-wise convolution is:
+the results. TensorFlow, TensorFlow XLA, TensorRT, and                                  
+MetaFlow use the highly-engineered cuDNN and cuBLAS                     o(n, c, x, y) =         i(n, c, x + k x , y + ky ) × w(c, k x , ky )
+                                                                                        kx   ky
+libraries [10, 12] to perform DNN operators on GPUs, while
+TVM generates customized GPU kernels for the DNN opera-                 which produces mathematically equivalent result as an av-
+tors. To eliminate the impact of different operator libraries,          erage pooling if we have w(c, k x , ky ) = 1/(K X × KY ). In
+we evaluate the performance of TASO on both backends.                   addition, TASO also fuses the two depth-wise convolutions
+   To generate GPU kernels in TVM, we allow the auto                    into one using its linearity.
+tuner [9] to run 2000 trials and use the best discovered config-           A second new sequence of substitutions for NasNet-A is
+uration for each DNN operator. It takes 2 hours on average to           shown in Figure 8c, which fuses two depth-wise convolutions
+tune a GPU kernel for each DNN operator. The TASO graph                 and two convolutions followed by addition to a depth-wise
+optimizer needs to query the execution time of hundreds of              convolution followed by a standard convolution. This sub-
+DNN operators for its cost model, therefore, for the TVM                stitution increases the operator granularity and reduces the
+backend, we reuse the best discovered computation graph                 operator launch overhead by using larger operators.
+for the cuDNN backend, assuming the cost of an operator in                 For inference workloads, the weights in DNN architectures
+cuDNN is a reasonable estimate for its cost in TVM.                     (e.g., Wi and Cpool in Figure 8) are fixed and independent of
+
+
+
+                                                                   56
+TASO                                                                                                                                                        SOSP ’19, October 27–30, 2019, Huntsville, ON, Canada
+
+
+                                     (A) TensorFlow                                             (C) TensorRT                                 (E) TASO w/ cuDNN                                         (F) TVM                            (G) TASO w/ TVM
+                                     (B) TensorFlow XLA                                         (D) MetaFlow
+  Inference Time (ms)
+
+
+
+
+                        2.5                                                                                                    30
+                                                                                                                                                                            12
+                                                                           10                                                                                                                                                2.0
+                                                                                                                               25
+                        2.0                           1.0x                                                                                                                  10
+                                                                                                       1.3x                                                                                                                                                                1.1x
+                                                                            8
+                                                                   1.1x                                                        20                                                                                            1.5
+                                                                                                                    1.3x                                                        8
+                        1.5                                                                                                                                                                                                                                 1.4x
+                                                                            6                                                  15
+                                                                                                                                                                                6                                            1.0
+                        1.0
+                                                                            4                                                  10
+                                                                                                                                                                                                       1.4x
+                                                                                                                                                                                4                                   1.3x
+                                                                                                                                                                                                                             0.5
+                        0.5
+                                                                            2                                                   5                     2.8x          1.8x        2
+
+
+                        0.0                                                 0                                                   0                                               0                                            0.0
+                                A     B      C    D   E      F     G              A   B     C      D    E       F    G               A   B   C    D     E       F     G             A    B    C    D   E       F     G              A     B    C        D   E          F    G
+                                          ResNet-50                                       NasNet-A                                       ResNeXt-50                                           NasRNN                                                BERT
+
+Figure 7. End-to-end inference performance comparison among existing DNN frameworks and TASO. The experiments were
+performed using a single inference sample, and all numbers were measured by averaging 1,000 runs on a NVIDIA V100 GPU.
+We evaluated the TASO’s performance with both the cuDNN and TVM backends. For each DNN architecture, the numbers
+above the TASO bars show the speedup over the best existing approach with the same backend.
+
+                                                                                
+
+
+
+                                                                                                                   
+                                                                                                                                                                                                                                                          
+                                                                                                          
+                                                                                                         
+                                                                                                                                                                                                                                                            
+                                                                                                                                                                                                           
+                                                                                                             
+                                                                                                                  
+                                                                                                                                                                                                         
+                                                                                                                                                                                                                                                                   
+
+
+                                                                                                                                                                                                                                                      
+                                                                                    
+
+                                                      (a) NasNet-A Architecture.                                                                                          (b) Example substitutions discovered by TASO.
+                                                                                                                                                                                                                                                 
+
+
+                                                                                                                                                                                                                                             
+                                                                                                                                                                                                                                              
+                                         
+                                                                                                                                                                                                                                                 
+                                                                                                                                                                                                                                    
+                                                                                                                                                                                                                                                              
+                                                                                                                                                           
+                                                                                                                                                                                                                              
+
+
+                                                                                                                                                                                                                                 
+                                                                                                                                                                                                                                                     
+                                                                                                                                                                                                                                      
+                                                                                                                                                                          
+                                                                                                                                                                                                                                          
+
+                                                                                                       (c) A sequence of substitutions discovered by TASO.
+
+Figure 8. The NasNet-A architecture [40] and substitutions discovered by TASO to optimize NasNet-A. Figure 8a shows the
+architecture, where avg, conv, and DWC refer to average pooling, convolution, and depth-wise convolution, respectively. The
+weight tensors are eliminated for simplicity. Figures 8b and 8c shows two sequences of substitutions discovered by TASO that
+are used to optimize subgraphs marked in the black and red boxes in Figure 8a. In Figures 8b and 8c, each arrow refers to a
+substitution, and the subgraphs in the same color are the source and target graphs of the substitution. Cpool (3 × 3) in Figure 8b
+is a constant matrix whose entries are 1/9, as defined in Table 1. The enlarge operator in Figure 8c increases a convolution’s
+kernel size by padding the weight (i.e., W1 ) with extra 0’s. For inference workloads, operators in the gray areas in Figures 8b
+and 8c only depend on pre-trained weights (i.e., Wi ), and therefore can be pre-computed.
+
+the inputs. TASO preprocesses operators whose inputs are                                                                                                ResNeXt-50 replaces large convolutions in ResNet-50
+all pre-trained weights (e.g., the gray areas in Figure 8) to                                                                                         with multiple branches of much smaller convolutions to im-
+further reduce the inference time.                                                                                                                    prove both model accuracy and runtime efficiency, as shown
+
+
+
+
+                                                                                                                                             57
+SOSP ’19, October 27–30, 2019, Huntsville, ON, Canada                                                                                                   Z. Jia et al.
+
+                                                                                                        Existing frameworks either launch 32 individual convolu-
+                                                                      
+                                                                                                     tions or a single grouped convolution, both of which result in
+                                                                                           suboptimal performance. For ResNeXt-50, TASO uses a mix-
+                                                                                
+                                                                                                     ture of previous approaches and launches multiple grouped
+                                                                           
+                                
+                                                                                 convolutions, as shown in Figure 9c. TASO discovered this
+                                                                         
+                                                                                                     mixture automatically, resulting in a speedup of 2.8× com-
+                                                                                              pared to the best existing approach.
+                                                                            
+                                                                                                     7.4   Analysis of Used Substitutions
+  (a) Multi-branch                             (b) Grouped     (c) Multi-branch grouped
+  convolution.                                 convolution.    convolution.                          We now present a detailed analysis of how the graph sub-
+                                                                                                     stitutions discovered by TASO impact the performance of
+                                 0.45
+                                                                                                     the optimized graphs. Figure 10 shows a heat map of the
+                                      TensorFlow
+                                 0.40
+                                 TensorFlow XLA                                                      substitutions used to optimize each of the five DNN architec-
+           Execution Time (ms)
+
+
+
+
+                                 0.35
+                                                                       TensorRT                      tures. Each DNN uses 4-10 different substitutions to achieve
+                                 0.30                                  MetaFlow
+                                                                                                     optimized performance, and different DNNs require different
+                                 0.25
+                                                                                                     sets of substitutions. This shows the difficulty of manually
+                                 0.20
+                                                                                                     designing a few core substitutions to optimize today’s DNN
+                                 0.15
+                                                                                                     architectures with increasingly high diversity. TASO is bet-
+                                 0.10                        TASO
+                                                                                                     ter positioned for optimizing new DNNs by automatically
+                                 0.05
+                                                                                                     discovering performance critical substitutions.
+                                 0.00
+                                          1   2    4    8    16   32                                    Additionally, we evaluate the scalability of TASO by con-
+                                         Num. Convolutions Per Group                                 sidering substitutions with different size limitations, and
+                                         (d) Performance comparison.                                 measuring the runtime performance of the optimized graphs.
+                                                                                                     Figure 11 shows the results. For all three DNN architectures,
+Figure 9. Different approaches to perform multi-batch con-                                           performance improvement is consistently achieved by using
+volutions in ResNeXt-50 and their performance comparison.                                            larger substitutions up to size 3. ResNeXt-50 and BERT do
+TensorFlow and TensorFlow XLA launch the 32 convolu-                                                 not obtain additional speedups by using substitutions with
+tions separately (Figure 9a). TensorRT and MetaFlow launch                                           4 operators, while NasNet-A achieves 1.2× by considering
+a single grouped convolution kernel that computes all 32                                             larger substitutions. Our current implementation of TASO
+convolutions in parallel (Figure 9b). The best graph discov-                                         does not scale to generate all substitutions with 5 or more op-
+ered by TASO uses 4 grouped convolutions, each of which                                              erators, since the generator is limited by the memory needed
+computes 8 convolutions (Figure 9c).                                                                 to hold the fingerprints of all potential graphs, which scales
+                                                                                                     exponentially with graph size. A distributed fingerprint gen-
+                                                                                                     erator could potentially handle graphs of size 5 and even
+in Figure 9a. However, directly launching these small con-
+                                                                                                     more, which we leave as future work.
+volutions incurs high kernel launch overhead. The cuDNN
+library has recently introduced grouped convolution kernels
+that perform multiple convolutions in parallel using a single                                        7.5    Joint Optimization of Graph Substitutions and
+CUDA kernel [10]. TensorFlow and TensorFlow XLA (r1.14                                                      Data Layout
+as of August 2019) currently do not support grouped convo-                                           To evaluate the performance of the joint optimization in
+lution, so the fastest available ResNeXt-50 implementation                                           TASO, we compare the joint optimization with three baseline
+in TensorFlow launches convolutions in multiple branches                                             strategies: (1) performing only graph substitution optimiza-
+separately with the resulting high kernel launch overhead.                                           tions; (2) performing only data layout optimizations; and (3)
+TensorRT and MetaFlow use a single grouped convolution                                               performing the two optimizations sequentially.
+kernel that computes a group of 32 convolutions in parallel.                                            Figure 12 shows the comparison results among the four
+While grouped convolution enables additional parallelism                                             strategies on BERT. TASO outperforms the three baseline
+and reduces kernel launch overhead, it also requires a larger                                        strategies by 1.2-1.3×. We observe that the speedup is achieved
+cache to save intermediate states for all convolutions, which                                        by using graph substitutions that transform both graph struc-
+results in decreased runtime performance when too many                                               ture and data layout. One example is depicted in Figure 5.
+convolutions are aggregated in a single kernel. Figure 9d                                            The most time consuming operation in BERT is matrix mul-
+gives the time to run all 32 convolutions using different                                            tiplication A × B, where A is 64 by 1024 and B is 1024 by 4096.
+group sizes (i.e., the number of convolutions in a group),                                           In cuBLAS, the transposed version of this matrix multiplica-
+showing that neither launching individual convolutions nor                                           tion (i.e., (BT ×AT )T ) achieves 1.5× speedup when BT and AT
+grouping all 32 convolutions is the best option.                                                     are in the column-major and row-major layout, respectively.
+
+
+
+                                                                                                58
+TASO                                                                                                                                        SOSP ’19, October 27–30, 2019, Huntsville, ON, Canada
+
+                                s1      s2   s3     s4         s5         s6        s7     s8        s9     s10     s11   s12   s13   s14   s15   s16   s17   s18   s19   s20   s21   s22   s23   s24   s25   s26   s27
+                                                                                                                                                                                                                          40
+   ResNet50                     29      6    29      6         1          5         5
+
+
+
+      NasNet-A                  3                                         41        41     14        32         3   15    19    19     9    10                                                                            30
+
+
+ ResNeXt-50                     25      5    25                                               1                                                   23     3     7     5     7                                              20
+
+       NasRNN                                                                                                                                                                   10    40    20    20    10
+                                                                                                                                                                                                                          10
+
+         BERT                                                                                                                                                                               24    24          12    36
+
+                                                                                                                                                                                                                          0
+
+
+
+Figure 10. A heat map of how often the verified substitutions are used to optimize the five DNN architectures. Only substitutions
+used in at least one DNN are listed. For each architecture, the number indicates how many times a substitution is used by
+TASO to obtain the optimized graph.
+
+                                    3                                                                                                  (Section 3). Our implementation uses Z3 [14] to automati-
+                                               NasNet-A
+                                               ResNeXt-50
+                                                                                                                                       cally discharge all proof obligations, and our experiments
+             Relative Speedup
+
+
+
+
+                                2.5
+                                               BERT                                                                                    were performed with Z3 version 4.8.5.
+                                                                                                                                          Generating the 743 graph substitutions takes around five
+                                    2                                                                                                  minutes, and verifying them against the 43 specified oper-
+                                                                                                                                       ator properties takes less than 10 minutes. When checking
+                                1.5                                                                                                    the specification for redundancies we use Z3 to search for a
+                                                                                                                                       proof of an invalid formula (stating that a specified property
+                                    1
+                                                                                                                                       is entailed by the rest of the specification). This search can
+                                        0           1                     2               3                 4                          continue indefinitely, and in our evaluation we used a time-
+                                        Maxmum Graph Substitution Size                                                                 out of 10 seconds per query, resulting in a run time of less
+                                                                                                                                       than 10 minutes (for 43 axioms). During the development
+Figure 11. Performance comparison by using graph substi-                                                                               process, when we had some redundant specifications they
+tutions with different size limitations. The y-axis shows the                                                                          were discovered in a few seconds.
+relative speedups over the input computation graphs.                                                                                      The validation check that verifies the operator specifi-
+                                                                                                                                       cation for all combinations of parameter values and tensor
+                                                                                                                                       sizes up to 4×4×4×4 is more computationally expensive, with
+             Graph Opt.                                                                                  3.67                          roughly one million proof obligations. We parallelized it us-
+                                                                                                                                       ing 128 CPU cores, which resulted in a run time of roughly
+                                                                                                                                       one hour. During the development process, we also found it
+            Layout Opt.                                                                           3.27
+                                                                                                                                       useful to verify the operators for more restricted combina-
+                                                                                                                                       tions. For example, verifying the specification for tensors of
+               Sequential                                                                         3.15
+                                                                                                                                       size exactly 4×4×4×4 (rather than all tensors up to that size)
+                                                                                                                                       takes under 10 minutes using a single CPU core.
+                         Joint Opt.                                                       2.77
+                            (TASO)
+                                             0.0   0.5   1.0        1.5       2.0   2.5   3.0      3.5    4.0                          8      Related Work
+                                                     Execution Time (ms)
+                                                                                                                                       Manually designed graph substitutions are used in ex-
+Figure 12. End-to-end inference performance comparison                                                                                 isting DNN frameworks to optimize DNN architectures. For
+on BERT using different strategies to optimize graph substi-                                                                           example, TensorFlow, TensorRT, and TVM use a rule-based
+tution and data layout.                                                                                                                strategy and directly perform all applicable substitutions on
+                                                                                                                                       an input graph [6, 8, 36]. MetaFlow [21] allows users to de-
+                                                                                                                                       fine performance-decreasing substitutions to obtain a larger
+This graph optimization can only be captured when graph                                                                                space of potential graphs. The key difference between TASO
+substitution and data layout are jointly considered.                                                                                   and these frameworks is that TASO can automatically gener-
+                                                                                                                                       ate candidate substitutions, and also provides semi-automatic
+7.6     Graph Substitution Verifier                                                                                                    support for verifying their correctness. In the evaluation, we
+We evaluate the performance of the graph substitution veri-                                                                            also show that existing frameworks can directly use TASO’s
+fier for its two key tasks: verifying generated substitutions                                                                          optimized graphs to improve performance.
+against operator specifications, and validating the operator                                                                              Automated DNN code generation. Recent work has
+specifications themselves to aid in the development process                                                                            proposed various approaches to generate hardware-specific
+
+
+
+                                                                                                                                 59
+SOSP ’19, October 27–30, 2019, Huntsville, ON, Canada                                                                     Z. Jia et al.
+
+code for DNN operators. For example, TVM [8, 9] uses a                 9    Limitations and Future Work
+learning-based approach and automatically generates low-               One limitation of TASO is the reliance on user provided
+level optimized code for a diverse set of hardware backends.           operator properties. While our experience has been that the
+Astra [34] optimizes DNN computation by exploring the opti-            required effort is manageable, it would be better to eliminate
+mization space of multi-version complication during training.          it altogether. One possible approach is to automatically verify
+Compared to these approaches, TASO aims at optimizing                  substitutions directly against the implementations of the
+DNN computation at a higher graph level, and therefore                 operators, e.g., cuDNN kernels.
+TASO’s optimizations are orthogonal and can be combined                    Another limitation of TASO is the scalability of the genera-
+with code generation techniques. It still remains an open              tor, which requires saving the fingerprints of all computation
+problem of how to jointly optimize DNN computation at                  graphs up to a fixed size. This approach currently does not
+both graph-level and operator-level.                                   scale beyond graphs of size 4. One possible approach to scale
+   Automated DNN parallelization. ColocRL [26] uses re-                to larger graphs is to implement a distributed generator. A
+inforcement learning to automatically discover an efficient            second possibility is to replace the brute-force enumeration
+device placement for parallelizing DNN training across mul-            with more efficient algorithms or heuristics.
+tiple GPUs. FlexFlow [20, 22] introduces a comprehensive                   An additional avenue for future research is combining
+search space of parallelization strategies for DNN training,           graph-level and operator-level optimizations. This joint op-
+and uses a randomized search algorithm to find efficient               timization is challenging as both problems involve large and
+strategies in the search space. These frameworks optimize              complex search spaces, and optimizations at one level affect
+distributed DNN training assuming a fixed computation                  the search space of the other.
+graph. We believe it is possible to combine TASO’s graph
+optimizations with training parallelization techniques.
+   Superoptimization is a compiler optimization technique              10    Conclusion
+that was originally designed to find the optimal code for a            TASO is the first DNN computation graph optimizer that
+sequence of instructions [25]. TASO’s approach to identify-            automatically generates graph substitutions. TASO formally
+ing potential substitutions via enumeration of graphs and              verifies the substitutions, and considers graph substitutions
+fingerprinting is similar to work in automatically generating          and layout transformations together as a joint optimization
+peephole optimizers using superoptimization techniques [7].            problem, exploiting more optimization opportunities. TASO
+TASO’s approach to verification, however, is significantly             matches the performance of existing frameworks on DNNs
+different. Verification in superoptimization typically relies          for which these frameworks have been heavily optimized
+on “bit blasting”, that is, modeling every bit in a computation        such as ResNet-50, and outperforms existing frameworks
+explicitly in a logical formula (e.g., as a boolean variable).         by up to 2.8× on other DNNs, finding novel optimizations
+This approach is possible only when all aspects of a pro-              not present in the hundreds of optimization rules in existing
+gram transformation, including the computation and the                 frameworks. TASO achieves these results with dramatically
+data, can be expressed using a known number of bits. For               less human effort than existing frameworks, and provides a
+TASO, where the input tensor sizes for graph substitutions             higher level of correctness guarantees.
+are unknown, we must take a different approach. While not
+fully automatic like verification via bit blasting, our method-
+ology based on writing operator specifications is much more            Acknowledgments
+flexible in being able to model future operators with almost           We thank Nikolaj Bjørner, Mingyu Gao, Vinod Grover, Sina
+arbitrary semantics, in addition to smoothly handling the              Lin, Feng Ruan, Xi Wang, the anonymous SOSP reviewers,
+issue of unknown tensor dimensions and split points.                   and our shepherd, Joey Gonzalez, for their helpful feedback.
+   Data layout optimizations. Existing DNN frameworks                  This work was supported by NSF grant CCF-1409813, the
+that support data layout optimizations treat data layouts              Exascale Computing Project (17-SC-20-SC), a collaborative
+and graph transformations as separate optimization prob-               effort of the U.S. Department of Energy Office of Science and
+lems [8, 24, 27]. TASO formulates the problem of performing            the National Nuclear Security Administration, and is based
+graph substitutions and deciding the data layout of each               on research sponsored by DARPA under agreement num-
+DNN operator as a joint optimization problem and consid-               ber FA84750-14-2-0006. This research was supported in part
+ers layout conversions as a part of graph substitutions. As            by affiliate members and other supporters of the Stanford
+a result, TASO can automatically generate graph substitu-              DAWN project—Ant Financial, Facebook, Google, Infosys,
+tions that optimize both graph structures and data layouts,            Intel, Microsoft, NEC, SAP, Teradata, and VMware—as well
+and our evaluation shows that jointly optimizing the two               as Cisco and the NSF under CAREER grant CNS-1651570.
+tasks can significantly improve the end-to-end performance,            Any opinions, findings, and conclusions or recommenda-
+compared to optimizing the them separately.                            tions expressed in this material are those of the authors and
+                                                                       do not necessarily reflect the views of the NSF.
+
+
+
+                                                                  60
+TASO                                                                                      SOSP ’19, October 27–30, 2019, Huntsville, ON, Canada
+
+References                                                                                    2017. MobileNets: Efficient Convolutional Neural Networks for Mobile
+ [1] 2017. Amazon EC2 P3 Instances. https://aws.amazon.com/ec2/                               Vision Applications. CoRR abs/1704.04861 (2017).
+     instance-types/p3/.                                                               [20]   Zhihao Jia, Sina Lin, Charles R. Qi, and Alex Aiken. 2018. Exploring
+ [2] 2017. Tensorflow graph transform creates corrupted graph. https:                         Hidden Dimensions in Accelerating Convolutional Neural Networks.
+     //github.com/tensorflow/tensorflow/issues/7523.                                          In Proceedings of the 35th International Conference on Machine Learning
+ [3] 2017. XLA: Optimizing Compiler for TensorFlow. https://www.                              (Proceedings of Machine Learning Research), Vol. 80. PMLR.
+     tensorflow.org/xla.                                                               [21]   Zhihao Jia, James Thomas, Todd Warzawski, Mingyu Gao, Matei Za-
+ [4] 2018. Graph transform: fold constant with invalid graph. https://                        haria, and Alex Aiken. 2019. Optimizing DNN Computation with
+     github.com/tensorflow/tensorflow/issues/16545.                                           Relaxed Graph Substitutions. In Proceedings of the 2nd Conference on
+ [5] 2018. Tensor Cores in NVIDIA Volta Architecture. https://www.nvidia.                     Systems and Machine Learning (SysML’19).
+     com/en-us/data-center/tensorcore/.                                                [22]   Zhihao Jia, Matei Zaharia, and Alex Aiken. 2019. Beyond Data and
+ [6] Martín Abadi, Paul Barham, Jianmin Chen, Zhifeng Chen, Andy Davis,                       Model Parallelism for Deep Neural Networks. In Proceedings of the 2nd
+     Jeffrey Dean, Matthieu Devin, Sanjay Ghemawat, Geoffrey Irving,                          Conference on Systems and Machine Learning (SysML’19).
+     Michael Isard, Manjunath Kudlur, Josh Levenberg, Rajat Monga, Sherry              [23]   Vu Le, Mehrdad Afshari, and Zhendong Su. 2014. Compiler val-
+     Moore, Derek G. Murray, Benoit Steiner, Paul Tucker, Vijay Vasude-                       idation via equivalence modulo inputs. In ACM SIGPLAN Confer-
+     van, Pete Warden, Martin Wicke, Yuan Yu, and Xiaoqiang Zheng. 2016.                      ence on Programming Language Design and Implementation, PLDI ’14,
+     TensorFlow: A System for Large-Scale Machine Learning.. In Proceed-                      Edinburgh, United Kingdom - June 09 - 11, 2014. 216–226. https:
+     ings of the 12th USENIX Conference on Operating Systems Design and                       //doi.org/10.1145/2594291.2594334
+     Implementation (OSDI).                                                            [24]   Chao Li, Yi Yang, Min Feng, Srimat Chakradhar, and Huiyang Zhou.
+ [7] Sorav Bansal and Alex Aiken. 2006. Automatic Generation of Peephole                      2016. Optimizing memory efficiency for deep convolutional neural
+     Superoptimizers. In Proceedings of the 12th International Conference                     networks on GPUs. In SC’16: Proceedings of the International Conference
+     on Architectural Support for Programming Languages and Operating                         for High Performance Computing, Networking, Storage and Analysis.
+     Systems (ASPLOS XII).                                                                    IEEE.
+ [8] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Haichen Shen, Eddie Q.                 [25]   Henry Massalin. 1987. Superoptimizer: a look at the smallest program.
+     Yan, Leyuan Wang, Yuwei Hu, Luis Ceze, Carlos Guestrin, and Arvind                       In ACM SIGARCH Computer Architecture News, Vol. 15.
+     Krishnamurthy. 2018. TVM: End-to-End Optimization Stack for Deep                  [26]   Azalia Mirhoseini, Hieu Pham, Quoc V Le, Benoit Steiner, Rasmus
+     Learning. CoRR abs/1802.04799 (2018). http://arxiv.org/abs/1802.04799                    Larsen, Yuefeng Zhou, Naveen Kumar, Mohammad Norouzi, Samy
+ [9] Tianqi Chen, Lianmin Zheng, Eddie Yan, Ziheng Jiang, Thierry Moreau,                     Bengio, and Jeff Dean. 2017. Device Placement Optimization with
+     Luis Ceze, Carlos Guestrin, and Arvind Krishnamurthy. 2018. Learning                     Reinforcement Learning. (2017).
+     to Optimize Tensor Programs. In Advances in Neural Information                    [27]   MKLDNN 2016. Intel Math Kernel Library for Deep Neural Networks.
+     Processing Systems 31.                                                                   https://01.org/mkl-dnn.
+[10] Sharan Chetlur, Cliff Woolley, Philippe Vandermersch, Jonathan Co-                [28]   Vinod Nair and Geoffrey E. Hinton. 2010. Rectified Linear Units Im-
+     hen, John Tran, Bryan Catanzaro, and Evan Shelhamer. 2014. cuDNN:                        prove Restricted Boltzmann Machines. In Proceedings of the 27th Inter-
+     Efficient Primitives for Deep Learning. CoRR abs/1410.0759 (2014).                       national Conference on International Conference on Machine Learning
+     http://arxiv.org/abs/1410.0759                                                           (ICML’10). Omnipress, USA, 807–814. http://dl.acm.org/citation.cfm?
+[11] Berkeley R. Churchill, Oded Padon, Rahul Sharma, and Alex Aiken.                         id=3104322.3104425
+     2019. Semantic Program Alignment for Equivalence Checking. In                     [29]   George C. Necula. 2000. Translation validation for an optimiz-
+     Proceedings of the 2019 ACM SIGPLAN Conference on Programming                            ing compiler. In Proceedings of the 2000 ACM SIGPLAN Conference
+     Language Design and Implementation (PLDI), Phoenix, AZ, USA, June                        on Programming Language Design and Implementation (PLDI), Van-
+     22-26, 2019. https://doi.org/10.1145/3314221.3314596                                     couver, Britith Columbia, Canada, June 18-21, 2000. 83–94. https:
+[12] cuBLAS 2016. Dense Linear Algebra on GPUs. https://developer.nvidia.                     //doi.org/10.1145/349299.349314
+     com/cublas.                                                                       [30]   Amir Pnueli, Michael Siegel, and Eli Singerman. 1998. Translation
+[13] Manjeet Dahiya and Sorav Bansal. 2017. Black-Box Equivalence Check-                      Validation. In Tools and Algorithms for Construction and Analysis of
+     ing Across Compiler Optimizations. In Programming Languages and                          Systems, 4th International Conference, TACAS ’98, Held as Part of the
+     Systems, Bor-Yuh Evan Chang (Ed.). Springer International Publishing,                    European Joint Conferences on the Theory and Practice of Software,
+     Cham.                                                                                    ETAPS’98, Lisbon, Portugal, March 28 - April 4, 1998, Proceedings. 151–
+[14] Leonardo De Moura and Nikolaj Bjørner. 2008. Z3: An Efficient SMT                        166. https://doi.org/10.1007/BFb0054170
+     Solver. In Proceedings of the Theory and Practice of Software, 14th Inter-        [31]   PyTorch 2017. Tensors and Dynamic neural networks in Python with
+     national Conference on Tools and Algorithms for the Construction and                     strong GPU acceleration. https://pytorch.org.
+     Analysis of Systems (TACAS’08/ETAPS’08).                                          [32]   Olga Russakovsky, Jia Deng, Hao Su, Jonathan Krause, Sanjeev
+[15] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova.                        Satheesh, Sean Ma, Zhiheng Huang, Andrej Karpathy, Aditya Khosla,
+     2018. BERT: Pre-training of Deep Bidirectional Transformers for                          Michael Bernstein, Alexander C. Berg, and Li Fei-Fei. 2015. ImageNet
+     Language Understanding. CoRR abs/1810.04805 (2018).                                      Large Scale Visual Recognition Challenge. International Journal of
+[16] Vincent Dumoulin and Francesco Visin. 2016. A guide to convolution                       Computer Vision (IJCV) 115, 3 (2015), 211–252. https://doi.org/10.1007/
+     arithmetic for deep learning. CoRR (2016).                                               s11263-015-0816-y
+[17] Sumit Gulwani and George C. Necula. 2003. Discovering Affine Equal-               [33]   Rahul Sharma, Eric Schkufza, Berkeley R. Churchill, and Alex Aiken.
+     ities Using Random Interpretation. In Proceedings of the 30th ACM                        2013. Data-driven equivalence checking. In Proceedings of the 2013
+     SIGPLAN-SIGACT Symposium on Principles of Programming Languages                          ACM SIGPLAN International Conference on Object Oriented Program-
+     (POPL ’03). ACM.                                                                         ming Systems Languages & Applications, OOPSLA 2013, part of SPLASH
+[18] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. 2016. Deep                        2013, Indianapolis, IN, USA, October 26-31, 2013. 391–406. https:
+     residual learning for image recognition. In Proceedings of the IEEE                      //doi.org/10.1145/2509136.2509509
+     Conference on Computer Vision and Pattern Recognition (CVPR).                     [34]   Muthian Sivathanu, Tapan Chugh, Sanjay S. Singapuram, and Lidong
+[19] Andrew G. Howard, Menglong Zhu, Bo Chen, Dmitry Kalenichenko,                            Zhou. 2019. Astra: Exploiting Predictability to Optimize Deep Learning.
+     Weijun Wang, Tobias Weyand, Marco Andreetto, and Hartwig Adam.
+
+
+
+
+                                                                                  61
+SOSP ’19, October 27–30, 2019, Huntsville, ON, Canada                                                                                         Z. Jia et al.
+
+     In Proceedings of the Twenty-Fourth International Conference on Archi-             Conference on Learning Representations.
+     tectural Support for Programming Languages and Operating Systems              [38] Saining Xie, Ross B. Girshick, Piotr Dollár, Zhuowen Tu, and Kaiming
+     (ASPLOS ’19). ACM, New York, NY, USA.                                              He. 2016. Aggregated Residual Transformations for Deep Neural
+[35] Ross Tate, Michael Stepp, Zachary Tatlock, and Sorin Lerner. 2011.                 Networks. CoRR abs/1611.05431 (2016).
+     Equality Saturation: A New Approach to Optimization. Logical Methods          [39] Barret Zoph and Quoc V. Le. 2016. Neural Architecture Search with
+     in Computer Science 7, 1 (2011). https://doi.org/10.2168/LMCS-7(1:                 Reinforcement Learning. CoRR abs/1611.01578 (2016).
+     10)2011                                                                       [40] Barret Zoph, Vijay Vasudevan, Jonathon Shlens, and Quoc V Le. 2018.
+[36] TensorRT 2017. NVIDIA TensorRT: Programmable Inference Acceler-                    Learning transferable architectures for scalable image recognition.
+     ator. https://developer.nvidia.com/tensorrt.                                       In Proceedings of the IEEE conference on computer vision and pattern
+[37] Shuang Wu, Guoqi Li, Feng Chen, and Luping Shi. 2018. Training                     recognition.
+     and Inference with Integers in Deep Neural Networks. In International
+
+
+
+
+                                                                              62
+

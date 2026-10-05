@@ -1,6 +1,6 @@
 # Paper Reading Notes
 
-本仓库收录人工整理的论文原文、可检索文本、论文概要、中文详细解读与关键页面截图，主题覆盖 AI 安全、强化学习与知识蒸馏、PyTorch 动态图与 Graph 编译，以及 GPU 编译、Kernel、MoE 与大模型推理系统。
+本仓库收录人工整理的论文原文、可检索文本、论文概要、中文详细解读与关键页面截图，主题覆盖 AI 安全、强化学习与知识蒸馏、PyTorch 动态图与 Graph 编译、GPU 编译与大模型推理系统，以及主流大模型公司的算法、架构与训练系统。
 
 ## 阅读索引
 
@@ -9,6 +9,31 @@
 - [PyTorch 动态图与 Graph 编译论文阅读索引](PyTorch动态图与Graph编译论文阅读索引.md)
 - [Triton 论文阅读索引](Triton论文阅读索引.md)
 - [GPU 内核融合、MoE 与大模型推理论文阅读索引](GPU内核融合与大模型推理论文阅读索引.md)
+- [大模型算法、架构与系统论文阅读索引](大模型算法与架构论文阅读索引.md)
+- [2016–2026 主流 AI 模型与 AI Compiler 十年演进索引](AI模型与编译器十年演进索引.md)
+- [论文精读 GitHub Markdown 审核报告](论文精读Markdown审核报告.md)
+
+## 大模型算法、架构与系统
+
+| 时间 | 公司/主题 | 类型 | 目录 | 资料 |
+|---|---|---|---|---|
+| 2024 | DeepSeek | 论文 | [`deepseek_moe`](deepseek_moe/) | DeepSeekMoE |
+| 2024 | DeepSeek | 技术报告 | [`deepseek_v2`](deepseek_v2/) | DeepSeek-V2 |
+| 2024 | DeepSeek | 技术报告 | [`deepseek_v3`](deepseek_v3/) | DeepSeek-V3 |
+| 2025 | DeepSeek | 技术报告 | [`deepseek_r1`](deepseek_r1/) | DeepSeek-R1 |
+| 2025 | Ascend × DeepSeek | 系统论文 | [`ascend_cloudmatrix384`](ascend_cloudmatrix384/) | Serving LLMs on Huawei CloudMatrix384 |
+| 2020 | OpenAI | 论文 | [`openai_gpt3`](openai_gpt3/) | Language Models are Few-Shot Learners |
+| 2021 | OpenAI | 论文 | [`openai_codex`](openai_codex/) | Evaluating Large Language Models Trained on Code |
+| 2022 | OpenAI | 论文 | [`openai_instructgpt`](openai_instructgpt/) | Training Language Models to Follow Instructions with Human Feedback |
+| 2023 | OpenAI | 技术报告/系统卡 | [`openai_gpt4`](openai_gpt4/) | GPT-4 Technical Report |
+| 2025 | OpenAI | 模型卡 | [`openai_gpt_oss`](openai_gpt_oss/) | gpt-oss-120b & gpt-oss-20b |
+| 2024 | Anthropic | 模型卡 | [`anthropic_claude3_model_card`](anthropic_claude3_model_card/) | The Claude 3 Model Family |
+| 2024 | Anthropic | 在线论文 | [`anthropic_scaling_monosemanticity`](anthropic_scaling_monosemanticity/) | Scaling Monosemanticity |
+| 2025 | MiniMax | 技术报告 | [`minimax_01`](minimax_01/) | MiniMax-01 |
+| 2025 | MiniMax | 技术报告 | [`minimax_m1`](minimax_m1/) | MiniMax-M1 |
+| 2025 | Kimi | 技术报告 | [`kimi_k15`](kimi_k15/) | Kimi k1.5 |
+| 2025 | Kimi | 技术报告 | [`kimi_k2`](kimi_k2/) | Kimi K2 |
+| 2024/2025 | Kimi | 系统论文 | [`kimi_mooncake`](kimi_mooncake/) | Mooncake |
 
 ## AI 安全论文
 

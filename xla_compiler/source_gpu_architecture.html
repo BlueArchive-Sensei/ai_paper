@@ -1,0 +1,3668 @@
+
+
+
+
+
+
+
+
+
+<!doctype html>
+<html 
+      lang="en"
+      dir="ltr">
+  <head>
+    <meta name="google-signin-client-id" content="157101835696-ooapojlodmuabs2do2vuhhnf90bccmoi.apps.googleusercontent.com"><meta name="google-signin-scope"
+          content="profile email https://www.googleapis.com/auth/developerprofiles https://www.googleapis.com/auth/developerprofiles.award https://www.googleapis.com/auth/devprofiles.full_control.firstparty"><meta property="og:site_name" content="OpenXLA Project">
+    <meta property="og:type" content="website"><meta name="theme-color" content="#1a344c"><meta charset="utf-8">
+    <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+
+    <link rel="manifest" href="/_pwa/openxla/manifest.json"
+          crossorigin="use-credentials">
+    <link rel="preconnect" href="//www.gstatic.com" crossorigin>
+    <link rel="preconnect" href="//fonts.googleapis.com" crossorigin>
+    <link rel="preconnect" href="//www.google-analytics.com" crossorigin><link rel="stylesheet" href="//fonts.googleapis.com/css?family=Roboto:300,400,400italic,500,500italic,700,700italic|Roboto+Mono:400,500,700&display=swap">
+      <link rel="stylesheet"
+            href="//fonts.googleapis.com/css2?family=Material+Icons&family=Material+Symbols+Outlined&display=block"><link rel="stylesheet" href="https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd/openxla/css/app.css">
+      
+        <link rel="stylesheet" href="https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd/openxla/css/dark-theme.css" disabled>
+      <link rel="shortcut icon" href="https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd/openxla/images/favicon.png">
+    <link rel="apple-touch-icon" href="https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd/openxla/images/touchicon-180.png"><link rel="canonical" href="https://openxla.org/xla/gpu_architecture"><link rel="search" type="application/opensearchdescription+xml"
+            title="OpenXLA Project" href="https://openxla.org/s/opensearch.xml">
+      <link rel="alternate" hreflang="en"
+          href="https://openxla.org/xla/gpu_architecture" /><link rel="alternate" hreflang="x-default" href="https://openxla.org/xla/gpu_architecture" /><link rel="alternate" hreflang="ar"
+          href="https://openxla.org/xla/gpu_architecture?hl=ar" /><link rel="alternate" hreflang="bn"
+          href="https://openxla.org/xla/gpu_architecture?hl=bn" /><link rel="alternate" hreflang="zh-Hans"
+          href="https://openxla.org/xla/gpu_architecture?hl=zh-cn" /><link rel="alternate" hreflang="zh-Hant"
+          href="https://openxla.org/xla/gpu_architecture?hl=zh-tw" /><link rel="alternate" hreflang="fa"
+          href="https://openxla.org/xla/gpu_architecture?hl=fa" /><link rel="alternate" hreflang="fr"
+          href="https://openxla.org/xla/gpu_architecture?hl=fr" /><link rel="alternate" hreflang="de"
+          href="https://openxla.org/xla/gpu_architecture?hl=de" /><link rel="alternate" hreflang="he"
+          href="https://openxla.org/xla/gpu_architecture?hl=he" /><link rel="alternate" hreflang="hi"
+          href="https://openxla.org/xla/gpu_architecture?hl=hi" /><link rel="alternate" hreflang="id"
+          href="https://openxla.org/xla/gpu_architecture?hl=id" /><link rel="alternate" hreflang="it"
+          href="https://openxla.org/xla/gpu_architecture?hl=it" /><link rel="alternate" hreflang="ja"
+          href="https://openxla.org/xla/gpu_architecture?hl=ja" /><link rel="alternate" hreflang="ko"
+          href="https://openxla.org/xla/gpu_architecture?hl=ko" /><link rel="alternate" hreflang="pl"
+          href="https://openxla.org/xla/gpu_architecture?hl=pl" /><link rel="alternate" hreflang="pt-BR"
+          href="https://openxla.org/xla/gpu_architecture?hl=pt-br" /><link rel="alternate" hreflang="ru"
+          href="https://openxla.org/xla/gpu_architecture?hl=ru" /><link rel="alternate" hreflang="es-419"
+          href="https://openxla.org/xla/gpu_architecture?hl=es-419" /><link rel="alternate" hreflang="th"
+          href="https://openxla.org/xla/gpu_architecture?hl=th" /><link rel="alternate" hreflang="tr"
+          href="https://openxla.org/xla/gpu_architecture?hl=tr" /><link rel="alternate" hreflang="vi"
+          href="https://openxla.org/xla/gpu_architecture?hl=vi" /><title>XLA:GPU Architecture Overview &nbsp;|&nbsp; OpenXLA Project</title>
+
+<meta property="og:title" content="XLA:GPU Architecture Overview &nbsp;|&nbsp; OpenXLA Project"><meta property="og:url" content="https://openxla.org/xla/gpu_architecture"><meta property="og:image" content="https://openxla.org/static/site-assets/images/OpenXLA-Logo-RGB-STACK-LIGHT-BG.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="675"><meta property="og:locale" content="en"><meta name="twitter:card" content="summary_large_image"><script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Article",
+    
+    "headline": "XLA:GPU Architecture Overview"
+  }
+</script>
+  
+
+  
+
+  
+
+
+    </head>
+  <body class="color-scheme--light"
+        template="page"
+        theme="openxla-theme"
+        type="article"
+        
+        appearance
+        
+        layout="docs"
+        
+        
+        
+        
+        
+        display-toc
+        pending>
+  
+    <devsite-progress type="indeterminate" id="app-progress"></devsite-progress>
+  
+  
+    <a href="#main-content" class="skip-link button">
+      
+      Skip to main content
+    </a>
+    <section class="devsite-wrapper">
+      <devsite-cookie-notification-bar></devsite-cookie-notification-bar>
+        <devsite-header role="banner">
+  
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="devsite-header--inner" data-nosnippet>
+  <div class="devsite-top-logo-row-wrapper-wrapper">
+    <div class="devsite-top-logo-row-wrapper">
+      <div class="devsite-top-logo-row">
+        <button type="button" id="devsite-hamburger-menu"
+          class="devsite-header-icon-button button-flat material-icons gc-analytics-event"
+          data-category="Site-Wide Custom Events"
+          data-label="Navigation menu button"
+          visually-hidden
+          aria-label="Open menu">
+        </button>
+        
+<div class="devsite-product-name-wrapper">
+
+  <a href="/" class="devsite-site-logo-link gc-analytics-event"
+   data-category="Site-Wide Custom Events" data-label="Site logo" track-type="globalNav"
+   track-name="openXLAProject" track-metadata-position="nav"
+   track-metadata-eventDetail="nav">
+  
+  <picture>
+    
+    <source srcset="https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd/openxla/images/lockup-dark-theme.svg"
+            media="(prefers-color-scheme: dark)"
+            class="devsite-dark-theme">
+    
+    <img src="https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd/openxla/images/lockup.svg" class="devsite-site-logo" alt="OpenXLA Project">
+  </picture>
+  
+</a>
+
+
+
+</div>
+        <div class="devsite-top-logo-row-middle">
+          <div class="devsite-header-upper-tabs">
+            
+              
+              
+  <devsite-tabs class="upper-tabs">
+
+    <nav class="devsite-tabs-wrapper" aria-label="Upper tabs">
+      
+        
+          <tab class="devsite-dropdown
+    
+    devsite-active
+    
+    ">
+  
+    <a href="https://openxla.org/#xla"
+    class="devsite-tabs-content gc-analytics-event "
+      track-metadata-eventdetail="https://openxla.org/#xla"
+    
+       track-type="nav"
+       track-metadata-position="nav - xla"
+       track-metadata-module="primary nav"
+       aria-label="XLA, selected" 
+       
+         
+           data-category="Site-Wide Custom Events"
+         
+           data-label="Tab: XLA"
+         
+           track-name="xla"
+         
+       >
+    XLA
+  
+    </a>
+    
+      <button
+         aria-haspopup="menu"
+         aria-expanded="false"
+         aria-label="Dropdown menu for XLA"
+         track-type="nav"
+         track-metadata-eventdetail="https://openxla.org/#xla"
+         track-metadata-position="nav - xla"
+         track-metadata-module="primary nav"
+         
+          
+            data-category="Site-Wide Custom Events"
+          
+            data-label="Tab: XLA"
+          
+            track-name="xla"
+          
+        
+         class="devsite-tabs-dropdown-toggle devsite-icon devsite-icon-arrow-drop-down"></button>
+    
+  
+  <div class="devsite-tabs-dropdown" role="menu" aria-label="submenu" hidden>
+    <div class="devsite-tabs-dropdown-content">
+      
+      
+        <div class="devsite-tabs-dropdown-column
+                    ">
+          
+            <ul class="devsite-tabs-dropdown-section
+                       ">
+              
+              
+              
+                <li class="devsite-nav-item">
+                  <a href="https://openxla.org/#xla"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://openxla.org/#xla"
+                     track-metadata-position="nav - xla"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      Installation/Usage
+                    </div>
+                    
+                  </a>
+                </li>
+              
+                <li class="devsite-nav-item">
+                  <a href="https://openxla.org/xla"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://openxla.org/xla"
+                     track-metadata-position="nav - xla"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      Documentation
+                    </div>
+                    
+                  </a>
+                </li>
+              
+                <li class="devsite-nav-item">
+                  <a href="https://github.com/openxla/xla"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://github.com/openxla/xla"
+                     track-metadata-position="nav - xla"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      Source Code
+                    </div>
+                    
+                  </a>
+                </li>
+              
+            </ul>
+          
+        </div>
+      
+    </div>
+  </div>
+</tab>
+        
+      
+        
+          <tab class="devsite-dropdown
+    
+    
+    
+    ">
+  
+    <a href="https://openxla.org/#stablehlo"
+    class="devsite-tabs-content gc-analytics-event "
+      track-metadata-eventdetail="https://openxla.org/#stablehlo"
+    
+       track-type="nav"
+       track-metadata-position="nav - stablehlo"
+       track-metadata-module="primary nav"
+       
+       
+         
+           data-category="Site-Wide Custom Events"
+         
+           data-label="Tab: StableHLO"
+         
+           track-name="stablehlo"
+         
+       >
+    StableHLO
+  
+    </a>
+    
+      <button
+         aria-haspopup="menu"
+         aria-expanded="false"
+         aria-label="Dropdown menu for StableHLO"
+         track-type="nav"
+         track-metadata-eventdetail="https://openxla.org/#stablehlo"
+         track-metadata-position="nav - stablehlo"
+         track-metadata-module="primary nav"
+         
+          
+            data-category="Site-Wide Custom Events"
+          
+            data-label="Tab: StableHLO"
+          
+            track-name="stablehlo"
+          
+        
+         class="devsite-tabs-dropdown-toggle devsite-icon devsite-icon-arrow-drop-down"></button>
+    
+  
+  <div class="devsite-tabs-dropdown" role="menu" aria-label="submenu" hidden>
+    <div class="devsite-tabs-dropdown-content">
+      
+      
+        <div class="devsite-tabs-dropdown-column
+                    ">
+          
+            <ul class="devsite-tabs-dropdown-section
+                       ">
+              
+              
+              
+                <li class="devsite-nav-item">
+                  <a href="https://openxla.org/stablehlo"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://openxla.org/stablehlo"
+                     track-metadata-position="nav - stablehlo"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      Documentation
+                    </div>
+                    
+                  </a>
+                </li>
+              
+                <li class="devsite-nav-item">
+                  <a href="https://github.com/openxla/stablehlo"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://github.com/openxla/stablehlo"
+                     track-metadata-position="nav - stablehlo"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      Source Code
+                    </div>
+                    
+                  </a>
+                </li>
+              
+            </ul>
+          
+        </div>
+      
+    </div>
+  </div>
+</tab>
+        
+      
+        
+          <tab class="devsite-dropdown
+    
+    
+    
+    ">
+  
+    <a href="https://openxla.org/#shardy"
+    class="devsite-tabs-content gc-analytics-event "
+      track-metadata-eventdetail="https://openxla.org/#shardy"
+    
+       track-type="nav"
+       track-metadata-position="nav - shardy"
+       track-metadata-module="primary nav"
+       
+       
+         
+           data-category="Site-Wide Custom Events"
+         
+           data-label="Tab: Shardy"
+         
+           track-name="shardy"
+         
+       >
+    Shardy
+  
+    </a>
+    
+      <button
+         aria-haspopup="menu"
+         aria-expanded="false"
+         aria-label="Dropdown menu for Shardy"
+         track-type="nav"
+         track-metadata-eventdetail="https://openxla.org/#shardy"
+         track-metadata-position="nav - shardy"
+         track-metadata-module="primary nav"
+         
+          
+            data-category="Site-Wide Custom Events"
+          
+            data-label="Tab: Shardy"
+          
+            track-name="shardy"
+          
+        
+         class="devsite-tabs-dropdown-toggle devsite-icon devsite-icon-arrow-drop-down"></button>
+    
+  
+  <div class="devsite-tabs-dropdown" role="menu" aria-label="submenu" hidden>
+    <div class="devsite-tabs-dropdown-content">
+      
+      
+        <div class="devsite-tabs-dropdown-column
+                    ">
+          
+            <ul class="devsite-tabs-dropdown-section
+                       ">
+              
+              
+              
+                <li class="devsite-nav-item">
+                  <a href="https://openxla.org/shardy"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://openxla.org/shardy"
+                     track-metadata-position="nav - shardy"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      Documentation
+                    </div>
+                    
+                  </a>
+                </li>
+              
+                <li class="devsite-nav-item">
+                  <a href="https://github.com/openxla/shardy"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://github.com/openxla/shardy"
+                     track-metadata-position="nav - shardy"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      Source Code
+                    </div>
+                    
+                  </a>
+                </li>
+              
+            </ul>
+          
+        </div>
+      
+    </div>
+  </div>
+</tab>
+        
+      
+        
+          <tab class="devsite-dropdown
+    
+    
+    
+    ">
+  
+    <a href="https://openxla.org/#pjrt"
+    class="devsite-tabs-content gc-analytics-event "
+      track-metadata-eventdetail="https://openxla.org/#pjrt"
+    
+       track-type="nav"
+       track-metadata-position="nav - pjrt"
+       track-metadata-module="primary nav"
+       
+       
+         
+           data-category="Site-Wide Custom Events"
+         
+           data-label="Tab: PJRT"
+         
+           track-name="pjrt"
+         
+       >
+    PJRT
+  
+    </a>
+    
+      <button
+         aria-haspopup="menu"
+         aria-expanded="false"
+         aria-label="Dropdown menu for PJRT"
+         track-type="nav"
+         track-metadata-eventdetail="https://openxla.org/#pjrt"
+         track-metadata-position="nav - pjrt"
+         track-metadata-module="primary nav"
+         
+          
+            data-category="Site-Wide Custom Events"
+          
+            data-label="Tab: PJRT"
+          
+            track-name="pjrt"
+          
+        
+         class="devsite-tabs-dropdown-toggle devsite-icon devsite-icon-arrow-drop-down"></button>
+    
+  
+  <div class="devsite-tabs-dropdown" role="menu" aria-label="submenu" hidden>
+    <div class="devsite-tabs-dropdown-content">
+      
+      
+        <div class="devsite-tabs-dropdown-column
+                    ">
+          
+            <ul class="devsite-tabs-dropdown-section
+                       ">
+              
+              
+              
+                <li class="devsite-nav-item">
+                  <a href="https://openxla.org/xla/pjrt"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://openxla.org/xla/pjrt"
+                     track-metadata-position="nav - pjrt"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      Documentation
+                    </div>
+                    
+                  </a>
+                </li>
+              
+                <li class="devsite-nav-item">
+                  <a href="https://github.com/openxla/xla/tree/main/xla/pjrt"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://github.com/openxla/xla/tree/main/xla/pjrt"
+                     track-metadata-position="nav - pjrt"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      Source Code
+                    </div>
+                    
+                  </a>
+                </li>
+              
+            </ul>
+          
+        </div>
+      
+    </div>
+  </div>
+</tab>
+        
+      
+        
+          <tab class="devsite-dropdown
+    
+    
+    
+    ">
+  
+    <a href="https://openxla.org/#xprof"
+    class="devsite-tabs-content gc-analytics-event "
+      track-metadata-eventdetail="https://openxla.org/#xprof"
+    
+       track-type="nav"
+       track-metadata-position="nav - xprof"
+       track-metadata-module="primary nav"
+       
+       
+         
+           data-category="Site-Wide Custom Events"
+         
+           data-label="Tab: XProf"
+         
+           track-name="xprof"
+         
+       >
+    XProf
+  
+    </a>
+    
+      <button
+         aria-haspopup="menu"
+         aria-expanded="false"
+         aria-label="Dropdown menu for XProf"
+         track-type="nav"
+         track-metadata-eventdetail="https://openxla.org/#xprof"
+         track-metadata-position="nav - xprof"
+         track-metadata-module="primary nav"
+         
+          
+            data-category="Site-Wide Custom Events"
+          
+            data-label="Tab: XProf"
+          
+            track-name="xprof"
+          
+        
+         class="devsite-tabs-dropdown-toggle devsite-icon devsite-icon-arrow-drop-down"></button>
+    
+  
+  <div class="devsite-tabs-dropdown" role="menu" aria-label="submenu" hidden>
+    <div class="devsite-tabs-dropdown-content">
+      
+      
+        <div class="devsite-tabs-dropdown-column
+                    ">
+          
+            <ul class="devsite-tabs-dropdown-section
+                       ">
+              
+              
+              
+                <li class="devsite-nav-item">
+                  <a href="https://openxla.org/xprof"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://openxla.org/xprof"
+                     track-metadata-position="nav - xprof"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      Documentation
+                    </div>
+                    
+                  </a>
+                </li>
+              
+                <li class="devsite-nav-item">
+                  <a href="https://github.com/openxla/xprof"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://github.com/openxla/xprof"
+                     track-metadata-position="nav - xprof"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      Source Code
+                    </div>
+                    
+                  </a>
+                </li>
+              
+            </ul>
+          
+        </div>
+      
+    </div>
+  </div>
+</tab>
+        
+      
+        
+          <tab class="devsite-dropdown
+    
+    
+    
+    ">
+  
+    <a href="https://openxla.org/#tokamax"
+    class="devsite-tabs-content gc-analytics-event "
+      track-metadata-eventdetail="https://openxla.org/#tokamax"
+    
+       track-type="nav"
+       track-metadata-position="nav - tokamax"
+       track-metadata-module="primary nav"
+       
+       
+         
+           data-category="Site-Wide Custom Events"
+         
+           data-label="Tab: Tokamax"
+         
+           track-name="tokamax"
+         
+       >
+    Tokamax
+  
+    </a>
+    
+      <button
+         aria-haspopup="menu"
+         aria-expanded="false"
+         aria-label="Dropdown menu for Tokamax"
+         track-type="nav"
+         track-metadata-eventdetail="https://openxla.org/#tokamax"
+         track-metadata-position="nav - tokamax"
+         track-metadata-module="primary nav"
+         
+          
+            data-category="Site-Wide Custom Events"
+          
+            data-label="Tab: Tokamax"
+          
+            track-name="tokamax"
+          
+        
+         class="devsite-tabs-dropdown-toggle devsite-icon devsite-icon-arrow-drop-down"></button>
+    
+  
+  <div class="devsite-tabs-dropdown" role="menu" aria-label="submenu" hidden>
+    <div class="devsite-tabs-dropdown-content">
+      
+      
+        <div class="devsite-tabs-dropdown-column
+                    ">
+          
+            <ul class="devsite-tabs-dropdown-section
+                       ">
+              
+              
+              
+                <li class="devsite-nav-item">
+                  <a href="https://openxla.org/tokamax"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://openxla.org/tokamax"
+                     track-metadata-position="nav - tokamax"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      Documentation
+                    </div>
+                    
+                  </a>
+                </li>
+              
+                <li class="devsite-nav-item">
+                  <a href="https://github.com/openxla/tokamax"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://github.com/openxla/tokamax"
+                     track-metadata-position="nav - tokamax"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      Source Code
+                    </div>
+                    
+                  </a>
+                </li>
+              
+            </ul>
+          
+        </div>
+      
+    </div>
+  </div>
+</tab>
+        
+      
+        
+          <tab class="devsite-dropdown
+    
+    
+    
+    ">
+  
+    <a href="https://openxla.org/#community"
+    class="devsite-tabs-content gc-analytics-event "
+      track-metadata-eventdetail="https://openxla.org/#community"
+    
+       track-type="nav"
+       track-metadata-position="nav - community"
+       track-metadata-module="primary nav"
+       
+       
+         
+           data-category="Site-Wide Custom Events"
+         
+           data-label="Tab: Community"
+         
+           track-name="community"
+         
+       >
+    Community
+  
+    </a>
+    
+      <button
+         aria-haspopup="menu"
+         aria-expanded="false"
+         aria-label="Dropdown menu for Community"
+         track-type="nav"
+         track-metadata-eventdetail="https://openxla.org/#community"
+         track-metadata-position="nav - community"
+         track-metadata-module="primary nav"
+         
+          
+            data-category="Site-Wide Custom Events"
+          
+            data-label="Tab: Community"
+          
+            track-name="community"
+          
+        
+         class="devsite-tabs-dropdown-toggle devsite-icon devsite-icon-arrow-drop-down"></button>
+    
+  
+  <div class="devsite-tabs-dropdown" role="menu" aria-label="submenu" hidden>
+    <div class="devsite-tabs-dropdown-content">
+      
+      
+        <div class="devsite-tabs-dropdown-column
+                    ">
+          
+            <ul class="devsite-tabs-dropdown-section
+                       ">
+              
+              
+              
+                <li class="devsite-nav-item">
+                  <a href="https://openxla.org/events/summer_devlab_2026"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://openxla.org/events/summer_devlab_2026"
+                     track-metadata-position="nav - community"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      AI Systems DevLabs Summer 2026
+                    </div>
+                    
+                  </a>
+                </li>
+              
+                <li class="devsite-nav-item">
+                  <a href="https://openxla.org/events"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://openxla.org/events"
+                     track-metadata-position="nav - community"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      Events & Recordings
+                    </div>
+                    
+                  </a>
+                </li>
+              
+                <li class="devsite-nav-item">
+                  <a href="https://docs.google.com/document/d/161Tigj7rxgduI3kzIp_IsGNDkakIJUkv7E_44WSJ_aw"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://docs.google.com/document/d/161Tigj7rxgduI3kzIp_IsGNDkakIJUkv7E_44WSJ_aw"
+                     track-metadata-position="nav - community"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      Community Meetings
+                    </div>
+                    
+                  </a>
+                </li>
+              
+                <li class="devsite-nav-item">
+                  <a href="https://groups.google.com/a/openxla.org/g/openxla-discuss"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://groups.google.com/a/openxla.org/g/openxla-discuss"
+                     track-metadata-position="nav - community"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      OpenXLA Discuss
+                    </div>
+                    
+                  </a>
+                </li>
+              
+                <li class="devsite-nav-item">
+                  <a href="https://discord.gg/ZKXq7b3V8A"
+                    
+                     track-type="nav"
+                     track-metadata-eventdetail="https://discord.gg/ZKXq7b3V8A"
+                     track-metadata-position="nav - community"
+                     track-metadata-module="tertiary nav"
+                     
+                     tooltip
+                  >
+                    
+                    <div class="devsite-nav-item-title">
+                      Discord
+                    </div>
+                    
+                  </a>
+                </li>
+              
+            </ul>
+          
+        </div>
+      
+    </div>
+  </div>
+</tab>
+        
+      
+        
+          <tab  >
+            
+    <a href="https://openxla.org/#industry-partners"
+    class="devsite-tabs-content gc-analytics-event "
+      track-metadata-eventdetail="https://openxla.org/#industry-partners"
+    
+       track-type="nav"
+       track-metadata-position="nav - industry partners"
+       track-metadata-module="primary nav"
+       
+       
+         
+           data-category="Site-Wide Custom Events"
+         
+           data-label="Tab: Industry Partners"
+         
+           track-name="industry partners"
+         
+       >
+    Industry Partners
+  
+    </a>
+    
+  
+          </tab>
+        
+      
+        
+          <tab  >
+            
+    <a href="https://openxla.org/#contact"
+    class="devsite-tabs-content gc-analytics-event "
+      track-metadata-eventdetail="https://openxla.org/#contact"
+    
+       track-type="nav"
+       track-metadata-position="nav - contact"
+       track-metadata-module="primary nav"
+       
+       
+         
+           data-category="Site-Wide Custom Events"
+         
+           data-label="Tab: Contact"
+         
+           track-name="contact"
+         
+       >
+    Contact
+  
+    </a>
+    
+  
+          </tab>
+        
+      
+    </nav>
+
+  </devsite-tabs>
+
+            
+           </div>
+          
+<devsite-search
+    enable-signin
+    enable-search
+    enable-suggestions
+      enable-query-completion
+    
+    enable-search-summaries
+    project-name="OpenXLA"
+    tenant-name="OpenXLA Project"
+    
+    
+    
+    
+    
+    >
+  <form class="devsite-search-form" action="https://openxla.org/s/results" method="GET">
+    <div class="devsite-search-container">
+      <button type="button"
+              search-open
+              class="devsite-search-button devsite-header-icon-button button-flat material-icons"
+              
+              aria-label="Open search"></button>
+      <div class="devsite-searchbox">
+        <input
+          aria-activedescendant=""
+          aria-autocomplete="list"
+          
+          aria-label="Search"
+          aria-expanded="false"
+          aria-haspopup="listbox"
+          autocomplete="off"
+          class="devsite-search-field devsite-search-query"
+          name="q"
+          
+          placeholder="Search"
+          role="combobox"
+          type="text"
+          value=""
+          >
+          <div class="devsite-search-image material-icons" aria-hidden="true">
+            
+              <svg class="devsite-search-ai-image" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <g clip-path="url(#clip0_6641_386)">
+                    <path d="M19.6 21L13.3 14.7C12.8 15.1 12.225 15.4167 11.575 15.65C10.925 15.8833 10.2333 16 9.5 16C7.68333 16 6.14167 15.375 4.875 14.125C3.625 12.8583 3 11.3167 3 9.5C3 7.68333 3.625 6.15 4.875 4.9C6.14167 3.63333 7.68333 3 9.5 3C10.0167 3 10.5167 3.05833 11 3.175C11.4833 3.275 11.9417 3.43333 12.375 3.65L10.825 5.2C10.6083 5.13333 10.3917 5.08333 10.175 5.05C9.95833 5.01667 9.73333 5 9.5 5C8.25 5 7.18333 5.44167 6.3 6.325C5.43333 7.19167 5 8.25 5 9.5C5 10.75 5.43333 11.8167 6.3 12.7C7.18333 13.5667 8.25 14 9.5 14C10.6667 14 11.6667 13.625 12.5 12.875C13.35 12.1083 13.8417 11.15 13.975 10H15.975C15.925 10.6333 15.7833 11.2333 15.55 11.8C15.3333 12.3667 15.05 12.8667 14.7 13.3L21 19.6L19.6 21ZM17.5 12C17.5 10.4667 16.9667 9.16667 15.9 8.1C14.8333 7.03333 13.5333 6.5 12 6.5C13.5333 6.5 14.8333 5.96667 15.9 4.9C16.9667 3.83333 17.5 2.53333 17.5 0.999999C17.5 2.53333 18.0333 3.83333 19.1 4.9C20.1667 5.96667 21.4667 6.5 23 6.5C21.4667 6.5 20.1667 7.03333 19.1 8.1C18.0333 9.16667 17.5 10.4667 17.5 12Z" fill="#5F6368"/>
+                  </g>
+                <defs>
+                <clipPath id="clip0_6641_386">
+                <rect width="24" height="24" fill="white"/>
+                </clipPath>
+                </defs>
+              </svg>
+            
+          </div>
+          <div class="devsite-search-shortcut-icon-container" aria-hidden="true">
+            <kbd class="devsite-search-shortcut-icon">/</kbd>
+          </div>
+      </div>
+    </div>
+  </form>
+  <button type="button"
+          search-close
+          class="devsite-search-button devsite-header-icon-button button-flat material-icons"
+          
+          aria-label="Close search"></button>
+</devsite-search>
+
+        </div>
+
+        
+
+          
+
+          
+
+          
+
+          <devsite-appearance-selector></devsite-appearance-selector>
+
+          
+<devsite-language-selector>
+  <ul role="presentation">
+    
+    
+    <li role="presentation">
+      <a role="menuitem" lang="en"
+        >English</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="de"
+        >Deutsch</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="es_419"
+        >Español – América Latina</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="fr"
+        >Français</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="id"
+        >Indonesia</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="it"
+        >Italiano</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="pl"
+        >Polski</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="pt_br"
+        >Português – Brasil</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="vi"
+        >Tiếng Việt</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="tr"
+        >Türkçe</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="ru"
+        >Русский</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="he"
+        >עברית</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="ar"
+        >العربيّة</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="fa"
+        >فارسی</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="hi"
+        >हिंदी</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="bn"
+        >বাংলা</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="th"
+        >ภาษาไทย</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="zh_cn"
+        >中文 – 简体</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="zh_tw"
+        >中文 – 繁體</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="ja"
+        >日本語</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="ko"
+        >한국어</a>
+    </li>
+    
+  </ul>
+</devsite-language-selector>
+
+
+          
+
+        
+
+        
+          <devsite-user 
+                        
+                        
+                          enable-profiles
+                        
+                        
+                        id="devsite-user">
+            
+              
+              <span class="button devsite-top-button" aria-hidden="true" visually-hidden>Sign in</span>
+            
+          </devsite-user>
+        
+        
+        
+      </div>
+    </div>
+  </div>
+
+
+
+  <div class="devsite-collapsible-section
+    
+      devsite-header-no-lower-tabs
+    ">
+    <div class="devsite-header-background">
+      
+        
+          <div class="devsite-product-id-row"
+           >
+            <div class="devsite-product-description-row">
+              
+                
+                <div class="devsite-product-id">
+                  
+                  
+                  
+                    <ul class="devsite-breadcrumb-list"
+  >
+  
+  <li class="devsite-breadcrumb-item
+             ">
+    
+    
+    
+      
+        
+  <a href="https://openxla.org/#xla"
+      
+        class="devsite-breadcrumb-link gc-analytics-event"
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Lower Header"
+      
+        data-value="1"
+      
+        track-type="globalNav"
+      
+        track-name="breadcrumb"
+      
+        track-metadata-position="1"
+      
+        track-metadata-eventdetail=""
+      
+    >
+    
+          XLA
+        
+  </a>
+  
+      
+    
+  </li>
+  
+</ul>
+                </div>
+                
+              
+              
+            </div>
+            
+          </div>
+          
+        
+      
+      
+    </div>
+  </div>
+
+</div>
+
+
+
+  
+
+  
+</devsite-header>
+        <devsite-book-nav scrollbars >
+          
+            
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="devsite-book-nav-filter"
+     >
+  <span class="filter-list-icon material-icons" aria-hidden="true"></span>
+  <input type="text"
+         placeholder="Filter"
+         
+         aria-label="Type to filter"
+         role="searchbox">
+  
+  <span class="filter-clear-button hidden"
+        data-title="Clear filter"
+        aria-label="Clear filter"
+        role="button"
+        tabindex="0"></span>
+</div>
+
+<nav class="devsite-book-nav devsite-nav nocontent" data-nosnippet
+     aria-label="Side menu">
+  <div class="devsite-mobile-header">
+    <button type="button"
+            id="devsite-close-nav"
+            class="devsite-header-icon-button button-flat material-icons gc-analytics-event"
+            data-category="Site-Wide Custom Events"
+            data-label="Close navigation"
+            aria-label="Close navigation">
+    </button>
+    <div class="devsite-product-name-wrapper">
+
+  <a href="/" class="devsite-site-logo-link gc-analytics-event"
+   data-category="Site-Wide Custom Events" data-label="Site logo" track-type="globalNav"
+   track-name="openXLAProject" track-metadata-position="nav"
+   track-metadata-eventDetail="nav">
+  
+  <picture>
+    
+    <source srcset="https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd/openxla/images/lockup-dark-theme.svg"
+            media="(prefers-color-scheme: dark)"
+            class="devsite-dark-theme">
+    
+    <img src="https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd/openxla/images/lockup.svg" class="devsite-site-logo" alt="OpenXLA Project">
+  </picture>
+  
+</a>
+
+
+</div>
+  </div>
+
+  <div class="devsite-book-nav-wrapper">
+    <div class="devsite-mobile-nav-top">
+      
+        <ul class="devsite-nav-list">
+          
+            <li class="devsite-nav-item">
+              
+  
+  <a href="/#xla"
+    
+       class="devsite-nav-title gc-analytics-event
+              devsite-nav-has-children
+              devsite-nav-active"
+    
+
+    
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Tab: XLA"
+      
+        track-name="xla"
+      
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: XLA"
+     track-type="globalNav"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      XLA
+   </span>
+    
+    <span class="devsite-nav-icon material-icons" data-icon="forward"
+          >
+    </span>
+    
+  
+  </a>
+  
+
+  
+    <ul class="devsite-nav-responsive-tabs devsite-nav-has-menu
+               ">
+      
+<li class="devsite-nav-item">
+
+  
+  <span
+    
+       class="devsite-nav-title"
+       tooltip
+    
+    
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Tab: XLA"
+      
+        track-name="xla"
+      
+    >
+  
+    <span class="devsite-nav-text" tooltip menu="XLA">
+      More
+   </span>
+    
+    <span class="devsite-nav-icon material-icons" data-icon="forward"
+          menu="XLA">
+    </span>
+    
+  
+  </span>
+  
+
+</li>
+
+    </ul>
+  
+              
+            </li>
+          
+            <li class="devsite-nav-item">
+              
+  
+  <a href="/#stablehlo"
+    
+       class="devsite-nav-title gc-analytics-event
+              devsite-nav-has-children
+              "
+    
+
+    
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Tab: StableHLO"
+      
+        track-name="stablehlo"
+      
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: StableHLO"
+     track-type="globalNav"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      StableHLO
+   </span>
+    
+    <span class="devsite-nav-icon material-icons" data-icon="forward"
+          >
+    </span>
+    
+  
+  </a>
+  
+
+  
+    <ul class="devsite-nav-responsive-tabs devsite-nav-has-menu
+               ">
+      
+<li class="devsite-nav-item">
+
+  
+  <span
+    
+       class="devsite-nav-title"
+       tooltip
+    
+    
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Tab: StableHLO"
+      
+        track-name="stablehlo"
+      
+    >
+  
+    <span class="devsite-nav-text" tooltip menu="StableHLO">
+      More
+   </span>
+    
+    <span class="devsite-nav-icon material-icons" data-icon="forward"
+          menu="StableHLO">
+    </span>
+    
+  
+  </span>
+  
+
+</li>
+
+    </ul>
+  
+              
+            </li>
+          
+            <li class="devsite-nav-item">
+              
+  
+  <a href="/#shardy"
+    
+       class="devsite-nav-title gc-analytics-event
+              devsite-nav-has-children
+              "
+    
+
+    
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Tab: Shardy"
+      
+        track-name="shardy"
+      
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Shardy"
+     track-type="globalNav"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Shardy
+   </span>
+    
+    <span class="devsite-nav-icon material-icons" data-icon="forward"
+          >
+    </span>
+    
+  
+  </a>
+  
+
+  
+    <ul class="devsite-nav-responsive-tabs devsite-nav-has-menu
+               ">
+      
+<li class="devsite-nav-item">
+
+  
+  <span
+    
+       class="devsite-nav-title"
+       tooltip
+    
+    
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Tab: Shardy"
+      
+        track-name="shardy"
+      
+    >
+  
+    <span class="devsite-nav-text" tooltip menu="Shardy">
+      More
+   </span>
+    
+    <span class="devsite-nav-icon material-icons" data-icon="forward"
+          menu="Shardy">
+    </span>
+    
+  
+  </span>
+  
+
+</li>
+
+    </ul>
+  
+              
+            </li>
+          
+            <li class="devsite-nav-item">
+              
+  
+  <a href="/#pjrt"
+    
+       class="devsite-nav-title gc-analytics-event
+              devsite-nav-has-children
+              "
+    
+
+    
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Tab: PJRT"
+      
+        track-name="pjrt"
+      
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: PJRT"
+     track-type="globalNav"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      PJRT
+   </span>
+    
+    <span class="devsite-nav-icon material-icons" data-icon="forward"
+          >
+    </span>
+    
+  
+  </a>
+  
+
+  
+    <ul class="devsite-nav-responsive-tabs devsite-nav-has-menu
+               ">
+      
+<li class="devsite-nav-item">
+
+  
+  <span
+    
+       class="devsite-nav-title"
+       tooltip
+    
+    
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Tab: PJRT"
+      
+        track-name="pjrt"
+      
+    >
+  
+    <span class="devsite-nav-text" tooltip menu="PJRT">
+      More
+   </span>
+    
+    <span class="devsite-nav-icon material-icons" data-icon="forward"
+          menu="PJRT">
+    </span>
+    
+  
+  </span>
+  
+
+</li>
+
+    </ul>
+  
+              
+            </li>
+          
+            <li class="devsite-nav-item">
+              
+  
+  <a href="/#xprof"
+    
+       class="devsite-nav-title gc-analytics-event
+              devsite-nav-has-children
+              "
+    
+
+    
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Tab: XProf"
+      
+        track-name="xprof"
+      
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: XProf"
+     track-type="globalNav"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      XProf
+   </span>
+    
+    <span class="devsite-nav-icon material-icons" data-icon="forward"
+          >
+    </span>
+    
+  
+  </a>
+  
+
+  
+    <ul class="devsite-nav-responsive-tabs devsite-nav-has-menu
+               ">
+      
+<li class="devsite-nav-item">
+
+  
+  <span
+    
+       class="devsite-nav-title"
+       tooltip
+    
+    
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Tab: XProf"
+      
+        track-name="xprof"
+      
+    >
+  
+    <span class="devsite-nav-text" tooltip menu="XProf">
+      More
+   </span>
+    
+    <span class="devsite-nav-icon material-icons" data-icon="forward"
+          menu="XProf">
+    </span>
+    
+  
+  </span>
+  
+
+</li>
+
+    </ul>
+  
+              
+            </li>
+          
+            <li class="devsite-nav-item">
+              
+  
+  <a href="/#tokamax"
+    
+       class="devsite-nav-title gc-analytics-event
+              devsite-nav-has-children
+              "
+    
+
+    
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Tab: Tokamax"
+      
+        track-name="tokamax"
+      
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Tokamax"
+     track-type="globalNav"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Tokamax
+   </span>
+    
+    <span class="devsite-nav-icon material-icons" data-icon="forward"
+          >
+    </span>
+    
+  
+  </a>
+  
+
+  
+    <ul class="devsite-nav-responsive-tabs devsite-nav-has-menu
+               ">
+      
+<li class="devsite-nav-item">
+
+  
+  <span
+    
+       class="devsite-nav-title"
+       tooltip
+    
+    
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Tab: Tokamax"
+      
+        track-name="tokamax"
+      
+    >
+  
+    <span class="devsite-nav-text" tooltip menu="Tokamax">
+      More
+   </span>
+    
+    <span class="devsite-nav-icon material-icons" data-icon="forward"
+          menu="Tokamax">
+    </span>
+    
+  
+  </span>
+  
+
+</li>
+
+    </ul>
+  
+              
+            </li>
+          
+            <li class="devsite-nav-item">
+              
+  
+  <a href="/#community"
+    
+       class="devsite-nav-title gc-analytics-event
+              devsite-nav-has-children
+              "
+    
+
+    
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Tab: Community"
+      
+        track-name="community"
+      
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Community"
+     track-type="globalNav"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Community
+   </span>
+    
+    <span class="devsite-nav-icon material-icons" data-icon="forward"
+          >
+    </span>
+    
+  
+  </a>
+  
+
+  
+    <ul class="devsite-nav-responsive-tabs devsite-nav-has-menu
+               ">
+      
+<li class="devsite-nav-item">
+
+  
+  <span
+    
+       class="devsite-nav-title"
+       tooltip
+    
+    
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Tab: Community"
+      
+        track-name="community"
+      
+    >
+  
+    <span class="devsite-nav-text" tooltip menu="Community">
+      More
+   </span>
+    
+    <span class="devsite-nav-icon material-icons" data-icon="forward"
+          menu="Community">
+    </span>
+    
+  
+  </span>
+  
+
+</li>
+
+    </ul>
+  
+              
+            </li>
+          
+            <li class="devsite-nav-item">
+              
+  
+  <a href="/#industry-partners"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Tab: Industry Partners"
+      
+        track-name="industry partners"
+      
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Industry Partners"
+     track-type="globalNav"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Industry Partners
+   </span>
+    
+  
+  </a>
+  
+
+  
+              
+            </li>
+          
+            <li class="devsite-nav-item">
+              
+  
+  <a href="/#contact"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Tab: Contact"
+      
+        track-name="contact"
+      
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Contact"
+     track-type="globalNav"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Contact
+   </span>
+    
+  
+  </a>
+  
+
+  
+              
+            </li>
+          
+          
+          
+        </ul>
+      
+    </div>
+    
+      <div class="devsite-mobile-nav-bottom">
+        
+          
+          <ul class="devsite-nav-list" menu="_book">
+            <li class="devsite-nav-item
+           devsite-nav-heading"><div class="devsite-nav-title devsite-nav-title-no-path">
+        <span class="devsite-nav-text" tooltip>XLA documentation</span>
+      </div></li>
+
+  <li class="devsite-nav-item
+           devsite-nav-heading"><div class="devsite-nav-title devsite-nav-title-no-path">
+        <span class="devsite-nav-text" tooltip>Getting started</span>
+      </div><ul class="devsite-nav-section"><li class="devsite-nav-item"><a href="/xla"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Introduction</span></a></li><li class="devsite-nav-item"><a href="/xla/architecture"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>XLA architecture overview</span></a></li><li class="devsite-nav-item"><a href="/xla/terminology"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>XLA terminology</span></a></li><li class="devsite-nav-item"><a href="/xla/flags_guidance"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>XLA flags guidance</span></a></li></ul></li>
+
+  <li class="devsite-nav-item
+           devsite-nav-heading"><div class="devsite-nav-title devsite-nav-title-no-path">
+        <span class="devsite-nav-text" tooltip>Topical guides</span>
+      </div><ul class="devsite-nav-section"><li class="devsite-nav-item"><a href="/xla/hlo_to_thunks"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Journey from HLO to executable</span></a></li><li class="devsite-nav-item
+           devsite-nav-heading"><div class="devsite-nav-title devsite-nav-title-no-path">
+        <span class="devsite-nav-text" tooltip>XLA Ops</span>
+      </div></li><li class="devsite-nav-item"><a href="/xla/operation_semantics"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Operation semantics</span></a></li><li class="devsite-nav-item"><a href="/xla/hlo_passes"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>HLO Passes</span></a></li><li class="devsite-nav-item"><a href="/xla/aliasing"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Aliasing</span></a></li><li class="devsite-nav-item"><a href="/xla/async_ops"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Async HLO instructions</span></a></li><li class="devsite-nav-item
+           devsite-nav-heading"><div class="devsite-nav-title devsite-nav-title-no-path">
+        <span class="devsite-nav-text" tooltip>Data representation</span>
+      </div></li><li class="devsite-nav-item"><a href="/xla/shapes"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Shapes and layout</span></a></li><li class="devsite-nav-item"><a href="/xla/tiled_layout"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Tiled layout</span></a></li><li class="devsite-nav-item"><a href="/xla/symbolic_expression"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Symbolic expressions and maps</span></a></li><li class="devsite-nav-item"><a href="/xla/indexing"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Indexing Analysis</span></a></li><li class="devsite-nav-item"><a href="/xla/broadcasting"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Broadcasting</span></a></li><li class="devsite-nav-item
+           devsite-nav-heading"><div class="devsite-nav-title devsite-nav-title-no-path">
+        <span class="devsite-nav-text" tooltip>GPU backend</span>
+      </div></li><li class="devsite-nav-item"><a href="/xla/gpu_architecture"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>GPU architecture</span></a></li><li class="devsite-nav-item"><a href="/xla/emitters"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>GPU Emitters</span></a></li><li class="devsite-nav-item"><a href="/xla/persisted_autotuning"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Persisted autotuning</span></a></li><li class="devsite-nav-item"><a href="/xla/determinism"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Determinism (GPU)</span></a></li><li class="devsite-nav-item"><a href="/xla/gpu_aot"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>GPU AOT compilation</span></a></li><li class="devsite-nav-item"><a href="/xla/gpu_aot_compatibility"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>GPU AOT compatibility</span></a></li><li class="devsite-nav-item
+           devsite-nav-heading"><div class="devsite-nav-title devsite-nav-title-no-path">
+        <span class="devsite-nav-text" tooltip>TPU backend</span>
+      </div></li><li class="devsite-nav-item"><a href="/xla/sparsecore"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Sparsecore (embeddings)</span></a></li><li class="devsite-nav-item"><a href="/xla/megascale/overview"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Megascale</span></a></li><li class="devsite-nav-item
+           devsite-nav-heading"><div class="devsite-nav-title devsite-nav-title-no-path">
+        <span class="devsite-nav-text" tooltip>Performance</span>
+      </div></li><li class="devsite-nav-item"><a href="/xla/lhs_cost_model"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>LHS Cost Model</span></a></li><li class="devsite-nav-item"><a href="/xla/effort_levels"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Effort Levels</span></a></li><li class="devsite-nav-item
+           devsite-nav-heading"><div class="devsite-nav-title devsite-nav-title-no-path">
+        <span class="devsite-nav-text" tooltip>Advanced guides</span>
+      </div></li><li class="devsite-nav-item"><a href="/xla/custom_call"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Write custom calls</span></a></li><li class="devsite-nav-item"><a href="/xla/developing_new_backend"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Develop a new backend for XLA</span></a></li></ul></li>
+
+  <li class="devsite-nav-item
+           devsite-nav-heading"><div class="devsite-nav-title devsite-nav-title-no-path">
+        <span class="devsite-nav-text" tooltip>Debugging</span>
+      </div><ul class="devsite-nav-section"><li class="devsite-nav-item
+           devsite-nav-heading"><div class="devsite-nav-title devsite-nav-title-no-path">
+        <span class="devsite-nav-text" tooltip>XLA tooling</span>
+      </div></li><li class="devsite-nav-item"><a href="/xla/hlo_dumps"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Dump HLO computations</span></a></li><li class="devsite-nav-item"><a href="/xla/errors_overview"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Errors overview</span></a></li><li class="devsite-nav-item"><a href="/xla/error_codes"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Error codes</span></a></li><li class="devsite-nav-item"><a href="/xla/oom_debugging"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Debug OOM errors with XProf</span></a></li><li class="devsite-nav-item"><a href="/xla/megascale/debugging_workflow"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Debug Megascale</span></a></li><li class="devsite-nav-item"><a href="/xla/megascale/performance_tuning"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Tune Megascale</span></a></li><li class="devsite-nav-item
+           devsite-nav-heading"><div class="devsite-nav-title devsite-nav-title-no-path">
+        <span class="devsite-nav-text" tooltip>XLA tools</span>
+      </div></li><li class="devsite-nav-item"><a href="/xla/tools"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>XLA tooling</span></a></li><li class="devsite-nav-item"><a href="/xla/tools_multihost_hlo_runner"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Multi-host HLO runner</span></a></li><li class="devsite-nav-item"><a href="/xla/hlo_isolation"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>HLO Isolation tool for numeric issues</span></a></li></ul></li>
+
+  <li class="devsite-nav-item
+           devsite-nav-heading"><div class="devsite-nav-title devsite-nav-title-no-path">
+        <span class="devsite-nav-text" tooltip>Contributing</span>
+      </div><ul class="devsite-nav-section"><li class="devsite-nav-item"><a href="/xla/developer_guide"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Developer guide</span></a></li><li class="devsite-nav-item"><a href="/xla/developer_environment"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Set up development environment</span></a></li><li class="devsite-nav-item"><a href="/xla/build_from_source"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Build from source</span></a></li><li class="devsite-nav-item"><a href="/xla/test_hlo_passes"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Testing HLO passes</span></a></li><li class="devsite-nav-item"><a href="/xla/avoiding_ifdefs"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Avoiding #ifdefs</span></a></li><li class="devsite-nav-item"><a href="/xla/copybara"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Copybara quirks</span></a></li></ul></li>
+
+  <li class="devsite-nav-item
+           devsite-nav-heading"><div class="devsite-nav-title devsite-nav-title-no-path">
+        <span class="devsite-nav-text" tooltip>PJRT plugins</span>
+      </div><ul class="devsite-nav-section"><li class="devsite-nav-item"><a href="/xla/pjrt/overview"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>PJRT - Uniform Device API</span></a></li><li class="devsite-nav-item"><a href="/xla/pjrt/cpp_api_overview"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>PJRT C++ API overview</span></a></li><li class="devsite-nav-item"><a href="/xla/pjrt/pjrt_integration"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Develop a new PJRT plugin</span></a></li><li class="devsite-nav-item"><a href="/xla/pjrt/examples"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>PJRT examples</span></a></li></ul></li>
+
+  <li class="devsite-nav-item
+           devsite-nav-heading"><div class="devsite-nav-title devsite-nav-title-no-path">
+        <span class="devsite-nav-text" tooltip>XLA frontends</span>
+      </div><ul class="devsite-nav-section"><li class="devsite-nav-item
+           devsite-nav-external"><a href="https://docs.jax.dev/en/latest/notebooks/thinking_in_jax.html"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>JAX</span><span class="devsite-nav-icon material-icons"
+        data-icon="external"
+        data-title="External"
+        aria-hidden="true"></span></a></li><li class="devsite-nav-item
+           devsite-nav-external"><a href="https://docs.pytorch.org/xla/release/r2.8/index.html#pytorch-xla-documentation"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>PyTorch/XLA</span><span class="devsite-nav-icon material-icons"
+        data-icon="external"
+        data-title="External"
+        aria-hidden="true"></span></a></li><li class="devsite-nav-item
+           devsite-nav-heading"><div class="devsite-nav-title devsite-nav-title-no-path">
+        <span class="devsite-nav-text" tooltip>TensorFlow</span>
+      </div></li><li class="devsite-nav-item"><a href="/xla/tf2xla"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Use XLA in TensorFlow</span></a></li><li class="devsite-nav-item"><a href="/xla/tf2xla/tutorials/autoclustering_xla"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Autoclustering tutorial</span></a></li><li class="devsite-nav-item"><a href="/xla/tf2xla/tutorials/jit_compile"
+        class="devsite-nav-title"
+      ><span class="devsite-nav-text" tooltip>Use XLA with tf.function</span></a></li></ul></li>
+          </ul>
+        
+        
+          
+    
+      
+      <ul class="devsite-nav-list" menu="XLA"
+          aria-label="Side menu" hidden>
+        
+          
+            
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="/#xla"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Installation/Usage"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Installation/Usage
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="/xla"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Documentation"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Documentation
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="https://github.com/openxla/xla"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Source Code"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Source Code
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+          
+        
+      </ul>
+    
+  
+    
+      
+      <ul class="devsite-nav-list" menu="StableHLO"
+          aria-label="Side menu" hidden>
+        
+          
+            
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="/stablehlo"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Documentation"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Documentation
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="https://github.com/openxla/stablehlo"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Source Code"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Source Code
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+          
+        
+      </ul>
+    
+  
+    
+      
+      <ul class="devsite-nav-list" menu="Shardy"
+          aria-label="Side menu" hidden>
+        
+          
+            
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="/shardy"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Documentation"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Documentation
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="https://github.com/openxla/shardy"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Source Code"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Source Code
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+          
+        
+      </ul>
+    
+  
+    
+      
+      <ul class="devsite-nav-list" menu="PJRT"
+          aria-label="Side menu" hidden>
+        
+          
+            
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="/xla/pjrt"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Documentation"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Documentation
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="https://github.com/openxla/xla/tree/main/xla/pjrt"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Source Code"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Source Code
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+          
+        
+      </ul>
+    
+  
+    
+      
+      <ul class="devsite-nav-list" menu="XProf"
+          aria-label="Side menu" hidden>
+        
+          
+            
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="/xprof"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Documentation"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Documentation
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="https://github.com/openxla/xprof"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Source Code"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Source Code
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+          
+        
+      </ul>
+    
+  
+    
+      
+      <ul class="devsite-nav-list" menu="Tokamax"
+          aria-label="Side menu" hidden>
+        
+          
+            
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="/tokamax"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Documentation"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Documentation
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="https://github.com/openxla/tokamax"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Source Code"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Source Code
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+          
+        
+      </ul>
+    
+  
+    
+      
+      <ul class="devsite-nav-list" menu="Community"
+          aria-label="Side menu" hidden>
+        
+          
+            
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="/events/summer_devlab_2026"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: AI Systems DevLabs Summer 2026"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      AI Systems DevLabs Summer 2026
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="/events"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Events &amp; Recordings"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Events &amp; Recordings
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="https://docs.google.com/document/d/161Tigj7rxgduI3kzIp_IsGNDkakIJUkv7E_44WSJ_aw"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Community Meetings"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Community Meetings
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="https://groups.google.com/a/openxla.org/g/openxla-discuss"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: OpenXLA Discuss"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      OpenXLA Discuss
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+              
+<li class="devsite-nav-item">
+
+  
+  <a href="https://discord.gg/ZKXq7b3V8A"
+    
+       class="devsite-nav-title gc-analytics-event
+              
+              "
+    
+
+    
+     data-category="Site-Wide Custom Events"
+     data-label="Responsive Tab: Discord"
+     track-type="navMenu"
+     track-metadata-eventDetail="globalMenu"
+     track-metadata-position="nav">
+  
+    <span class="devsite-nav-text" tooltip >
+      Discord
+   </span>
+    
+  
+  </a>
+  
+
+</li>
+
+            
+          
+        
+      </ul>
+    
+  
+    
+  
+    
+  
+        
+        
+          
+    
+  
+        
+      </div>
+    
+  </div>
+</nav>
+          
+        </devsite-book-nav>
+      
+      <section id="gc-wrapper">
+        <main role="main" id="main-content" class="devsite-main-content"
+            
+              has-book-nav
+              has-sidebar
+            >
+          <div class="devsite-sidebar">
+            <div class="devsite-sidebar-content">
+                
+                <devsite-toc class="devsite-nav"
+                            role="navigation"
+                            aria-label="On this page"
+                            depth="2"
+                            scrollbars
+                            data-nosnippet
+                  ></devsite-toc>
+                <devsite-recommendations-sidebar class="nocontent devsite-nav" data-nosnippet>
+                </devsite-recommendations-sidebar>
+            </div>
+          </div>
+          <devsite-content>
+            
+              
+
+
+
+
+
+
+
+
+
+
+<article class="devsite-article">
+  
+  
+  
+  
+  
+
+  <div class="devsite-article-meta nocontent" role="navigation" data-nosnippet>
+    
+    
+    <ul class="devsite-breadcrumb-list"
+  
+    aria-label="Breadcrumb">
+  
+  <li class="devsite-breadcrumb-item
+             ">
+    
+    
+    
+      
+        
+  <a href="https://openxla.org/"
+      
+        class="devsite-breadcrumb-link gc-analytics-event"
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Breadcrumbs"
+      
+        data-value="1"
+      
+        track-type="globalNav"
+      
+        track-name="breadcrumb"
+      
+        track-metadata-position="1"
+      
+        track-metadata-eventdetail="OpenXLA"
+      
+    >
+    
+          OpenXLA
+        
+  </a>
+  
+      
+    
+  </li>
+  
+  <li class="devsite-breadcrumb-item
+             ">
+    
+      
+      <div class="devsite-breadcrumb-guillemet material-icons" aria-hidden="true"></div>
+    
+    
+    
+      
+        
+  <a href="https://openxla.org/#xla"
+      
+        class="devsite-breadcrumb-link gc-analytics-event"
+      
+        data-category="Site-Wide Custom Events"
+      
+        data-label="Breadcrumbs"
+      
+        data-value="2"
+      
+        track-type="globalNav"
+      
+        track-name="breadcrumb"
+      
+        track-metadata-position="2"
+      
+        track-metadata-eventdetail=""
+      
+    >
+    
+          XLA
+        
+  </a>
+  
+      
+    
+  </li>
+  
+</ul>
+    
+      
+    <devsite-thumb-rating position="header">
+    </devsite-thumb-rating>
+  
+    
+  </div>
+  
+    <devsite-feedback
+  position="header"
+  project-name="OpenXLA"
+  product-id="5319284"
+  bucket=""
+  context=""
+  version="t-devsite-webserver-20260924-r00-rc00.480666405826496382"
+  data-label="Send Feedback Button"
+  track-type="feedback"
+  track-name="sendFeedbackLink"
+  track-metadata-position="header"
+  class="nocontent"
+  data-nosnippet
+  
+  
+  
+    project-icon="https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd/openxla/images/touchicon-180.png"
+  
+  
+  
+  >
+
+  <button>
+  
+    
+    Send feedback
+  
+  </button>
+</devsite-feedback>
+  
+    <h1 class="devsite-page-title" tabindex="-1">
+      XLA:GPU Architecture Overview<devsite-actions hidden data-nosnippet><devsite-feature-tooltip
+      ack-key="AckCollectionsBookmarkTooltipDismiss"
+      analytics-category="Site-Wide Custom Events"
+      analytics-action-show="Callout Profile displayed"
+      analytics-action-close="Callout Profile dismissed"
+      analytics-label="Create Collection Callout"
+      class="devsite-page-bookmark-tooltip nocontent"
+      data-nosnippet
+      dismiss-button="true"
+      id="devsite-collections-dropdown"
+      
+      dismiss-button-text="Dismiss"
+
+      
+      close-button-text="Got it">
+
+    
+    
+      <devsite-bookmark></devsite-bookmark>
+    
+
+    <span slot="popout-heading">
+      
+      Stay organized with collections
+    </span>
+    <span slot="popout-contents">
+      
+      Save and categorize content based on your preferences.
+    </span>
+  </devsite-feature-tooltip></devsite-actions>
+  
+      
+    </h1>
+  <div class="devsite-page-title-meta"><devsite-view-release-notes></devsite-view-release-notes></div>
+  
+
+  <devsite-toc class="devsite-nav"
+    depth="2"
+    devsite-toc-embedded
+    >
+  </devsite-toc>
+  
+    
+  <div class="devsite-article-body clearfix
+  ">
+
+  
+    
+    
+<p></p>
+
+<!-- DO NOT EDIT! Automatically generated file. -->
+
+
+
+<h1 id="introduction" class="page-title" data-text="Introduction" tabindex="-1">Introduction</h1>
+
+<p>XLA is a hardware- and framework- domain-specific compiler for linear algebra,
+offering best-in-class performance. JAX, TF, Pytorch and others use XLA by
+converting the user input to
+<a href="https://github.com/openxla/stablehlo/tree/main">StableHLO</a> (“high-level
+operation”: a set of ~100 statically shaped instructions like addition,
+subtraction, matmul, etc) operation set, from which XLA produces optimized code
+for a variety of backends:</p>
+
+<p><img src="https://openxla.org/xla/images/xla_hardware.png" alt></p>
+
+<p>During the execution, the frameworks invoke the
+<a href="https://opensource.googleblog.com/2023/05/pjrt-simplifying-ml-hardware-and-framework-integration.html">PJRT runtime</a>
+API, which lets the frameworks perform the operation “populate the specified
+buffers using a given StableHLO program on a specific device”.</p>
+
+<h1 id="xlagpu_pipeline" class="page-title" data-text="XLA:GPU Pipeline" tabindex="-1">XLA:GPU Pipeline</h1>
+
+<p>XLA:GPU uses a combination of “native” (PTX, via LLVM) emitters and TritonIR
+emitters to generate high-performance GPU kernels (blue color indicates 3P
+components):</p>
+
+<p><img src="https://openxla.org/xla/images/gpu_pipeline.png" alt></p>
+
+<h2 id="running_example_jax" data-text="Running Example: JAX" tabindex="-1">Running Example: JAX</h2>
+
+<p>To illustrate the pipeline, let’s start with a running example in JAX, which
+computes a matmul combined with multiplication by a constant and negation:</p>
+<div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded syntax="scdoc" syntax-guessed><code translate="no" dir="ltr">def f(a, b):
+    return -((a @ b) * 0.125)
+</code></pre></devsite-code>
+<p>We can inspect the HLO generated by the function:</p>
+<div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded syntax="Carbon" syntax-guessed><code translate="no" dir="ltr"><span class="devsite-syntax-nx">M</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-mi">1024</span>
+<span class="devsite-syntax-nx">K</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-mi">512</span>
+<span class="devsite-syntax-nx">N</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-mi">2048</span>
+<span class="devsite-syntax-nx">key</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nx">jax</span><span class="devsite-syntax-p">.</span><span class="devsite-syntax-nx">random</span><span class="devsite-syntax-p">.</span><span class="devsite-syntax-nx">PRNGKey</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-mi">1701</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-nx">a</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nx">jax</span><span class="devsite-syntax-p">.</span><span class="devsite-syntax-nx">random</span><span class="devsite-syntax-p">.</span><span class="devsite-syntax-nx">randint</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-nx">key</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-nx">M</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nx">K</span><span class="devsite-syntax-p">),</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nx">dtype</span><span class="devsite-syntax-p">=</span><span class="devsite-syntax-nx">jax</span><span class="devsite-syntax-p">.</span><span class="devsite-syntax-nx">numpy</span><span class="devsite-syntax-p">.</span><span class="devsite-syntax-nx">int8</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nx">minval</span><span class="devsite-syntax-p">=</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nx">maxval</span><span class="devsite-syntax-p">=</span><span class="devsite-syntax-mi">255</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-nx">b</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nx">jax</span><span class="devsite-syntax-p">.</span><span class="devsite-syntax-nx">random</span><span class="devsite-syntax-p">.</span><span class="devsite-syntax-nx">normal</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-nx">key</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-nx">K</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nx">N</span><span class="devsite-syntax-p">),</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nx">dtype</span><span class="devsite-syntax-p">=</span><span class="devsite-syntax-nx">jax</span><span class="devsite-syntax-p">.</span><span class="devsite-syntax-nx">dtypes</span><span class="devsite-syntax-p">.</span><span class="devsite-syntax-nx">bfloat16</span><span class="devsite-syntax-p">)</span>
+
+<span class="devsite-syntax-nx">print</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-nx">jax</span><span class="devsite-syntax-p">.</span><span class="devsite-syntax-nx">xla_computation</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-nx">f</span><span class="devsite-syntax-p">)(</span><span class="devsite-syntax-nx">a</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nx">b</span><span class="devsite-syntax-p">).</span><span class="devsite-syntax-nx">as_hlo_text</span><span class="devsite-syntax-p">())</span>
+</code></pre></devsite-code>
+<p>which generates:</p>
+<div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded syntax="GDScript" syntax-guessed><code translate="no" dir="ltr"><span class="devsite-syntax-n">HloModule</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">xla_computation_f</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">entry_computation_layout</span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-p">{(</span><span class="devsite-syntax-n">s8</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">1024</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">512</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">},</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">512</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">2048</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">})</span><span class="devsite-syntax-o">-</span>&gt;<span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">1024</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">2048</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">})}</span>
+
+<span class="devsite-syntax-n">ENTRY</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">main</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-mi">10</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">{</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-n">Arg_0</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">s8</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">1024</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">512</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">parameter</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-nb">convert</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-mi">5</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">1024</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">512</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nb">convert</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">Arg_0</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-n">Arg_1</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">512</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">2048</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">parameter</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-n">dot</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-mi">6</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">1024</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">2048</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">dot</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-nb">convert</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-mi">5</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">Arg_1</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">),</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">lhs_contracting_dims</span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-p">{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">},</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">rhs_contracting_dims</span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-p">{</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-n">constant</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[]</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">constant</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-mf">0.125</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-n">broadcast</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-mi">4</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">1024</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">2048</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">broadcast</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">constant</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">),</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">dimensions</span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-p">{}</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-n">multiply</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-mi">7</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">1024</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">2048</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">multiply</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">dot</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-mi">6</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">broadcast</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-mi">4</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-n">ROOT</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">negate</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-mi">8</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">1024</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">2048</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">negate</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">multiply</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-mi">7</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-p">}</span>
+</code></pre></devsite-code>
+<p>We can visualize the input HLO computation as well, using
+<code translate="no" dir="ltr">jax.xla_computation(f)(a, b).as_hlo_dot_graph()</code>:</p>
+
+<p><img src="https://openxla.org/xla/images/lowered_hlo.png" alt></p>
+
+<h2 id="optimizations_on_hlo_key_components" data-text="Optimizations on HLO: Key Components" tabindex="-1">Optimizations on HLO: Key Components</h2>
+
+<p>A number of notable optimization passes happen on HLO, as HLO-&gt;HLO rewrites.</p>
+
+<h3 id="spmd_partitioner" data-text="SPMD Partitioner" tabindex="-1">SPMD Partitioner</h3>
+
+<p>The XLA SPMD partitioner, as described in
+<a href="https://arxiv.org/pdf/2105.04663.pdf">GSPMD: General and Scalable Parallelization for MLComputation Graphs</a>,
+consumes HLO with sharding annotations (produced e.g. by <code translate="no" dir="ltr">jax.pjit</code>), and
+produces a sharded HLO which can then run on a number of hosts and devices.
+Apart from partitioning, the SPMD attempts to optimize HLO for an optimal
+execution schedule,
+<a href="https://dl.acm.org/doi/pdf/10.1145/3567955.3567959">overlapping</a> computation
+and communication between the nodes.</p>
+
+<h4 id="example" data-text="Example" tabindex="-1">Example</h4>
+
+<p>Consider starting from a simple JAX program sharded across two devices:</p>
+<div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded syntax="GDScript" syntax-guessed><code translate="no" dir="ltr"><span class="devsite-syntax-c1"># Defines a mesh with two axes called ‘x’ and ‘y’,</span>
+<span class="devsite-syntax-c1"># sharded across two devices: first and second CPU.</span>
+<span class="devsite-syntax-n">with</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">jax</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-n">sharding</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-n">Mesh</span><span class="devsite-syntax-p">(</span>
+<span class="devsite-syntax-w">      </span><span class="devsite-syntax-p">[[</span><span class="devsite-syntax-s1">'cpu:0'</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-s1">'cpu:1'</span><span class="devsite-syntax-p">]],</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-s1">'x'</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-s1">'y'</span><span class="devsite-syntax-p">)):</span>
+
+<span class="devsite-syntax-w">    </span><span class="devsite-syntax-err">@</span><span class="devsite-syntax-n">pjit</span>
+<span class="devsite-syntax-w">    </span><span class="devsite-syntax-n">def</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">f</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">a</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">b</span><span class="devsite-syntax-p">):</span>
+<span class="devsite-syntax-w">        </span><span class="devsite-syntax-n">out</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">-</span><span class="devsite-syntax-p">((</span><span class="devsite-syntax-n">a</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-err">@</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">b</span><span class="devsite-syntax-p">)</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">*</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-mf">0.125</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-w">        </span><span class="devsite-syntax-c1"># Shard output matrix access across ‘x’</span>
+<span class="devsite-syntax-w">        </span><span class="devsite-syntax-c1"># and ‘y’ respectively. Generates ‘Sharding’</span>
+<span class="devsite-syntax-w">        </span><span class="devsite-syntax-c1"># custom call.</span>
+<span class="devsite-syntax-w">        </span><span class="devsite-syntax-n">out</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">with_sharding_constraint</span><span class="devsite-syntax-p">(</span>
+<span class="devsite-syntax-w">          </span><span class="devsite-syntax-n">out</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">jax</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-n">lax</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-n">PartitionSpec</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-s1">'x'</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-s1">'y'</span><span class="devsite-syntax-p">))</span>
+<span class="devsite-syntax-w">        </span><span class="devsite-syntax-k">return</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">out</span>
+
+<span class="devsite-syntax-c1"># Random inputs to call our function.</span>
+<span class="devsite-syntax-n">a</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">jax</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-n">random</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-n">randint</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">key</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-mi">1024</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-mi">512</span><span class="devsite-syntax-p">),</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">jnp</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-n">int8</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-n">b</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">jax</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-n">random</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-n">normal</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">key</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-mi">512</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-mi">2048</span><span class="devsite-syntax-p">),</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">jnp</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-n">float32</span><span class="devsite-syntax-p">)</span>
+
+<span class="devsite-syntax-nb">print</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">f</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-n">lower</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">a</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">b</span><span class="devsite-syntax-p">)</span><span class="devsite-syntax-o">.</span><span class="devsite-syntax-n">compiler_ir</span><span class="devsite-syntax-p">())</span>
+</code></pre></devsite-code>
+<p>Visualizing it, the sharding annotations are presented as custom calls:</p>
+
+<p><img src="https://openxla.org/xla/images/annotated_module.png" alt></p>
+
+<p>To check how the SPMD partitioner expands the custom call, we can look at HLO
+after optimizations:</p>
+<div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded syntax="scdoc" syntax-guessed><code translate="no" dir="ltr">print(f.lower(np.ones((8, 8)).compile().as_text())
+</code></pre></devsite-code>
+<p>Which generates HLO with a collective:</p>
+
+<p><img src="https://openxla.org/xla/images/partitioned_module.png" alt></p>
+
+<h3 id="layout_assignment" data-text="Layout Assignment" tabindex="-1">Layout Assignment</h3>
+
+<p>HLO decouples logical shape and physical layout (how tensors are laid out in
+memory). For example, a matrix <code translate="no" dir="ltr">f32[32, 64]</code> can be represented either in
+row-major or column-major order, represented as <code translate="no" dir="ltr">{1,0}</code> or <code translate="no" dir="ltr">{0,1}</code> respectively.
+In general, layout is represented as a part of shape, showing a permutation over
+the number of dimensions indicating physical layout in memory.</p>
+
+<p>For each operation present in the HLO, the Layout Assignment pass chooses an
+optimal layout (e.g. NHWC for a convolution on Ampere). For example, an
+<code translate="no" dir="ltr">int8xint8-&gt;int32</code>  matmul operation prefers <code translate="no" dir="ltr">{0,1}</code> layout for the RHS of the
+computation. Similarly, “transposes” inserted by the user are ignored, and
+encoded as a layout change.</p>
+
+<p>The layouts are then propagated through the graph, and conflicts between layouts
+or at graph endpoints are materialized as <code translate="no" dir="ltr">copy</code> operations, which perform the
+physical transposition. For example, starting from the graph</p>
+
+<p><img src="https://openxla.org/xla/images/pre_layout_module.png" alt></p>
+
+<p>Running the layout assignment we see the following layouts and <code translate="no" dir="ltr">copy</code> operation
+inserted:</p>
+
+<p><img src="https://openxla.org/xla/images/layout_assigned_module.png" alt></p>
+
+<h3 id="fusion" data-text="Fusion" tabindex="-1">Fusion</h3>
+
+<p>Fusion is XLA’s single most important optimization, which groups multiple
+operations (e.g. addition into exponentiation into matmul) to a single kernel.
+Since many GPU workloads tend to be memory-bound, fusion dramatically speeds up
+the execution by avoiding the writing of intermediate tensors to HBM and then
+reading them back, and instead passes them around in either registers or shared
+memory.</p>
+
+<p>Fused HLO instructions are blocked together in a single fusion computation,
+which establishes the following invariants:</p>
+
+<ul>
+<li><p>No intermediate storage inside the fusion is materialized in HBM (it has to
+be all passed through either registers or shared memory).</p></li>
+<li><p>A fusion is always compiled to exactly one GPU kernel</p></li>
+</ul>
+
+<h2 id="hlo_optimizations_on_running_example" data-text="HLO Optimizations on Running Example" tabindex="-1">HLO Optimizations on Running Example</h2>
+
+<p>We can inspect the post-optimization HLO using <code translate="no" dir="ltr">jax.jit(f).lower(a,
+b).compile().as_text()</code>, and verify that a single fusion got generated:</p>
+<div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded syntax="SWIG" syntax-guessed><code translate="no" dir="ltr"><span class="devsite-syntax-n">HloModule</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">jit_f</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">is_scheduled</span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-nb">true</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">entry_computation_layout</span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-p">{(</span><span class="devsite-syntax-n">s8</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">},</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">})</span><span class="devsite-syntax-o">-</span>&gt;<span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">},</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">allow_spmd_sharding_propagation_to_output</span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-p">{</span><span class="devsite-syntax-nb">true</span><span class="devsite-syntax-p">}</span>
+
+<span class="devsite-syntax-nf">%triton_gemm_dot</span><span class="devsite-syntax-mf">.6</span><span class="devsite-syntax-n">_computation</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">parameter_0</span><span class="devsite-syntax-o">:</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">s8</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">],</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">parameter_1</span><span class="devsite-syntax-o">:</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">])</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">-</span>&gt;<span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">{</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-nf">%parameter_0</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">s8</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">parameter</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-nf">%convert</span><span class="devsite-syntax-mf">.0</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">convert</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">s8</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nf">%parameter_0</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-nf">%parameter_1</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">parameter</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-nf">%dot</span><span class="devsite-syntax-mf">.0</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">dot</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nf">%convert</span><span class="devsite-syntax-mf">.0</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nf">%parameter_1</span><span class="devsite-syntax-p">),</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">lhs_contracting_dims</span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-p">{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">},</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">rhs_contracting_dims</span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-p">{</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-nf">%convert</span><span class="devsite-syntax-mf">.1</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">f32</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">convert</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nf">%dot</span><span class="devsite-syntax-mf">.0</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-nf">%constant_0</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[]</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">constant</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-mf">0.125</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-nf">%broadcast</span><span class="devsite-syntax-mf">.0</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">broadcast</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[]</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nf">%constant_0</span><span class="devsite-syntax-p">),</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">dimensions</span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-p">{}</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-nf">%convert</span><span class="devsite-syntax-mf">.2</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">f32</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">convert</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nf">%broadcast</span><span class="devsite-syntax-mf">.0</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-nf">%multiply</span><span class="devsite-syntax-mf">.0</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">f32</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">multiply</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">f32</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nf">%convert</span><span class="devsite-syntax-mf">.1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">f32</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nf">%convert</span><span class="devsite-syntax-mf">.2</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-nf">%negate</span><span class="devsite-syntax-mf">.0</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">f32</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">negate</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">f32</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nf">%multiply</span><span class="devsite-syntax-mf">.0</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-n">ROOT</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nf">%convert</span><span class="devsite-syntax-mf">.6</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">convert</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">f32</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nf">%negate</span><span class="devsite-syntax-mf">.0</span><span class="devsite-syntax-p">)</span>
+<span class="devsite-syntax-p">}</span>
+
+<span class="devsite-syntax-n">ENTRY</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nf">%main</span><span class="devsite-syntax-mf">.9</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">Arg_0</span><span class="devsite-syntax-mf">.1</span><span class="devsite-syntax-o">:</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">s8</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">],</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">Arg_1</span><span class="devsite-syntax-mf">.2</span><span class="devsite-syntax-o">:</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">])</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">-</span>&gt;<span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">{</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-o">%</span><span class="devsite-syntax-n">Arg_1</span><span class="devsite-syntax-mf">.2</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">parameter</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">),</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">sharding</span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-p">{</span><span class="devsite-syntax-n">replicated</span><span class="devsite-syntax-p">}</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-o">%</span><span class="devsite-syntax-n">Arg_0</span><span class="devsite-syntax-mf">.1</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">s8</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">parameter</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">),</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">sharding</span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-p">{</span><span class="devsite-syntax-n">replicated</span><span class="devsite-syntax-p">}</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-n">ROOT</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nf">%triton_gemm_dot</span><span class="devsite-syntax-mf">.6</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">fusion</span><span class="devsite-syntax-p">(</span><span class="devsite-syntax-n">s8</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">%</span><span class="devsite-syntax-n">Arg_0</span><span class="devsite-syntax-mf">.1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">bf16</span><span class="devsite-syntax-p">[</span><span class="devsite-syntax-mi">2</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">3</span><span class="devsite-syntax-p">]{</span><span class="devsite-syntax-mi">1</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-mi">0</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-o">%</span><span class="devsite-syntax-n">Arg_1</span><span class="devsite-syntax-mf">.2</span><span class="devsite-syntax-p">),</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">kind</span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-n">kCustom</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">calls</span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-nf">%triton_gemm_dot</span><span class="devsite-syntax-mf">.6</span><span class="devsite-syntax-n">_computation</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-n">backend_config</span><span class="devsite-syntax-o">=</span><span class="devsite-syntax-p">{</span><span class="devsite-syntax-s">"kind"</span><span class="devsite-syntax-o">:</span><span class="devsite-syntax-s">"__triton_gemm"</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-s">"triton_gemm_config"</span><span class="devsite-syntax-o">:</span><span class="devsite-syntax-p">{</span><span class="devsite-syntax-s">"block_m"</span><span class="devsite-syntax-o">:</span><span class="devsite-syntax-s">"64"</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-s">"block_n"</span><span class="devsite-syntax-o">:</span><span class="devsite-syntax-s">"64"</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-s">"block_k"</span><span class="devsite-syntax-o">:</span><span class="devsite-syntax-s">"64"</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-s">"split_k"</span><span class="devsite-syntax-o">:</span><span class="devsite-syntax-s">"1"</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-s">"num_stages"</span><span class="devsite-syntax-o">:</span><span class="devsite-syntax-s">"2"</span><span class="devsite-syntax-p">,</span><span class="devsite-syntax-s">"num_warps"</span><span class="devsite-syntax-o">:</span><span class="devsite-syntax-s">"4"</span><span class="devsite-syntax-p">}</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-p">}</span>
+<span class="devsite-syntax-p">}</span>
+</code></pre></devsite-code>
+<p>Note that the fusion <code translate="no" dir="ltr">backend_config</code> tells us that Triton will be used as a
+code generation strategy, and it specifies the chosen tiling.</p>
+
+<p>We can also visualize the resulting module:</p>
+
+<p><img src="https://openxla.org/xla/images/fused_module.png" alt></p>
+
+<h2 id="buffer_assignment_and_scheduling" data-text="Buffer Assignment and Scheduling" tabindex="-1">Buffer Assignment and Scheduling</h2>
+
+<p>A buffer assignment pass takes into account the shape information, and aims to
+produce an optimal buffer allocation for the program, minimizing the amount of
+intermediate memory consumed. Unlike TF or PyTorch immediate-mode (non-compiled)
+execution, where the memory allocator does not know the graph in advance, the
+XLA scheduler can “look into the future” and produce an optimal computation
+schedule.</p>
+
+<h2 id="compiler_backend_codegen_and_library_selection" data-text="Compiler Backend: Codegen and Library Selection" tabindex="-1">Compiler Backend: Codegen and Library Selection</h2>
+
+<p>For every HLO instruction in the computation, XLA chooses whether to run it
+using a library linked into a runtime, or to codegen it to PTX.</p>
+
+<h3 id="library_selection" data-text="Library Selection" tabindex="-1">Library Selection</h3>
+
+<p>For many common operations, XLA:GPU uses fast-performance libraries from NVIDIA,
+such as cuBLAS, cuDNN, and NCCL. The libraries have an advantage of verified
+fast performance, but often preclude complex fusion opportunities.</p>
+
+<h3 id="direct_code_generation" data-text="Direct code generation" tabindex="-1">Direct code generation</h3>
+
+<p>The XLA:GPU backend generates high-performance LLVM IR directly for a number of
+operations (reductions, transposes, etc).</p>
+
+<h3 id="triton_code_generation" data-text="Triton code generation" tabindex="-1">Triton code generation</h3>
+
+<p>For more advanced fusions which include matrix multiplication or softmax,
+XLA:GPU uses <a href="https://github.com/openai/triton">Triton</a> as a code-generation
+layer. HLO Fusions are converted to TritonIR (an MLIR dialect which serves as an
+input to Triton), selects tiling parameters and invokes Triton for PTX
+generation:</p>
+
+<p><img src="https://openxla.org/xla/images/triton_opt_pipeline.png" alt></p>
+
+<p>We have observed the resulting code to perform very well on Ampere, at
+near-roofline performance with properly tuned tile sizes.</p>
+
+<h2 id="runtime" data-text="Runtime" tabindex="-1">Runtime</h2>
+
+<p>XLA Runtime converts the resulting sequence of CUDA kernel calls and library
+invocations into a RuntimeIR (an MLIR dialect in XLA), on which CUDA graph
+extraction is performed. CUDA graph is still work in progress, only some nodes
+are currently supported. Once CUDA graph boundaries are extracted, RuntimeIR is
+compiled via LLVM to a CPU executable, which can then be stored or transferred
+for Ahead-Of-Time compilation.</p>
+
+  
+
+  
+</div>
+
+  
+    
+    
+      
+    <devsite-thumb-rating position="footer">
+    </devsite-thumb-rating>
+  
+       
+         <devsite-feedback
+  position="footer"
+  project-name="OpenXLA"
+  product-id="5319284"
+  bucket=""
+  context=""
+  version="t-devsite-webserver-20260924-r00-rc00.480666405826496382"
+  data-label="Send Feedback Button"
+  track-type="feedback"
+  track-name="sendFeedbackLink"
+  track-metadata-position="footer"
+  class="nocontent"
+  data-nosnippet
+  
+  
+  
+    project-icon="https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd/openxla/images/touchicon-180.png"
+  
+  
+  
+  >
+
+  <button>
+  
+    
+    Send feedback
+  
+  </button>
+</devsite-feedback>
+       
+    
+    
+  
+
+  <div class="devsite-floating-action-buttons"></div></article>
+
+
+<devsite-content-footer class="nocontent" data-nosnippet>
+  <p>Except as otherwise noted, the content of this page is licensed under the <a href="https://creativecommons.org/licenses/by/4.0/">Creative Commons Attribution 4.0 License</a>, and code samples are licensed under the <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache 2.0 License</a>. For details, see the <a href="https://developers.google.com/site-policies">Google Developers Site Policies</a>. Java is a registered trademark of Oracle and/or its affiliates.</p>
+  <p>Last updated 2025-06-19 UTC.</p>
+</devsite-content-footer>
+
+
+<devsite-notification
+>
+</devsite-notification>
+
+
+  
+<div class="devsite-content-data">
+  
+    
+    
+    <template class="devsite-thumb-rating-feedback">
+      <devsite-feedback
+  position="thumb-rating"
+  project-name="OpenXLA"
+  product-id="5319284"
+  bucket=""
+  context=""
+  version="t-devsite-webserver-20260924-r00-rc00.480666405826496382"
+  data-label="Send Feedback Button"
+  track-type="feedback"
+  track-name="sendFeedbackLink"
+  track-metadata-position="thumb-rating"
+  class="nocontent"
+  data-nosnippet
+  
+  
+  
+    project-icon="https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd/openxla/images/touchicon-180.png"
+  
+  
+  
+  >
+
+  <button>
+  
+    Need to tell us more?
+  
+  </button>
+</devsite-feedback>
+    </template>
+  
+  
+    <template class="devsite-content-data-template">
+      [[["Easy to understand","easyToUnderstand","thumb-up"],["Solved my problem","solvedMyProblem","thumb-up"],["Other","otherUp","thumb-up"]],[["Missing the information I need","missingTheInformationINeed","thumb-down"],["Too complicated / too many steps","tooComplicatedTooManySteps","thumb-down"],["Out of date","outOfDate","thumb-down"],["Samples / code issue","samplesCodeIssue","thumb-down"],["Other","otherDown","thumb-down"]],["Last updated 2025-06-19 UTC."],[],[]]
+    </template>
+  
+</div>
+            
+          </devsite-content>
+        </main>
+        <devsite-footer-promos class="devsite-footer">
+          
+            
+          
+        </devsite-footer-promos>
+        <devsite-footer-linkboxes class="devsite-footer">
+          
+            
+<nav class="devsite-footer-linkboxes nocontent"
+     aria-label="Footer links"
+     data-nosnippet>
+  
+  <ul class="devsite-footer-linkboxes-list">
+    
+    <li class="devsite-footer-linkbox ">
+    <h3 class="devsite-footer-linkbox-heading no-link">Stay connected</h3>
+      <ul class="devsite-footer-linkbox-list">
+        
+        <li class="devsite-footer-linkbox-item">
+          
+          <a href="https://twitter.com/openxla"
+             class="devsite-footer-linkbox-link gc-analytics-event"
+             data-category="Site-Wide Custom Events"
+            
+             data-label="Footer Link (index 1)"
+            >
+            
+          
+            Twitter
+          
+          </a>
+          
+          
+        </li>
+        
+        <li class="devsite-footer-linkbox-item">
+          
+          <a href="https://www.youtube.com/@openxla"
+             class="devsite-footer-linkbox-link gc-analytics-event"
+             data-category="Site-Wide Custom Events"
+            
+             data-label="Footer Link (index 2)"
+            >
+            
+              
+              
+            
+          
+            YouTube
+          
+          </a>
+          
+          
+        </li>
+        
+      </ul>
+    </li>
+    
+  </ul>
+  
+</nav>
+          
+        </devsite-footer-linkboxes>
+        <devsite-footer-utility class="devsite-footer">
+          
+            
+
+<div class="devsite-footer-utility nocontent" data-nosnippet>
+  
+
+  
+  <nav class="devsite-footer-utility-links" aria-label="Utility links">
+    
+    <ul class="devsite-footer-utility-list">
+      
+      <li class="devsite-footer-utility-item
+                 ">
+        
+        
+        <a class="devsite-footer-utility-link gc-analytics-event"
+           href="//policies.google.com/terms"
+           data-category="Site-Wide Custom Events"
+           data-label="Footer Terms link"
+         >
+          Terms
+        </a>
+        
+      </li>
+      
+      <li class="devsite-footer-utility-item
+                 ">
+        
+        
+        <a class="devsite-footer-utility-link gc-analytics-event"
+           href="//policies.google.com/privacy"
+           data-category="Site-Wide Custom Events"
+           data-label="Footer Privacy link"
+         >
+          Privacy
+        </a>
+        
+      </li>
+      
+      <li class="devsite-footer-utility-item
+                 glue-cookie-notification-bar-control">
+        
+        
+        <a class="devsite-footer-utility-link gc-analytics-event"
+           href="#"
+           data-category="Site-Wide Custom Events"
+           data-label="Footer Manage cookies link"
+         
+           aria-hidden="true"
+         >
+          Manage cookies
+        </a>
+        
+      </li>
+      
+    </ul>
+    
+    
+<devsite-language-selector>
+  <ul role="presentation">
+    
+    
+    <li role="presentation">
+      <a role="menuitem" lang="en"
+        >English</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="de"
+        >Deutsch</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="es_419"
+        >Español – América Latina</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="fr"
+        >Français</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="id"
+        >Indonesia</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="it"
+        >Italiano</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="pl"
+        >Polski</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="pt_br"
+        >Português – Brasil</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="vi"
+        >Tiếng Việt</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="tr"
+        >Türkçe</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="ru"
+        >Русский</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="he"
+        >עברית</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="ar"
+        >العربيّة</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="fa"
+        >فارسی</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="hi"
+        >हिंदी</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="bn"
+        >বাংলা</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="th"
+        >ภาษาไทย</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="zh_cn"
+        >中文 – 简体</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="zh_tw"
+        >中文 – 繁體</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="ja"
+        >日本語</a>
+    </li>
+    
+    <li role="presentation">
+      <a role="menuitem" lang="ko"
+        >한국어</a>
+    </li>
+    
+  </ul>
+</devsite-language-selector>
+
+  </nav>
+</div>
+          
+        </devsite-footer-utility>
+        <devsite-panel>
+          
+        </devsite-panel>
+        
+      </section>
+      </section>
+    <devsite-sitemask></devsite-sitemask>
+    <devsite-snackbar></devsite-snackbar>
+    <devsite-tooltip ></devsite-tooltip>
+    <devsite-heading-link></devsite-heading-link>
+    <devsite-analytics>
+      
+        <script type="application/json" analytics>[]</script>
+<script type="application/json" tag-management>{&#34;at&#34;: &#34;True&#34;, &#34;ga4&#34;: [{&#34;id&#34;: &#34;G-Z67BRKDG1B&#34;, &#34;purpose&#34;: 0}], &#34;ga4p&#34;: [{&#34;id&#34;: &#34;G-Z67BRKDG1B&#34;, &#34;purpose&#34;: 0}], &#34;gtm&#34;: [], &#34;parameters&#34;: {&#34;internalUser&#34;: &#34;False&#34;, &#34;language&#34;: {&#34;machineTranslated&#34;: &#34;False&#34;, &#34;requested&#34;: &#34;en&#34;, &#34;served&#34;: &#34;en&#34;}, &#34;pageType&#34;: &#34;article&#34;, &#34;projectName&#34;: &#34;OpenXLA&#34;, &#34;signedIn&#34;: &#34;False&#34;, &#34;tenant&#34;: &#34;openxla&#34;, &#34;recommendations&#34;: {&#34;sourcePage&#34;: &#34;&#34;, &#34;sourceType&#34;: 0, &#34;sourceRank&#34;: 0, &#34;sourceIdenticalDescriptions&#34;: 0, &#34;sourceTitleWords&#34;: 0, &#34;sourceDescriptionWords&#34;: 0, &#34;experiment&#34;: &#34;&#34;}, &#34;experiment&#34;: {&#34;ids&#34;: &#34;&#34;}}}</script>
+      
+    </devsite-analytics>
+    
+      <devsite-badger></devsite-badger>
+    
+    
+    
+    
+<script nonce="I0YfSMBnQg/+0TxIbeyqWD6WbCp9br">
+  
+  (function(d,e,v,s,i,t,E){d['GoogleDevelopersObject']=i;
+    t=e.createElement(v);t.async=1;t.src=s;E=e.getElementsByTagName(v)[0];
+    E.parentNode.insertBefore(t,E);})(window, document, 'script',
+    'https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd/openxla/js/app_loader.js', '[56,"en",null,"/js/devsite_app_module.js","https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd","https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd/openxla","https://openxla-dot-devsite-v2-prod-3p.appspot.com",null,null,["/_pwa/openxla/manifest.json","https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd/images/video-placeholder.svg","https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd/openxla/images/favicon.png","https://www.gstatic.com/devrel-devsite/prod/vfdb441d2e08dbd9d3e48d8cd72b242388a87bcf7626bf5fb9df50c2bdd4a70fd/openxla/images/lockup.svg","https://fonts.googleapis.com/css?family=Roboto:300,400,400italic,500,500italic,700,700italic|Roboto+Mono:400,500,700&display=swap"],1,null,[1,6,8,12,14,17,21,25,50,52,63,70,75,76,80,87,91,92,93,97,98,100,101,102,103,104,105,107,108,109,110,112,113,116,117,118,120,122,124,125,126,127,129,130,131,132,133,134,135,136,138,140,141,147,148,149,151,152,156,157,158,159,161,163,164,168,169,170,179,180,182,183,186,191,193,196],"AIzaSyCNm9YxQumEXwGJgTDjxoxXK6m1F-9720Q","AIzaSyCc76DZePGtoyUjqKrLdsMGk_ry7sljLbY","openxla.org","AIzaSyB9bqgQ2t11WJsOX8qNsCQ6U-w91mmqF-I","AIzaSyAdYnStPdzjcJJtQ0mvIaeaMKj7_t6J_Fg",null,null,null,["DevPro__enable_google_one_card","Profiles__enable_developer_profile_benefits_ui_redesign","DevPro__enable_g1_integration","DevPro__enable_google_payments_buyflow","Profiles__enable_stripe_subscription_management","Search__enable_page_map","MiscFeatureFlags__developers_footer_dark_image","MiscFeatureFlags__enable_appearance_cookies","MiscFeatureFlags__fix_lower_breadcrumbs","Cloud__enable_legacy_calculator_redirect","Analytics__enable_clearcut_logging","CloudShell__cloud_shell_button","Concierge__enable_actions_menu","DevPro__enable_cloud_innovators_plus","Profiles__enable_complete_playlist_endpoint","Cloud__enable_free_trial_server_call","DevPro__enable_devsite_captcha","Profiles__enable_user_type","Experiments__reqs_query_experiments","OnSwitch__enable","Profiles__enable_targeted_hero","TpcFeatures__enable_unmirrored_page_left_nav","Search__enable_ai_search_summaries_for_all","TpcFeatures__proxy_prod_host","Search__enable_ai_eligibility_checks","Concierge__enable_pushui","Profiles__require_profile_eligibility_for_signin","Concierge__enable_remove_info_panel_tags","Profiles__enable_auto_apply_credits","Cloud__cache_serialized_dynamic_content","Profiles__enable_release_notes_notifications","AIStudioInteractionsToggle__interactions_are_default","Profiles__enable_playlist_community_acl","MiscFeatureFlags__enable_explicit_template_dependencies","DevPro__enable_embed_profile_creation","MiscFeatureFlags__enable_variable_operator_index_yaml","MiscFeatureFlags__enable_view_transitions","Profiles__enable_public_developer_profiles","DevPro__enable_enterprise","Profiles__enable_developer_profile_pages_as_content","DevPro__enable_g1_ineligible_redirect","BookNav__enable_tenant_cache_key","Profiles__enable_join_program_group_endpoint","Search__enable_dynamic_content_confidential_banner","DevPro__enable_developer_subscriptions","DevPro__enable_code_assist","Profiles__enable_dashboard_curated_recommendations","MiscFeatureFlags__enable_project_variables","Profiles__enable_developer_profiles_callout","Analytics__enable_devpro_interaction_logging","Profiles__enable_awarding_url","Search__enable_suggestions_from_borg","Profiles__enable_page_saving","Cloud__enable_cloud_shell_fte_user_flow","EngEduTelemetry__enable_engedu_telemetry","MiscFeatureFlags__enable_framebox_badge_methods","MiscFeatureFlags__gdp_dashboard_reskin_enabled","Profiles__enable_callout_notifications","MiscFeatureFlags__enable_variable_operator","MiscFeatureFlags__enable_firebase_utm","MiscFeatureFlags__remove_cross_domain_tracking_params","DevPro__enable_firebase_workspaces_card","DevPro__enable_nvidia_credits_card","Profiles__enable_purchase_prompts","CloudShell__cloud_code_overflow_menu","DevPro__enable_vertex_credit_card","MiscFeatureFlags__developers_footer_image","DevPro__enable_credits_banner","Cloud__enable_cloudx_experiment_ids","DevPro__enable_google_payments","SignIn__enable_l1_signup_flow","DevPro__remove_eu_tax_intake_form","Cloud__enable_cloud_shell","DevPro__enable_devpro_offers","Profiles__enable_recognition_badges","Profiles__enable_profile_collections","Profiles__enable_completequiz_endpoint","Cloud__enable_cloud_dlp_service","DevPro__enable_free_benefits","MiscFeatureFlags__enable_explain_this_code","Profiles__enable_completecodelab_endpoint","Cloud__fast_free_trial"],null,null,"AIzaSyA58TaKli1DculwmAmbpzLVGuWc8eCQgQc","https://developerscontentserving-pa.googleapis.com","AIzaSyDWBU60w0P9hEkr29kkksYs8Z7gvZ8u_wc","https://developerscontentsearch-pa.googleapis.com",2,4,null,"https://developerprofiles-pa.googleapis.com",[56,"openxla","OpenXLA Project","openxla.org",null,"openxla-dot-devsite-v2-prod-3p.appspot.com",null,null,[null,1,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,[1],null,null,null,null,[1,null,1],[1,1,null,1,1],null,null,null,null,null,[1]],null,[72,null,null,null,null,null,"/images/lockup.svg","images/touchicon-180.png",null,null,null,1,null,null,null,null,null,null,null,null,null,2,null,null,null,"/images/lockup-dark-theme.svg"],[],null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,[[],[1,1]],[[null,null,null,null,null,null,null,[["G-Z67BRKDG1B"],null,null,[["G-Z67BRKDG1B",1]]],null,null,null,null,1]],null,4],null,null,1,1,"https://developerscontentinsights-pa.googleapis.com","AIzaSyC11xEGtFhkmSh_iF6l_itbxnFz2GrIBOg","AIzaSyAXJ10nRF73mmdSDINgkCNX5bbd2KPcWm8","https://developers.googleapis.com",null,null,"AIzaSyCjP0KOnHfv8mwe38sfzZJMOnqE3HvrD4A",null,null,"https://developers.googleapis.com"]')
+  
+</script>
+
+    <devsite-a11y-announce></devsite-a11y-announce>
+  </body>
+</html>

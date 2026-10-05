@@ -1,0 +1,888 @@
+                                                             B OLT: B RIDGING THE G AP BETWEEN AUTO - TUNERS
+                                                                  AND H ARDWARE - NATIVE P ERFORMANCE
+
+
+
+                                                       Jiarong Xing * 1 2 Leyuan Wang * 1 Shang Zhang 3 Jack Chen 3 Ang Chen 2 Yibo Zhu 1
+
+
+                                                                                                   A BSTRACT
+                                              Today’s auto-tuners (e.g., AutoTVM, Ansor) generate efficient tensor programs by navigating a large search space
+arXiv:2110.15238v1 [cs.DC] 25 Oct 2021
+
+
+
+
+                                              to identify effective implementations, but they do so with opaque hardware details. Thus, their performance could
+                                              fall behind that of hardware-native libraries (e.g., cuBLAS, cuDNN), which are hand-optimized by device vendors
+                                              to extract high performance. On the other hand, these vendor libraries have a fixed set of supported functions
+                                              and lack the customization and automation support afforded by auto-tuners. Bolt is based on the recent trend
+                                              that vendor libraries are increasingly modularized and reconfigurable via declarative control (e.g., CUTLASS). It
+                                              enables a novel approach that bridges this gap and achieves the best of both worlds, via hardware-native templated
+                                              search. Bolt provides new opportunities to rethink end-to-end tensor optimizations at the graph, operator, and
+                                              model levels. Bolt demonstrates this concept by prototyping on a popular auto-tuner in TVM and a class of
+                                              widely-used platforms (i.e., NVIDIA GPUs)—both in large deployment in our production environment. Bolt
+                                              improves the inference speed of common convolutional neural networks by 2.5x on average over the state of the
+                                              art, and it auto-tunes these models within 20 minutes.
+
+                                         1    I NTRODUCTION                                                 pert device knowledge, directly using such libraries extracts
+                                                                                                            hardware-native performance. For instance, auto-tuners like
+                                         Auto-tuning engines (Chen et al., 2018b; Zheng et al., 2020a;      AutoTVM and Ansor do not achieve competitive perfor-
+                                         Adams et al., 2019; Zheng et al., 2020b) are at the heart of       mance compared to cuBLAS and cuDNN for non-FP32
+                                         a variety of DNN compilers and frameworks (Chen et al.,            compute-intensive operators on NVIDIA GPUs because of
+                                         2018a; Leary & Wang, 2018; Abadi et al., 2016; Paszke              their inefficient usage of tensor cores. In our benchmarks,
+                                         et al., 2019). Example auto-tuners like AutoTVM (Chen              Ansor (Zheng et al., 2020a) only achieves 20% of cuBLAS
+                                         et al., 2018b) and Ansor (Zheng et al., 2020a) infer hardware      performance for FP16 GEMMs on NVIDIA Tesla T4 GPUs
+                                         cost models from afar, by executing sample implementa-             (see Figure 1 for more details).
+                                         tions on a particular device and observing their performance.
+                                         Building on the inferred cost models, auto-tuners take tensor      Related, opaque device models also lead to a prolonged
+                                         programs as inputs, and navigates a large search space to          auto-tuning time, as the search process is less informed by
+                                         select effective transformations for high performance. Oper-       hardware details. For instance, it takes AutoTVM (Chen
+                                         ating with opaque device models affords generality, as the         et al., 2018b) 10 hours on x86 CPUs and 7 days on NVIDIA
+                                         same approach can be applied to different hardware, without        GPUs to tune all workloads in the ResNet-50 model (Yu
+                                         requiring hardware details.                                        et al., 2021). This has led to the development of special
+                                                                                                            databases (SAMPL) that cache and reuse tuning logs, but
+                                         As a downside, treating devices as opaque models comes             this approach only goes so far. Models have increasing dy-
+                                         with performance implications—for any specific device, it is       namism, not only in terms of dynamic data structures (Liang
+                                         likely that hardware-native performance as delivered by low-       et al., 2016) but also dynamic shapes (Devlin et al., 2018),
+                                         level vendor libraries is hard to come by. Traditional ven-        making caching much less effective. Maintaining these
+                                         dor libraries (e.g., cuBLAS (NVIDIA, a), cuDNN (Chetlur            databases also incurs substantial costs.
+                                         et al., 2014)) expose a fixed set of primitives that are heavily
+                                         hand-optimized for the underlying hardware. For workloads          Can we achieve the best of both worlds, combining the flex-
+                                         that fit into their library primitives, and for users with ex-     ibility of auto-tuners and the hardware-native performance
+                                            *                      1                    2
+                                                                                                            as afforded by vendor implementations? Bolt bridges this
+                                              Equal contribution     ByteDance            Rice Univer-      gap leveraging the trend that vendor libraries are increas-
+                                         sity 3 NVIDIA. Correspondence to:              Leyuan Wang
+                                         <leyuan.wang@bytedance.com>.
+                                                                                                            ingly templated, reconfigurable with declarative parameters
+                                                                                                            to suit different scenarios, but exposing concise interfaces
+                                                                                                            that are potentially amenable to auto-tuning. An exemplar
+                       Bolt: Bridging the Gap between Auto-tuners and Hardware-native Performance
+
+of a templated design, NVIDIA CUTLASS (NVIDIA, b),                                      1.6
+                                                                                        1.4             Ansor         cuBLAS
+encodes efficient design patterns but is not committed to a
+
+
+
+
+                                                                    Normalized speed
+                                                                                        1.2
+fixed set of primitives. Users can parameterize the templates                             1
+to suit their workloads, and they can extend and compose                                0.8
+                                                                                        0.6
+templated primitives for new functionality. In a similar vein,                          0.4
+Intel OneDNN (Intel) and AMD ROCm (AMD) also share                                      0.2
+                                                                                          0
+this emerging trend for their platforms.                                                      1024        2048         1280        1280        1280
+                                                                                                   ,1024,1     ,204         ,768       ,307        ,768
+                                                                                                           024      8,20        ,768        2,76        ,307
+                                                                                                                         48                      8           2
+We propose to enable end-to-end DNN model optimizations                                                         Workload(M,N,K)
+via hardware-native templated search utilizing the above
+trend. Bolt operates on hardware-native templates which          Figure 1. The speed of Ansor, implemented in TVM auto-
+interposes a thin layer between the high-level computational     scheduler, under-performs significantly compared to the device
+graph and the low-level CUDA code, opening up oppor-             speeds achievable in cuBLAS. Workloads: two large square
+tunities for joint optimization. First, it generates tensor      GEMMs and three GEMMs in BERT (Devlin et al., 2018), a
+programs with hardware-native performance via efficient          widely adopted NLP model, when the batch size is 32 and the
+templated search. Second, by composing and extending tem-        sequence length is 40.
+plate primitives, Bolt enables novel computational graph-
+level optimizations. Combined, Bolt enables auto-tuners to       performant when navigating the search space. Operating
+achieve both graph-level and operator-level optimization         afar from the hardware delivers benefits such as platform
+and generates the implementations with hardware-native per-      generality, but it also leads to two performance implications.
+formance using a significantly shortened turnaround time.
+Furthermore, Bolt also enables model-level optimizations by      Lack of hardware-native performance. With opaque de-
+proposing system-model codesign principles. If models are        vice models, tensor code generated by existing auto-tuners
+designed in a system-friendly manner, they can fully utilize     usually has a performance gap for certain workloads (e.g.,
+the benefits of Bolt and achieves more efficient inference.      non-FP32 GEMM/Conv) as compared to hardware-native
+                                                                 performance, as delivered by vendor-tuned libraries, such
+We prototype Bolt in TVM (Chen et al., 2018a) for NVIDIA         as cuBLAS and cuDNN. As concrete evidence, Figure 1
+GPUs utilized its open-sourced CUTLASS library, while            benchmarks the FP16 GEMM speed of tensor programs
+noting that the new design approach generalizes beyond this      generated by Ansor (Zheng et al., 2020a), a state-of-the-art
+scenario. Compared to Ansor, Bolt achieves 2.5x inference        auto-tuner, against hardware-native speeds as achieved by
+speedup on widely-used convolutional neural networks; it         cuBLAS. The auto-tuned program achieves less than 20%
+auto-tunes these workloads within 20 minutes. Our new            of the library performance. The reason is that NVIDIA
+computational graph level optimization—persistent kernel         GPUs have special hardware architecture, tensor cores, to
+fusion—leads to a performance improvement up to 1.3x             accelerate FP16 computation, but they cannot be efficiently
+and 2.0x on GEMMs and Conv2Ds. Finally, we validate              utilized by Ansor that uses an opaque hardware model.
+our model-level optimization—system-model codesign—by
+augmenting RepVGG models (Ding et al., 2021), which              Inefficient program search. Opaque device models and in-
+effectively improves model accuracy with less speed sacri-       ferred hardware execution costs also lead to a less informed
+fice. Bolt is deployed in our production setting, serving real   tuning process. Existing auto-tuners spend days or weeks
+models and workloads, and will be released in open source        when models have many different workloads, e.g., ResNet-
+to the community.                                                152 and Inception-V3 (Yu et al., 2021). Caching and reusing
+                                                                 previous tuning logs (SAMPL)) works well for static mod-
+                                                                 els, but not those with dynamic data structures (Liang et al.,
+2     BACKGROUND AND MOTIVATION                                  2016) or shapes (Devlin et al., 2018), where the exact work-
+2.1   Auto-tuners have a performance gap                         loads are only determined at runtime. In contrast, with
+                                                                 hardware-native templated search, Bolt reduces the tuning
+State-of-the-art DNN compilers and frameworks (Chen              time to tens of minutes for common models.
+et al., 2018b; Zheng et al., 2020a) leverage auto-tuning
+to identify effective tensor implementations. Auto-tuners        2.2                   Emerging trend: Templated libraries
+transform a tensor program into an equivalent but struc-
+turally different one, which delivers higher performance on      The optimizations in Bolt are made possible by an emerging
+the target. This is achieved by constructing a cost model of     trend: vendor libraries are escaping the earlier generation
+the hardware via learning—e.g., by building a training set       design with fixed primitives and becoming modularized and
+with sample programs and their performance on the target,        composable. Controlled by a set of declarative parameters,
+and by predicting which implementations are likely to be         templates can be instantiated to suit different hardware and
+                                                                 workloads. New primitives can be composed from existing
+                        Bolt: Bridging the Gap between Auto-tuners and Hardware-native Performance
+
+  (a)                    (b)                    (c)               2.3   Bolt: The best of both worlds
+                                                                  Bolt enables end-to-end optimizations that bridge the gap
+                                                                  between auto-tuners and hardware-native performance.
+                                                                  Graph level: Enabling deeper operator fusion. Leverag-
+                                                                  ing the templated design, Bolt opens up new opportunities
+                                                                  for operator optimizations. This is because new optimiza-
+                                                                  tions can be introduced to the device libraries via template
+                                                                  customization. Bolt develops a new operator fusion tech-
+Figure 2. The GEMM hierarchy in CUTLASS and the data move-        nique that is called persistent kernel fusion for improved
+ment in threadblock and warp tiles.
+                                                                  performance. Operator fusion computes multiple operators
+                                                                  using only one kernel, reducing data shuffling to memory
+                                                                  to improve locality (Abdolrashidi et al., 2019), but exist-
+                                                                  ing auto-tuner fusions (Chen et al., 2018a; Leary & Wang,
+ones, and creating new templates also has a lower barrier. In     2018; Roesch et al., 2019; Abadi et al., 2016; Paszke et al.,
+addition, the templated libraries are efficient design patterns   2019; Jia et al., 2019; Abdolrashidi et al., 2019) do not in-
+that take into account device details, and extract hardware       teract well with performant, device libraries. For instance,
+performance at a level impossible from opaque auto-tuning.        computing Conv2D+BiasAdd+Hardswish in a single kernel
+                                                                  improves performance, but the resulting operator may not be
+Example: NVIDIA CUTLASS. Of particular interest to us             supported by fixed-function libraries like cuDNN. Via a tem-
+is CUTLASS, an example templated library from NVIDIA.             plated design, Bolt enables new search space that considers
+CUTLASS provides reusable software components in C++              deeper fusion, thus opening up graph-level optimizations.
+templates for every layer of the CUDA programming model
+for GEMM. With the right parameters, it achieves high             Operator level: Automating templated code generation.
+performance for thread-wide, warp-wide, block-wide, and           Templated libraries by themselves, however, are too low-
+device-wide primitives. Such templates leverage intricate         level for common users. Precisely instantiating the param-
+device knowledge, specifically tensor cores as integrated in      eters to govern tiling sizes and data types creates a high
+NVIDIA Volta, Turing, and Ampere GPUs, and optimize               burden. Also, the templated primitives are simply building
+for a wide range of mixed-precision computations including        blocks, and they need to be assembled into complete DNN
+B1, INT4, INT8, FP16, BF16, FP32, TF32, FP64, complex,            models for execution. Bolt conquers their difficulty of use
+and quaternion. By plugging in the right tile size, data          by combining the library primitives and auto-tuners. It de-
+type, and other parameters, users can tap into device-level       signs a light-weight performance profiler to search for the
+performance for their workloads. Beyond this example,             best template parameter automatically. By efficiently using
+Intel and AMD also exhibit similar trends in their design—        the hardware details, the profiler significantly shortens the
+templated libraries with parameterized control. This design       search time. The search results are later used to instanti-
+principle, therefore, is generalizable to other platforms.        ates templates and generate the low-level tensor code with
+                                                                  hardware-native performance.
+CUTLASS leverages GPU tiling structures for efficient
+GEMM implementation by decomposing GEMMs into a                   Model level: System-friendly models. The end-to-end op-
+hierarchy of threadblocks and warp tiles. It optimizes data       timizations in Bolt also shed light on efficient model design.
+movement for locality and carefully controls movement             We propose to design models in a system-friendly manner
+from global to shared memory to the register files. Figure 2      so that they can efficiently use the optimization provided by
+illustrates the hierarchy and data movement from slower to        the underlying systems to achieve better inference perfor-
+faster storage for GEMM operation C = A · B. Figure 2(a)          mance. In Bolt, we have summarized three system-model
+shows the inputs A, B and result C in global memory and           codesign principles and validated them by augmenting sev-
+their threadblock tiles in color (inputs A, B in pink and         eral RepVGG models (Ding et al., 2021).
+yellow and the result C in green). Threadblock tiles can
+be divided into warp tiles in shared memory as shown in           3     B OLT DESIGN
+Figure 2(b). In this example, a threadblock tile can be split
+into eight warp tiles which can be further partitioned into       Figure 3 illustrates the workflow of Bolt. It follows a BYOC
+thread tiles in the register file as shown in Figure 2(c). From   (Bring Your Own Codegen) (Chen et al., 2021) approach,
+global memory to shared memory and to register files, the         carving out a suitable subgraph of the tensor program and
+memory size is decreasing but the read/write speed is in-         offloading it to Bolt for optimization. Starting from DNN
+creasing. Tensor cores on NVIDIA GPUs take thread tiles           models written in popular frameworks (e.g., TensorFlow,
+as input and store the output into register files.                PyTorch, MXNet), Bolt reuses the TVM frontend to parse
+                              Bolt: Bridging the Gap between Auto-tuners and Hardware-native Performance
+
+                                                                                 Non-fused:
+                        DNN model                    …
+                                                                                  GEMM1        Bias       ReLU        GEMM2         Bias        ReLU
+      System-model              TVM relay graph
+         codesign                                                                Epilogue fusion:
+       (Section 3.3)             Deeper fusion
+                                                                                  GEMM1 Bias ReLU                 GEMM2 Bias ReLU
+                                                          Graph-level
+                             Optimized relay graph       optimization
+                                                                                 Persistent kernel fusion:
+                                                         (Section 3.1)
+      Tensor-level              Graph partition                                   GEMM1 Bias ReLU GEMM2 Bias ReLU
+      optimization
+      (Section 3.2)                                                                    (a) The graph view of persistent kernel fusion
+                       Bolt subgraph     TVM subgraph
+
+                       Perf profiler                                       Non-fused:
+                                            Codegen                        GEMM/conv 0
+                         Codegen                                                                       Load
+                                                                            Launch Load Activation                           Store Activation
+                                                                                                      Weights
+
+                                 Tensor program                                                                  Main Loop
+                                                                           GEMM/conv 1
+                                                                                                       Load
+                                                                            Launch Load Activation                           Store Activation
+                                                                                                      Weights
+Figure 3. The workflow of Bolt. Blue boxes are our contributions.                                                Main Loop
+                                                                           Fused:
+                                                                                                       Load         Load
+the model into a relay graph. On this graph, it invokes                     Launch Load Activation
+                                                                                                      Weights      Weights
+                                                                                                                                           Store Activation
+computational graph optimizations (e.g., deeper fusion) and                                                      Main Loop    Main Loop
+performs graph partition over the optimized graph. Bolt
+                                                                                       (b) The kernel view of persistent kernel fusion
+next performs hardware-native profiling to search for the
+best kernels for each operator in the Bolt subgraph. Finally,            Figure 4. The graph view and kernel view of persistent kernel
+Bolt generates high-performance CUDA code which will be                  fusion for back-to-back GEMMs/Convs.
+compiled together with the code generated by TVM into a
+single runtime file. In the ensuing discussion, we start with
+the graph-level, deeper fusion opportunities enabled by Bolt,            tifies these patterns in the computational graph and generates
+and move down to the automated code generation including                 corresponding algorithmic policy automatically. Bolt takes
+the light-weight performance profiler and templated code                 epilogue fusion as a starting point, and develops deeper
+generator, and finally discuss the system-friendly model                 fusions using persistent kernels.
+design principles distilled from Bolt.
+                                                                         3.1.1    Persistent kernel (GEMM/Conv) fusion
+3.1    Enabling deeper operator fusion                                   Persistent kernels allow fusing multiple GEMMs or Convs
+                                                                         into one operator to improve performance. As illustrated
+Bolt enables novel graph-level optimizations by extending
+                                                                         in Figure. 4(b), when two GEMM/Conv operations are
+hardware-native templates. Specifically, Bolt introduces
+                                                                         fused together, the main loops of math computation for
+persistent kernels which enable novel deeper operator fu-
+                                                                         the two operators run back-to-back in a single fused ker-
+sion. As shown in Figure 4(a), it works on epilogue fu-
+                                                                         nel. The output activation for the first GEMM/Conv stays
+sion as a basis, and further fuses two or more sequential
+                                                                         in faster GPU memory. This eliminates the need for
+GEMMs/Convs. Fusing multiples GEMMs or Convs into
+                                                                         storing GEMM0/Conv0 output activation back to global
+a single operator improves performance in the following
+                                                                         memory, launching GEMM1/Conv1 kernel, and loading
+ways: (i) eliminating memory traffic for storing and load-
+                                                                         GEMM1/Conv1 input activation from global memory. Bolt
+ing inter-layer activations; (ii) eliminating launch latency
+                                                                         automatically identifies the opportunity to use persistent ker-
+which is especially beneficial for short kernels with small
+                                                                         nels and generates CUDA code by creating new templates
+batch sizes; (iii) enlarging optimization scope for the com-
+                                                                         in CUTLASS. We describe the back-to-back GEMM fusion
+piler to explore more instruction scheduling options (Wu
+                                                                         in detail, and convolution fusion works similarly.
+et al., 2012). Figure 4(b) shows the kernel view of persistent
+kernel fusion.                                                           A back-to-back GEMM is defined as:
+Prerequisite: Epilogue fusion. As a prerequisite for per-                                    D0 = α0 A0 · W 0 + β0 C0,                                    (1)
+sistent kernel fusion, Bolt first integrates the epilogue fusion                             D1 = α1 D0 · W 1 + β1 C1,                                    (2)
+provided in CUTLASS, which fuses a GEMM/Conv kernel
+with its following epilogues all together into one operator, so          with A0, W 0 and W 1 as matrix inputs, αs and βs as scalar
+that we can further leverage persistent kernels. The epilogue            inputs, and C0, C1 as pre-existing matrices (bias), which
+fusion patterns in CUTLASS include: (i) element-wise op-                 will be overwritten by the output. In order to fuse back-
+erators, (ii) data type conversion, (iii) broadcast vector over          to-back GEMMs, output activation D0 of the first GEMM
+columns, and (iv) partial reduction over columns. Bolt iden-             layer must be used as input activation of the second GEMM
+                        Bolt: Bridging the Gap between Auto-tuners and Hardware-native Performance
+
+                                         N1
+                              N0/K1                                                                   (SMEM)
+                                          W1                                        (SMEM)                                                               W1 fragment
+
+
+
+
+                                                N0/K1
+                                 W0
+                                                                                                              W1
+
+
+
+
+                         K0
+                                                                                                                                                               (RF)
+                                                                                             W0           (RF)
+                  K0
+
+
+
+
+                                                                                                                                    A1 fragment
+                                                                       (SMEM)
+                              Thread   Thread
+                                                                                                                                                           Warp tile
+                               Block    Block                                       Warp (RF)         Warp (RF)                                    A1       (RF)
+              M
+                                                                                         …                 …
+                  A0          D0/A1      D1                            A0 tile     D0/A1 tile            D1 tile                                            D1 tile
+                                                                                                                                                  (RF)
+                                                                                   ThreadBlock of GEMM 1                           Warp tile of GEMM 1
+                              GEMM 0   GEMM 1
+
+Figure 5. Illustration of threadblock-residence of GEMM fusion.   Figure 6. RF-resident fusion in a threadblock of back-to-back
+Colored boxes represent one single threadblock. This requires     GEMMs. The threadblock and warp size requirements are:
+ThreadBlock0 N = N0, ThreadBlock1 N = N1.                         Warp0 N=ThreadBlock0 N=N0, Warp1 N=ThreadBlock1 N=N1.
+
+                                                                                                   (SMEM)
+                                                                                                                                             W1 fragments
+layer. This requires that the M dimension of the GEMM                             (SMEM)
+                                                                                                         W1                                       (RF) (RF)
+stays the same for all layers. For back-to-back Convs, this                              W0
+                                                                                                  (RF) (RF)
+requires that all subsequent Convs (from the 2nd) must use
+
+
+
+
+                                                                                                                   A1 fragment
+1 × 1 filter with no padding and a stride of one.                      (SMEM)
+                                                                                                                                  A1
+                                                                                                                                                  Warp Warp
+                                                                                                                                                   tile tile
+                                                                                 Warp Warp        Warp Warp                                       (RF) (RF)
+Key property: Threadblock residence.              The key                            …               …
+
+                                                                                                                                                                D1 tiles
+challenge of persistent kernels is to compute the 2nd                  A0 tile   D0/A1 tile        D1 tile
+                                                                                                                                 (RF)
+GEMM/Conv without loading its input activation from the                          ThreadBlock of GEMM 1                Warp tiles of GEMM 1
+global memory. This requires each output threadblock of
+the 1st GEMM/Conv to remain within the same threadblock           Figure 7. Shared memory-resident fusion in a threadblock of back-
+memory (either in the shared memory or register files) as         to-back GEMMs. The threadblock size requirements are: Thread-
+its respective input threadblock. We call this threadblock        Block0 N = N0 6= Warp0 N, ThreadBlock1 N = N1 6= Warp1 N.
+residence. If it does not hold, the 2nd GEMM/Conv has to
+fetch data from the global memory, eliminating the bene-          Shared memory-resident fusion. RF-resident GEMM fu-
+fits of persistent kernels. For GEMM fusion, threadblock          sion creates higher RF pressure especially when GEMM N
+residence requires ThreadBlock N = GEMM N for each                is large, which will potentially harm the kernel performance
+operator. As for Conv fusion, the requirement is Thread-          and limit the applicable scenarios. To solve the problem, we
+Block N = Conv output channel. Figure 5 visualizes this           propose shared memory-resident fusion to relax the warp
+requirement. With threadblock residence, we develop two           size restriction. In this design, when the 2nd GEMM/Conv
+designs for different scenarios.                                  requires data sharing between warps, the data can be staged
+                                                                  into shared memory instead of RF. Figure 7 shows an ex-
+RF-resident fusion. When the weight matrix W 1 can be
+                                                                  ample where the computation for D1 has to stream W 1
+completely streamed into a warp tile in its ’N ’ dimension
+                                                                  fragments from multiple warp tiles in the ’N ’ dimension.
+(as indicated in Figure. 6), threadblock-residence can be
+                                                                  Thus, the accumulator data produced in GEMM0 must be
+satisfied by storing the output activation for each thread-
+                                                                  transferred from RF to shared memory in order to be loaded
+block entirely in the register file (RF). By doing so, the 2nd
+                                                                  by GEMM1. The data chunk owned by each warp will be
+GEMM/Conv can compute without touching other warps
+                                                                  shared in M dimension for the next layer. By doing so,
+for W 1. We call this RF-resident fusion which requires
+                                                                  the warp size restriction of Warp N in RF-resident fusion
+that the warp size has to follow Warp N = ThreadBlock N
+                                                                  can be relaxed. To enable shared memory-resident fusion,
+= GEMM N for each layer. In RF-resident fusion, each
+                                                                  we introduce a smem fragment iterator as the mechanism
+warp will own a chunk of the accumulator data in the RF
+                                                                  to store the accumulator tile into shared memory, and then
+(referred to as accumulator fragment) produced by the cur-
+                                                                  fetch fragment from shared memory for the 2nd GEMM. In
+rent layer. This will be used entirely as the input for the
+                                                                  order to achieve higher performance, we carefully design
+next layer computed by the same warp. We develop a CUT-
+                                                                  the shared memory layout to avoid any shared memory bank
+LASS warp fragment iterator to extract the data from the
+                                                                  conflict when storing the accumulators of the 1st kernel and
+accumulator fragment and feed it into warp-level MMA
+                                                                  loading it for the 2nd one.
+operations. RF-resident fusion incorporates back-to-back
+MMA pipelines by extending the threadblock-level GEMM             Summary. RF-resident and shared memory-resident fusion
+design in CUTLASS. Our design has no interference across          enables deeper fusion of sequential GEMMs/Convs. Based
+GEMM operations. The only extra operation for the 2nd             on the back-to-back fusion, Bolt can support fusing multiple
+GEMM is to get warp fragments from the previous accumu-           GEMMs/Conv by extending the persistent kernel templates
+lator and perform epilogue computation all in the RF.             and duplicating the GEMM pipelines.
+                        Bolt: Bridging the Gap between Auto-tuners and Hardware-native Performance
+
+3.2     Automating templated code generation                        keep more SMs busy. For each GPU architecture, Bolt pro-
+                                                                    duces tens of best parameter combinations and generates
+3.2.1    Challenges in code generation
+                                                                    the corresponding sample programs by initiating the tem-
+Templated libraries pose new challenges for end-to-end ten-         plate. Note that these sample programs are reusable across
+sor program optimization. Foremost, these templates usu-            models and workloads by given different inputs. Therefore,
+ally do not provide complete functionality for end-to-end           at runtime, Bolt can profile the performance by calling the
+models, but only support a subset of operators. One naı̈ve          pre-generated sample programs with concrete inputs.
+solution is to develop a full compiler stack from scratch for
+each hardware, but this does not scale. Bolt addresses this         3.2.3   Templated code generation
+challenge by employing a BYOC (Bring Your Own Code-
+                                                                    Traditional BYOC systems (Chen et al., 2021) cannot target
+gen) (Chen et al., 2021) approach. It enables us to reuse the
+                                                                    code generation in templated format; they treat such libraries
+existing compiler stacks (e.g., TVM) as much as possible
+                                                                    as external functions at runtime. In contrast, Bolt produces
+and focus only on the optimization and code generation
+                                                                    low-level tensor implementations in the CUTLASS conven-
+using templated device libraries.
+                                                                    tion by instantiating the templates with the best parameters
+A naı̈ve application of BYOC does not solve the entire prob-        identified by the profiler. Our approach has two advantages.
+lem. First, templated device libraries by themselves are            First, the generated code delivers superior performance, e.g.,
+not directly runnable. They require users to instantiate the        can reach 300 TFLOPS throughput for FP16 GEMM on
+template with well-tuned parameters to achieve good perfor-         Ampere A100 which is more than 95% of the hardware the-
+mance, but BYOC does not support such performance profil-           oretic limit. Second, it provides full flexibility to add novel
+ing. Bolt addresses the problem by proposing a light-weight         optimizations in the generated code. In Bolt, we develop
+hardware-native performance profiler that can search for the        the following two optimizations.
+best parameters for an operator with a specific workload
+                                                                    Layout transformation. CUTLASS supports only NHWC
+within minutes. In addition, conventional BYOC regards
+                                                                    layout for Convs because it is faster than NCHW lay-
+device libraries as agnostic external functions and gener-
+                                                                    out (NVIDIA, c). But not all models are written in the
+ates hardware code with hooks to invoke them at runtime.
+                                                                    desired layout—e.g., all Pytorch models use NCHW. To
+This design makes it difficult to customize the hardware
+                                                                    enable more optimization opportunities, Bolt provides auto-
+library and support new optimizations, such as layout trans-
+                                                                    mated layout transformation. Note that this is different from
+formation and kernel padding. Bolt resolves the problem by
+                                                                    the layout transformation provided in TVM that achieves
+viewing the library as a whitebox and generating code in its
+                                                                    the function by modifying the relay graph. Rather, Bolt im-
+convention directly. In the following, we will describe our
+                                                                    plements the transformation in the generated CUDA code of
+detailed design.
+                                                                    the model’s first and last layer directly to save extra kernel
+                                                                    launch overhead. The transformation requires a new tensor
+3.2.2    Light-weight performance profiler
+                                                                    to hold the data with the new layout. Allocating and imitat-
+Bolt designs a light-weight performance profiler to search          ing the new tensor within the kernel will create significant
+for the best template parameters. Traditional auto-tuners,          memory overhead. Instead, we pre-allocate the memory by
+assuming no hardware information, infer a cost model via            adding a new variable in the model’s parameters that can be
+generating sample implementations and measuring their               used by the kernel directly.
+speeds, which requires auto-tuners to explore a large search        Kernel padding. Although CUTLASS supports alignments
+space and leads to long tuning time. Bolt greatly reduces           8, 4, 2, 1 to cover all different workloads, the performance
+the search time by separating the time-consuming sample             varies significantly across different alignments. The largest
+program generation from performance measurement, and                vectorized load and store supported by NVIDIA GPUs is
+by effectively using the hardware details to accelerate the         128 bits, so the most efficient way to use it for FP16 data
+former. Specifically, the performance-related parameters in         type is alignment 8 (128/16). Using alignment 8 in this case
+CUTLASS templates include threadblock, warp, and instruc-           can reduce the load and store instruction counts, as well as
+tion shapes, swizzling functor, stages, etc. Bolt determines        the number of predicates needed by every load and store
+their possible values according to the GPU architecture as          instruction. Tensor shapes with a dimension that cannot
+well as tuning guidelines that are specific to each hardware,       be divided by 8 will have to use smaller alignments. For
+thanks to the whitebox approach. For example, within the            instance, the first layer of convolutional neural networks
+capacity of register files, Bolt prefers large warp tile sizes to   usually has three input channels, which has to use alignment
+achieve a higher compute-memory ratio; four or eight warps          1. This will suffer from non-coalesced memory access and
+per threadblock tends to have better performance when run-          shared memory bank conflicts. Therefore, Bolt automati-
+ning on modern NVIDIA GPUs; small problem sizes need                cally pads unaligned tensors to use alignment 8. It allows
+small threadblock sizes to launch enough thredablocks to
+                        Bolt: Bridging the Gap between Auto-tuners and Hardware-native Performance
+
+us to not only fully utilize tensor core acceleration, but also   epilogue fusion, persistent kernel fusion, and kernel padding.
+to reduce memory loading time. Similar to layout transfor-        Second, we evaluate the end-to-end performance of Bolt
+mation, we also pre-allocate the aligned tensor memory in         on widely-used convolutional neural networks. Finally, we
+models’ parameters.                                               apply our system-model codesign principles to the RepVGG
+                                                                  models (Ding et al., 2021) as a case study.
+3.3   Designing system-friendly models                            Setup. Our experiments are performed on a single NVIDIA
+The graph-level optimization (e.g., persistent kernel fusion)     Tesla T4 GPU. We use Ansor (Zheng et al., 2020a), the state-
+and operator-level optimization (e.g., automated padding)         of-the-art auto-tuner in TVM as our baseline. All inference
+in Bolt also shed light on model-level optimization oppor-        computations in the evaluation use the FP16 data type.
+tunities. Models that are designed in a way that effectively
+makes use of the system strengths can lead to more efficient      4.1     Microbenchmarks
+inference. We call this system-model codesign, which can
+                                                                  4.1.1    GEMM/Conv2D performance
+help build system-friendly models running more efficiently.
+Bolt identifies the following principles for this codesign.       We first evaluate the performance of Bolt-generated GEMM
+                                                                  and Conv2D implementations. For GEMMs, we evaluate
+Exploring different activation functions with epilogue
+                                                                  a) typical GEMMs in BERT (Devlin et al., 2018) where the
+fusion. The selection of activation functions has a notable
+                                                                  batch size is 32 and sequence length is 40 and b) two square
+influence on the accuracy of DNN models (Prajit et al.,
+                                                                  GEMMs. For the Ansor baseline, we tune each workload
+2017). Over the years, a line of activation functions have
+                                                                  for 2000 trials for performance optimization, following the
+been designed, such as ReLU (Nair & Hinton, 2010) and
+                                                                  TVM official example. We run each workload 1000 times
+its variants, GELU (Hendrycks & Gimpel, 2016), Soft-
+                                                                  and compute the average speed; results are shown in Fig-
+plus (Zheng et al., 2015), and Hardswish (Howard et al.,
+                                                                  ure 8a. Ansor adopts a strategy that aggressively consumes
+2019). In Bolt, the epilogue fusion will fuse activations with
+                                                                  all register files to achieve higher performance. However,
+the leading GEMM/Conv to reduce the overhead of acti-
+                                                                  this greedy approach is only effective for less compute-
+vations. Therefore, model designs could explore different
+                                                                  intensive workloads. Therefore, Bolt is 6.1-9.5x faster than
+activation functions in their models and identify the most
+                                                                  Ansor on compute-intensive workloads and achieves 1.9x
+effective one.
+                                                                  speedup on the one that is less compute-intensive. Similarly,
+Deepening models with 1×1 Convs. Deepening neural                 we measure the speed of Conv2Ds in Figure 8b. The work-
+networks to achieve higher accuracy is a commonly-used            loads are extracted from ResNet-50 using 32 as the batch
+model design technique. For instance, ResNet (He et al.,          size. All Conv2Ds in the table are using (3, 3) kernels and
+2016) has different depths from 18 layers to 151 layers with      (1, 1) zero padding. For all cases, Bolt is 2.7-3.5x faster
+increasing accuracy. However, the inference speed will drop       than Ansor. Overall, Bolt achieves significantly higher per-
+quickly as the depth increases. Deepening models with             formance as the tuning strategy based on hardware-native
+1×1 Convs, on the other hand, only incurs low computation         templates extracts native performance.
+overhead in Bolt. This is because of the persistent kernel
+fusion optimization. Therefore, although deepening models         4.1.2    Epilogue fusion performance
+with 1×1 Convs does not increase accuracy to the same
+extent as larger kernels, one can still add 1×1 Convs to          We then evaluate the effectiveness of epilogue fusion
+improve the accuracy with reduced speed loss.                     on element-wise operators.        We choose one work-
+                                                                  load for GEMM and Conv2D from Figure 8 respec-
+Aligning tensor shapes to use GPUs more efficiently. As           tively and measure the performance of the pattern
+we discussed in Section 3.2.3, tensor shapes have signifi-        GEMM/Conv2D+BiasAdd+Activation. We experiment
+cant impacts on the efficiency of models running on GPUs.         on four different activation functions: ReLU, GELU,
+Although Bolt will automatically perform padding over un-         Hardswish, and Softplus, and the results are shown in Fig-
+aligned tensors, the padding itself will incur extra overhead,    ure 9. Our baseline here is Bolt without epilogue fusion, in
+as shown in Table 3. As a result, one could design mod-           which Bolt only computes the GEMM/Conv2D and TVM
+els with aligned tensor shapes to achieve higher efficiency,      will fuse the BiasAdd and activation and compute them as
+avoiding additional padding that will be needed.                  one operator. As we can see, epilogue fusion improves the
+                                                                  computation speeds for both GEMMs and Conv2Ds. The
+4     E VALUATION                                                 average speedup for GEMMs and Conv2D is 1.45x and
+                                                                  1.38x respectively. We have observed similar performance
+Our evaluation of Bolt focuses on the following aspects.          gains on other workloads (not shown).
+First, we perform microbenchmarks to evaluate the perfor-
+mance of Bolt in terms of GEMM/Conv2D computation,
+                                             Bolt: Bridging the Gap between Auto-tuners and Hardware-native Performance
+
+                                                                                                                        4.5
+                             10                  Ansor           Bolt                                                     4                Ansor               Bolt
+        Normalized speed                                                                                                3.5
+
+
+
+
+                                                                                                   Normalized speed
+                              8
+                                                                                                                          3
+                              6                                                                                         2.5
+                                                                                                                          2
+                              4                                                                                         1.5
+                              2                                                                                           1
+                                                                                                                        0.5
+                              0                                                                                           0
+                                      32,7     1280      1       1       2       1
+                                          68,7
+                                              68    ,307 280,768 280,768 048,204 024,102                                      56 2,6     5 2      2 2       2 2       1 2       1 2       72
+                                                                                                                                    4 2,(16 ,128 2,(8 ,128 2,(8 ,256 2,(4 ,256 2,(4 ,512 2,( ,512 2,(1
+                                                        2,76    ,768    ,307    8,20     4,10                                             ,1)       2,2)      1,1)      2,2)      1,1)      2,2)       ,1)
+                                                             8               2       48       24
+
+                                                      Workload (M,N,K)                                                                 Workload ((H, W), (IC, OC), strides)
+
+                                         (a) GEMMs performance.                                                                 (b) Conv2D performance.
+Figure 8. The performance of Bolt on GEMMs and Conv2Ds. Figure 8a shows the speed of GEMMs in BERT with batch size=32 and
+sequence length=40 and two square GEMMs. Figure 8b shows the speed of 3 × 3 Conv2Ds in ResNet-50. The batch size=32 and all
+Conv2Ds use (1, 1) zero padding.
+                                  2                                                                                       2
+                                        Bolt w/o fusion           Bolt w/ fusion                                                Bolt w/o fusion                Bolt w/ fusion
+          Normalized speed
+
+
+
+
+                                                                                                     Normalized speed
+                             1.5                                                                                        1.5
+
+
+                                  1                                                                                       1
+
+
+                             0.5                                                                                        0.5
+
+
+                                  0                                                                                       0
+                                      ReLU          GELU      Hardswish      Softplus                                         ReLU           GELU         Hardswish         Softplus
+
+                                                 Epilogue function (GEMMs)                                                              Epilogue function (Conv2Ds)
+                                                                                                                                                                                              ’
+                                       (a) GEMM epilogue fusion.                                                              (b) Conv2D epilogue fusion.
+Figure 9. The performance of epilogue fusion on pattern GEMM/Conv2D+BiasAdd+Activation. The workload of the GEMM is M=1280,
+N=3072, and N=768. The workload of the Conv2d is H=W=56, IC=OC=64, kernel=(3, 3), stride=(1,1), and padding=(1,1).
+
+4.1.3   Persistent kernel fusion performance
+                                                                                               Table 1. The performance of fusing two back-to-back GEMMs
+We next evaluate the performance of persistent kernel fu-                                      using persistent kernels. Each GEMMs is followed by a ReLU
+sion. First, we use Bolt to fuse two GEMMs with the pattern                                    epilogue and all of them will be fused into one kernel.
+GEMM1+ReLU+GEMM2+ReLU into one GEMM oper-                                                               1st GEMM                               2nd GEMM                      Normalized speed
+ator using RF-based or shared-memory based persistent                                                M        N K                           M       N K                     w/o fuse. w/ fuse.
+kernels, depending on their performance. The baseline                                                2464     1   4                         2464    4  1                      1.00       1.24
+                                                                                                     16384    64 256                        16384   16 64                     1.00       1.34
+is Bolt with only epilogue fusion that computes the two                                              32768    128 576                       32768   64 128                    1.00       1.28
+GEMMs sequentially. Results are presented in Table 1.                                                128320 32 96                           128320 96 32                      1.00       1.46
+Workloads are extracted from real recommendation models,
+e.g., DCNv2 (Wang et al., 2021), DLRM (Naumov et al.,                                          Table 2. The performance of fusing two back-to-back Conv2Ds
+2019). As we can see, the persistent kernel fusion acceler-                                    using persistent kernels. Each Conv2D is followed by a BiasAdd
+                                                                                               and a ReLU epilogue. The 3 × 3 Conv2D uses (1, 1) padding and
+ates the computation by 1.2x-1.5x. For Convs, we extract
+                                                                                               the 1 × 1 Conv2D uses (1, 1) strides and does not have padding.
+the 3×3 Conv2Ds from the first a few layers in the RepVGG
+models and create a 1 × 1 Conv2D for each of them. As                                                                   3×3 Conv2D                   1×1 Conv2D                  Normalized speed
+                                                                                                   H, W                   IC, OC strides            H, W IC, OC                 w/o fuse. w/ fuse.
+shown in Table 2, our persistent kernel fusion can improve
+                                                                                                   2242                   3, 48   (2, 2)            1122   48, 48                 1.00       1.10
+the computation speed by 1.1x-2.0x. Note that our persis-                                          1122                   48, 48  (2, 2)            562    48, 48                 1.00       1.41
+tent kernels can fuse more than two GEMMs/Convs, which                                             562                    48, 48  (1, 1)            562    48, 48                 1.00       1.87
+can further improve the performance by saving intermediate                                         2242                   3, 64   (2, 2)            1122   64, 64                 1.00       1.24
+memory access and kernel launch.                                                                   1122                   64, 64  (2, 2)            562    64, 64                 1.00       1.12
+                                                                                                   562                    64, 64  (1, 1)            562    64, 64                 1.00       2.02
+
+4.1.4   Padding performance and overhead                                                       these workloads can only compute with alignment 2. Bolt
+We now evaluate the performance benefits of automated                                          will automatically pad them to the closest 8-divisible sizes,
+padding and its extra overhead in Bolt. In Table 3, we choose                                  thus leveraging alignment 8. We measure the normalized
+a few Conv2D workloads in our production of which the                                          computation speed of Bolt with and without padding. As
+input channels are not divisible by eight. Without padding,                                    we can see, after padding, the speed can be improved by
+                                                                                               1.8x on average. However, the padding itself will incur extra
+                           Bolt: Bridging the Gap between Auto-tuners and Hardware-native Performance
+
+
+Table 3. The performance and overhead of Bolt’s automated            Table 4. The top-1 accuracy and speed of RepVGG-A0 using differ-
+padding. Unpadded Conv2Ds are computed with alignment=2;             ent activation functions (120 epochs + simple data augmentation).
+after being padded, alignement=8 can be used. The cost of padding         Activation       Top-1 accuracy     Speed (images/sec)
+is the time spent on the padding over the total computation time            ReLU               72.31               5909
+(padding+Conv2D).                                                           GELU               72.38               5645
+                                              Norm.   speed               Hardswish            72.98               5713
+  N     H, W     IC, OC    kernel   padding                   Cost
+                                              unpad   pad                  Softplus            72.57               5453
+  32    20, 26   46, 32    (3, 3)    (1, 1)   1.00    1.62    18%
+  32    20, 26   46, 32    (5, 5)    (2, 2)   1.00    1.95    9%     Table 5. The top-1 accuracy and speed of original RepVGG models
+  128   14, 19   46, 32    (5, 7)    (0, 0)   1.00    1.77    15%    and their augmentation with 1 × 1 Conv2Ds (200 epochs + simple
+  288   11, 15   46, 32    (5, 7)    (0, 0)   1.00    1.71    18%
+                                                                     data augmentation).
+  32    20, 26   174, 64   (3, 3)    (1, 1)   1.00    1.60    24%
+  32    20, 26   174, 64   (5, 5)    (2, 2)   1.00    1.99    12%            Model              Top-1 accuracy    Speed    Params
+                                                                          RepVGG-A0                 73.05         7861      8.31
+overhead: in this benchmark, the average time spent on                    RepVGG-A1                 74.75         6253      12.79
+padding over the total computation time (padding+Conv2D                   RepVGG-B0                 75.28         4888      14.34
+computation) is 16%. This is further evidence of our 3rd                 RepVGGAug-A0               73.87         6716      13.35
+system-friendly model design principle—models should be                  RepVGGAug-A1               75.52         5241      21.7
+designed with aligned tensor shapes.                                     RepVGGAug-B0               76.02         4145      24.85
+
+
+4.2     End-to-end optimization                                      Changing activation functions.          We first augment
+We evaluate the performance of Bolt on end-to-end model              RepVGG by trying different activation functions. The orig-
+optimization by experimenting on six widely-used convo-              inal RepVGG model selects ReLU as its activation func-
+lutional neural networks. Our baseline is Ansor which per-           tion, but we also experiment with GELU (Hendrycks &
+forms auto-tuning to optimize performance. We configure              Gimpel, 2016), Hardswish (Howard et al., 2019), and Soft-
+Ansor following the official example and set the tuning trials       plus (Zheng et al., 2015). The top-1 accuracy and inference
+to the recommended 900 × the number of tasks. We use                 speed of RepVGG-A0 with different activation functions
+batch size=32 and FP16 data type for all models. The infer-          is shown in Table 4. We have found that activation func-
+ence speed and tuning time are shown in Figure 10. As we             tions do affect the accuracy—RepVGG-A0 with Hardswish
+can see, Bolt has significant better inference performance           achieves 0.67% higher accuracy. Meanwhile, the inference
+compared to Ansor. In particular, Bolt is 4.2x faster on             speed does not show too much difference. Even with Soft-
+VGG models, 1.5x faster on ResNet models, and 2.6x faster            plus that has complex computation, the speed only drops by
+on RepVGG models. On average, Bolt improves the infer-               7.7%.
+ence speed by 2.8x compared to Ansor. In terms of tuning             Deepening the model with 1×1 Conv2Ds. We apply our
+time, as shown in Figure 10b, Bolt can complete the tuning           2nd codesign principle by adding 1 × 1 Conv2Ds after each
+much faster than Ansor because Bolt uses hardware-native             3 × 3 Conv2D (except for the last one which has too many
+templated search which greatly reduces the searching space.          output channels). The 1 × 1 Conv2Ds have the same input
+Concretely, Bolt can finish the tuning within 20 minutes for         and output channels, with strides of (1, 1) and no padding.
+all models while Ansor takes 12 hours on average.                    Bolt will fuse adjacent 3 × 3 and 1 × 1 Conv2Ds using
+                                                                     persistent kernels if the fusion is beneficial. To verify the
+4.3     System-friendly models: RepVGG case study                    effectiveness of each individual principle, we do not change
+                                                                     the activation function in this experiment. As shown in
+Finally, we perform a case study on RepVGG (Ding et al.,
+                                                                     Table 5, adding 1 × 1 Conv2Ds can improve the accuracy
+2021) to show the effectiveness of our system-model code-
+                                                                     with minimal speed loss. The accuracy is increased by
+sign principles. RepVGG is a VGG-like convolution neural
+                                                                     0.82%, 0.77%, and 0.74% for RepVGGAug-A0, A1, and
+network which only uses 3×3 Conv2Ds to achieve higher ac-
+                                                                     B0 respectively. Their speed drops by 15.3% on average.
+curacy and faster inference speed. The key idea of RepVGG
+is to train high-accuracy models with branches and remove            Combined effect. Finally, we combine the above two tech-
+those branches by re-parameterization to accelerate the in-          niques and train the model with advanced augmentation, la-
+ference. We apply our system-friendly model principles to            bel smoothing, and mixup in 300 epochs. For RepVGG-A0,
+augment RepVGG. In our experiments, models are trained               we train it for 300 epochs with only simple augmentation,
+on ImageNet with FP32 using the Swin Transformer train-              which has better accuracy. As shown in Table 6, designing
+ing codebase (Liu et al.), but they are quantized to FP16 for        models in a system-friendly manner can improve accuracy
+inference without accuracy loss. The inference runs on an            more efficiently. For example, in original RepVGG models,
+NVIDIA Tesla T4 GPU using 32 as the batch size.                      B0 is built by augmenting A1 with more 3 × 3 Conv2Ds,
+                                        Bolt: Bridging the Gap between Auto-tuners and Hardware-native Performance
+
+                              10000                                                                                       106
+                                               Ansor              Bolt                                                                      Ansor         Bolt
+                               8000
+         Speed (images/sec)                                                                                               105
+
+
+
+
+                                                                                                      Tuning time (sec)
+                               6000
+                                                                                                                          104
+                               4000
+
+                               2000                                                                                       103
+
+
+                                  0   VGG      VGG          ResN     R        R      R                                    102
+                                         -16       -1   9        et-18 esNet-50 epVGG-AepVGG-B                                  VGG
+                                                                                                                                    -16
+                                                                                                                                          VGG
+                                                                                                                                              -19
+                                                                                                                                                    ResN      R        R       R
+                                                                                                                                                         et-18 esNet-50 epVGG-A epVGG-B
+                                                                                       0      0                                                                                0        0
+                                                            Models                                                                                   Models
+
+                                         (a) Inference speed.                                                                              (b) Tunning time.
+
+                              Figure 10. The normalized inference speed and tuning time for widely used convolutional neural networks.
+
+Table 6. The top-1 accuracy and speed of original RepVGG models                                   6                       R ELATED W ORK
+and their augmentation with 1 × 1 Conv2Ds+Hardswish (300
+epochs + advanced augmentation, label smoothing, and mixup).                                      Auto-tuners. Many DNN compilers and frameworks em-
+                                                                                                  ploy auto-tuning strategies to search for the tensor imple-
+        Model                          Top-1 accuracy                Speed (images/sec)
+     RepVGG-A0                             73.41                            7861
+                                                                                                  mentation with optimal performance (Chen et al., 2018b;
+     RepVGG-A1                             74.89                            6253                  Zheng et al., 2020a; Adams et al., 2019; Zheng et al., 2020b).
+     RepVGG-B0                             75.89                            4888                  As they infer the hardware cost model by trying different
+    RepVGGAug-A0                           74.54                            6338                  tensor implementations and measuring their performance,
+    RepVGGAug-A1                           76.72                            4868                  this takes hours to days. Moreover, the generated tensor pro-
+    RepVGGAug-B0                           77.22                            3842                  grams cannot achieve hardware-native performance. Bolt
+                                                                                                  bridges the gap between auto-tuners and hardware-native
+                                                                                                  performance.
+which has 1% higher accuracy and 21.8% lower speed com-
+                                                                                                  Operator fusion. Operator fusion is an important graph-
+pared to A1. In our augmentation, however, RepVGGAug-
+                                                                                                  level optimization (Chen et al., 2018a; Abadi et al., 2016;
+A1 is augmented by adding 1 × 1 Conv2Ds which has simi-
+                                                                                                  Leary & Wang, 2018; Paszke et al., 2019; Abdolrashidi
+lar speed overhead, but the accuracy is improved by 1.83%
+                                                                                                  et al., 2019; Jia et al., 2019). However, existing operator
+than RepVGG-A1. Note that designers have the flexibil-
+                                                                                                  fusion only considers one GEMM/Conv and its adjacent
+ity to make a trade off between accuracy and speed. For
+                                                                                                  operators, e.g., BiasAdd, ReLU, and the fusion is not well
+instance, by adding only 1 × 1 Conv2Ds to the first three
+                                                                                                  supported by vendor libraries. Bolt enables new operator
+layers of RepVGG-A0 and using Hardswish, we can get
+                                                                                                  fusion with high performance. For instance, the proposed
+a RepVGAug-A0 model with 74.02% Top-1 accuracy and
+                                                                                                  persistent kernel fusion can fuse a sequence of GEMMs and
+7288 images/sec speed.
+                                                                                                  Convs, further improving the performance. Our persistent
+                                                                                                  kernel is different from Persistent RNNs (Diamos et al.,
+5    D ISCUSSION                                                                                  2016) which is manually designed specifically for RNNs
+                                                                                                  without using tensor cores.
+Other platforms. Although we use NVIDIA CUTLASS
+and GPUs to demonstrate the design of Bolt, our approach                                          System-friendly model design. RepVGG (Ding et al.,
+is not bound to any specific devices or libraries. Templated                                      2021) designs system-friendly models by employing multi-
+libraries are a design trend for other devices as well. We                                        branch architectures in training models to pursue high accu-
+expect that for other libraries, a Bolt-like approach would                                       racy and by removing the branches via re-parameterization
+also result in new end-to-end optimizations.                                                      for the inference. Also, RepVGG uses only 3 × 3 Conv2Ds
+                                                                                                  which are well-supported by the hardware. Bolt further
+Persistent kernel fusion limitations. Although persistent
+                                                                                                  extends the idea by proposing system-model codesign prin-
+kernels can fuse any sequential GEMMs/Conv2Ds follow-
+                                                                                                  ciples, and uses RepVGG as a concrete case study.
+ing the threadblock residence, we design it specifically for
+memory-bound operators, which is consistent with the moti-
+vation of general operator fusion. That is, Bolt can improve                                      7                       C ONCLUSION
+the performance for sequential GEMMs with small N and
+                                                                                                  This paper presents Bolt, which bridges the gap between
+K dimensions but large M dimensions and Conv2Ds with
+                                                                                                  auto-tuners and device library performance. Bolt utilizes
+small channels. Fusing compute-bound operators could lead
+                                                                                                  the emerging trend that vendor libraries are becoming mod-
+to performance drops because of the threadblock residence
+                                                                                                  ularized and composable. It combines the flexibility of auto-
+requirement.
+                        Bolt: Bridging the Gap between Auto-tuners and Hardware-native Performance
+
+tuners and the hardware-native performance of templated             S. Persistent rnns: Stashing recurrent weights on-chip.
+device libraries to achieve the best of both worlds. Our            In International Conference on Machine Learning, pp.
+design enables new tensor-level and graph-level optimiza-           2024–2033. PMLR, 2016.
+tions, and inspires system-friendly model design insights.
+Our experiments show that Bolt can achieve 2.5× speedup           Ding, X., Zhang, X., Ma, N., Han, J., Ding, G., and Sun,
+on widely-used convolutional neural networks compared               J. Repvgg: Making vgg-style convnets great again. In
+against the state of the art. Moreover, it finishes its auto-       Proceedings of the IEEE/CVF Conference on Computer
+tuning within 20 minutes.                                           Vision and Pattern Recognition, pp. 13733–13742, 2021.
+
+                                                                  He, K., Zhang, X., Ren, S., and Sun, J. Deep residual learn-
+R EFERENCES                                                         ing for image recognition. In Proceedings of the IEEE
+                                                                    conference on computer vision and pattern recognition,
+Abadi, M., Barham, P., Chen, J., Chen, Z., Davis, A., Dean,
+                                                                    pp. 770–778, 2016.
+  J., Devin, M., Ghemawat, S., Irving, G., Isard, M., et al.
+  Tensorflow: A system for large-scale machine learning.          Hendrycks, D. and Gimpel, K. Gaussian error linear units
+  In Proc. OSDI, 2016.                                              (gelus). arXiv preprint arXiv:1606.08415, 2016.
+Abdolrashidi, A., Xu, Q., Wang, S., Roy, S., and Zhou, Y.         Howard, A., Sandler, M., Chu, G., Chen, L.-C., Chen, B.,
+  Learning to fuse. In NeurIPS ML for Systems Workshop,            Tan, M., Wang, W., Zhu, Y., Pang, R., Vasudevan, V.,
+  2019.                                                             et al. Searching for mobilenetv3. In Proceedings of the
+                                                                    IEEE/CVF International Conference on Computer Vision,
+Adams, A., Ma, K., Anderson, L., Baghdadi, R., Li, T.-
+                                                                    pp. 1314–1324, 2019.
+  M., Gharbi, M., Steiner, B., Johnson, S., Fatahalian, K.,
+  Durand, F., et al. Learning to optimize halide with tree        Intel. oneAPI deep neural network library (oneDNN).
+  search and random programs. ACM Transactions on                    https://github.com/oneapi-src/oneDNN.
+ Graphics (TOG), 38(4):1–12, 2019.
+                                                                  Jia, Z., Padon, O., Thomas, J., Warszawski, T., Zaharia, M.,
+AMD. ROCm libraries. https://rocmdocs.amd.                           and Aiken, A. Taso: optimizing deep learning computa-
+ com/en/latest/ROCm_Libraries/ROCm_                                  tion with automatic generation of graph substitutions. In
+ Libraries.html.                                                     Proceedings of the 27th ACM Symposium on Operating
+                                                                     Systems Principles, pp. 47–62, 2019.
+Chen, T., Moreau, T., Jiang, Z., Zheng, L., Yan, E., Shen,
+  H., Cowan, M., Wang, L., Hu, Y., Ceze, L., et al. TVM:          Leary, C. and Wang, T. XLA - tensorflow, compiled, 2018.
+  An automated end-to-end optimizing compiler for deep
+  learning. In Proc. OSDI, 2018a.                                 Liang, X., Shen, X., Feng, J., Lin, L., and Yan, S. Semantic
+                                                                    object parsing with graph lstm. In European Conference
+Chen, T., Zheng, L., Yan, E., Jiang, Z., Moreau, T., Ceze,          on Computer Vision, pp. 125–143. Springer, 2016.
+  L., Guestrin, C., and Krishnamurthy, A. Learning to opti-
+  mize tensor programs. arXiv preprint arXiv:1805.08166,          Liu, Z., Lin, Y., Cao, Y., Hu, H., Wei, Y., Zhang, Z., Lin, S.,
+  2018b.                                                            and Guo, B. Swin transformer: Hierarchical vision trans-
+                                                                    former using shifted windows. https://github.
+Chen, Z., Yu, C. H., Morris, T., Tuyls, J., Lai, Y.-H., Roesch,     com/microsoft/Swin-Transformer.
+  J., Delaye, E., Sharma, V., and Wang, Y. Bring your
+  own codegen to deep learning compiler. arXiv preprint           Nair, V. and Hinton, G. E. Rectified linear units improve
+  arXiv:2105.03215, 2021.                                           restricted boltzmann machines. In Icml, 2010.
+
+Chetlur, S., Woolley, C., Vandermersch, P., Cohen, J.,            Naumov, M., Mudigere, D., Shi, H. M., Huang, J., Sun-
+  Tran, J., Catanzaro, B., and Shelhamer, E. cudnn:                 daraman, N., Park, J., Wang, X., Gupta, U., Wu, C.,
+  Efficient primitives for deep learning. arXiv preprint            Azzolini, A. G., Dzhulgakov, D., Mallevich, A., Cher-
+  arXiv:1410.0759, 2014.                                            niavskii, I., Lu, Y., Krishnamoorthi, R., Yu, A., Kon-
+                                                                    dratenko, V., Pereira, S., Chen, X., Chen, W., Rao, V.,
+Devlin, J., Chang, M.-W., Lee, K., and Toutanova, K. Bert:          Jia, B., Xiong, L., and Smelyanskiy, M. Deep learning
+  Pre-training of deep bidirectional transformers for lan-          recommendation model for personalization and recom-
+  guage understanding. arXiv preprint arXiv:1810.04805,             mendation systems. CoRR, abs/1906.00091, 2019. URL
+  2018.                                                             https://arxiv.org/abs/1906.00091.
+
+Diamos, G., Sengupta, S., Catanzaro, B., Chrzanowski, M.,         NVIDIA. cuBLAS. a. https://developer.nvidia.
+  Coates, A., Elsen, E., Engel, J., Hannun, A., and Satheesh,      com/cublas.
+                       Bolt: Bridging the Gap between Auto-tuners and Hardware-native Performance
+
+NVIDIA. CUTLASS: CUDA templates for linear algebra              Zheng, S., Liang, Y., Wang, S., Chen, R., and Sheng, K.
+ subroutines. b. https://github.com/NVIDIA/                       Flextensor: An automatic schedule exploration and opti-
+ cutlass.                                                         mization framework for tensor computation on heteroge-
+                                                                  neous system. In Proceedings of the Twenty-Fifth Interna-
+NVIDIA.   Tensor layouts in memory: NCHW
+                                                                  tional Conference on Architectural Support for Program-
+ vs NHWC.      c.     https://docs.nvidia.
+                                                                  ming Languages and Operating Systems, pp. 859–873,
+ com/deeplearning/performance/
+                                                                  2020b.
+ dl-performance-convolutional/index.
+ html#tensor-layout.
+Paszke, A., Gross, S., Massa, F., Lerer, A., Bradbury, J.,
+  Chanan, G., Killeen, T., Lin, Z., Gimelshein, N., Antiga,
+  L., Desmaison, A., Kopf, A., Yang, E., DeVito, Z., Rai-
+  son, M., Tejani, A., Chilamkurthy, S., Steiner, B., Fang,
+  L., Bai, J., and Chintala, S. Pytorch: An imperative
+  style, high-performance deep learning library. In Wal-
+  lach, H., Larochelle, H., Beygelzimer, A., d'Alché-Buc,
+  F., Fox, E., and Garnett, R. (eds.), Advances in Neural In-
+  formation Processing Systems 32, pp. 8024–8035. Curran
+  Associates, Inc., 2019.
+Prajit, R., Zoph, B., and Quoc, V. L. Swish: a self-gated
+  activation function. arXiv preprint arXiv:1710.059417,
+  2017.
+Roesch, J., Lyubomirsky, S., Kirisame, M., Weber, L., Pol-
+  lock, J., Vega, L., Jiang, Z., Chen, T., Moreau, T., and
+  Tatlock, Z. Relay: A high-level compiler for deep learn-
+  ing. arXiv preprint arXiv:1904.08368, 2019.
+SAMPL. Tophub autotvm log collections. https://
+  github.com/tlc-pack/tophub.
+Wang, R., Shivanna, R., Cheng, D., Jain, S., Lin, D., Hong,
+ L., and Chi, E. Dcn v2: Improved deep & cross network
+ and practical lessons for web-scale learning to rank sys-
+ tems. In Proceedings of the Web Conference 2021, pp.
+ 1785–1797, 2021.
+Wu, H., Diamos, G., Cadambi, S., and Yalamanchili, S.
+ Kernel weaver: Automatically fusing database primitives
+ for efficient gpu computation. In Proceedings of the 45th
+ Annual IEEE/ACM International Symposium on Microar-
+ chitecture, MICRO-45 ’12, 2012.
+Yu, C. H., Shi, X., Shen, H., Chen, Z., Li, M., and Wang,
+  Y. Lorien: Efficient deep learning workloads delivery. In
+  Proceedings of the Seventh ACM Symposium on Cloud
+  Computing, 2021.
+Zheng, H., Yang, Z., Liu, W., Liang, J., and Li, Y. Im-
+  proving deep neural networks using softplus units. In
+  2015 International Joint Conference on Neural Networks
+  (IJCNN), pp. 1–4. IEEE, 2015.
+Zheng, L., Jia, C., Sun, M., Wu, Z., Yu, C. H., Haj-Ali,
+  A., Wang, Y., Yang, J., Zhuo, D., Sen, K., et al. Ansor:
+  Generating high-performance tensor programs for deep
+  learning. In Proc. OSDI, 2020a.
+

@@ -1,0 +1,1278 @@
+                                                                Alpa: Automating Inter- and Intra-Operator Parallelism
+                                                                           for Distributed Deep Learning
+
+                                                                Lianmin Zheng1,∗ Zhuohan Li1,∗ Hao Zhang1,∗ Yonghao Zhuang4
+                                                          Zhifeng Chen3 Yanping Huang3 Yida Wang2 Yuanzhong Xu3 Danyang Zhuo6
+                                                                         Eric P. Xing5 Joseph E. Gonzalez1 Ion Stoica1
+
+                                                           1 UC   Berkeley 2 Amazon Web Services 3 Google 4 Shanghai Jiao Tong University
+arXiv:2201.12023v3 [cs.LG] 28 Jun 2022
+
+
+
+
+                                                                        5 MBZUAI, Carnegie Mellon University 6 Duke University
+
+
+                                                                     Abstract                                      Training the large Mixture-of-Expert (MoE) transformers
+                                         Alpa automates model-parallel training of large deep learning             model [16, 31] on TPU clusters requires manually tuning
+                                         (DL) models by generating execution plans that unify data,                the partitioning axis for each layer, whereas training the same
+                                         operator, and pipeline parallelism. Existing model-parallel               model on an AWS GPU cluster calls for new pipeline schemes
+                                         training systems either require users to manually create a par-           that can depend on the choices of partitioning (§8.1).
+                                         allelization plan or automatically generate one from a limited               More generally, efficient large-scale model training re-
+                                         space of model parallelism configurations. They do not suf-               quires tuning a complex combination of data, operator, and
+                                         fice to scale out complex DL models on distributed compute                pipeline parallelization approaches at the granularity of the in-
+                                         devices. Alpa distributes the training of large DL models by              dividual tensor operators. Correctly tuning the parallelization
+                                         viewing parallelisms as two hierarchical levels: inter-operator           strategy has been shown [30, 33] to deliver an order of magni-
+                                         and intra-operator parallelisms. Based on it, Alpa constructs a           tude improvements in training performance, but depends on
+                                         new hierarchical space for massive model-parallel execution               strong machine learning (ML) and system expertise.
+                                         plans. Alpa designs a number of compilation passes to auto-                  Automating the parallelization of large-scale models would
+                                         matically derive efficient parallel execution plans at each par-          significantly accelerate ML research and production by en-
+                                         allelism level. Alpa implements an efficient runtime to orches-           abling model developers to quickly explore new model de-
+                                         trate the two-level parallel execution on distributed compute             signs without regard for the underlying system challenges.
+                                         devices. Our evaluation shows Alpa generates parallelization              Unfortunately, it requires navigating a complex space of plans
+                                         plans that match or outperform hand-tuned model-parallel                  that grows exponentially with the dimensions of parallelism
+                                         training systems even on models they are designed for. Unlike             and the size of the model and cluster. For example, when all
+                                         specialized systems, Alpa also generalizes to models with                 parallelism techniques are enabled, figuring out the execution
+                                         heterogeneous architectures and models without manually-                  plan involves answering a web of interdependent questions,
+                                         designed plans. Alpa’s source code is publicly available at               such as how many data-parallel replicas to create, which axis
+                                         https://github.com/alpa-projects/alpa.                                    to partition each operator along, how to split the model into
+                                                                                                                   pipeline stages, and how to map devices to the resulting par-
+                                                                                                                   allel executables. The interplay of different parallelization
+                                         1    Introduction                                                         methods and their strong dependence on model and cluster se-
+                                         Several of the recent advances [10, 22, 49] in deep learning              tups form a combinatorial space of plans to optimize. Recent
+                                         (DL) have been a direct result of significant increases in model          efforts [17, 38, 55] to automatically parallelize model training
+                                         size. For example, scaling language models, such as GPT-3,                are constrained to the space of a single model-parallelism
+                                         to hundreds of billions of parameters [10] and training on                approach, or rely on strong assumptions on the model and
+                                         much larger datasets enabled fundamentally new capabilities.              cluster specifications (§2.1).
+                                            However, training these extremely large models on dis-                    Our key observation is that we can organize different paral-
+                                         tributed clusters currently requires a significant amount of              lelization techniques into a hierarchical space and map these
+                                         engineering effort that is specific to both the model definition          parallelization techniques to the hierarchical structure of the
+                                         and the cluster environment. For example, training a large                compute cluster. Different parallelization techniques have dif-
+                                         transformer-based language model requires heavy tuning and                ferent bandwidth requirements for communication, while a
+                                         careful selection of multiple parallelism dimensions [40].                typical compute cluster has a corresponding structure: closely
+                                             ∗ Lianmin,
+                                                      Zhuohan, and Hao contributed equally. Part of the work was   located devices can communicate with high bandwidth while
+                                         done when Lianmin interned at Amazon and Zhuohan interned at Google.      distant devices have limited communication bandwidth.
+   With this observation in mind, in this paper, we take a differ-           A        B        C        D
+ent view from conventional data and model parallelisms, and                                                        A       B        C        D
+                                                                         (a) Computational graph
+re-categorize ML parallelization approaches as intra-operator                                                  (b) Manual plan
+and inter-operator parallelisms. Intra-operator parallelism                  A        B        C        D         (e.g., Megatron-LM [40])
+partitions ML operators along one or more tensor axes (batch
+or non-batch) and dispatches the partitions to distributed de-               A        B        C        D         A        B        C        D
+vices (Fig. 1c); inter-operator parallelism, on the other hand,             …
+slices the model into disjoint stages and pipelines the execu-           (c) The space of intra-operator               A        B       C        D
+tion of stages on different sets of devices (Fig. 1d). They take             parallelism (e.g., Tofu [55])
+
+place at two different granularities of the model computation,                                                         A        B       C        D
+                                                                             A        B        C        D              …       …
+differentiated by whether to partition operators.
+   Given that, a parallel execution plan can be expressed hier-                                                   A        B        C        D
+                                                                             A        B        C        D
+archically by specifying the plan in each parallelism category,                                                  …
+                                                                            …
+leading to a number of advantages. First, intra- and inter-
+                                                                         (d) The space of inter-operator       (e) Our hierarchical space
+operator parallelisms feature distinct characteristics: intra-               parallelism (e.g., DAPPLE [17])
+operator parallelism has better device utilization, but results
+in communicating at every split and merge of partitioned             Figure 1: Generation of parallelization plans for a computa-
+operators, per training iteration; whereas inter-operator par-       tional graph shown in (a). Different colors represent different
+allelism only communicates between adjacent stages, which            devices, dashed boxes represent pipeline stages. (b) creates
+can be light if sliced properly, but incurs device idle time due     the plan manually. (c) and (d) automatically generate plans
+to scheduling constraints. We can harness the asymmetric             using only one of intra- and inter-operator parallelisms. (e)
+nature of communication bandwidth in a compute cluster,              shows our approach that creates a hierarchical space to com-
+and map intra-operator parallelism to devices connected with         bine intra- and inter-operator parallelisms.
+high communication bandwidth, while orchestrating the inter-
+operator parallelism between distant devices with relatively         • We evaluate Alpa on training large models with billions
+lower bandwidth in between. Second, this hierarchical design         of parameters. We compare Alpa with state-of-the-art dis-
+allows us to solve each level near-optimally as an individual        tributed training systems on an Amazon EC2 cluster of 8
+tractable sub-problem. While the joint execution plan is not         p3.16xlarge instances with 64 GPUs. On GPT [10] models,
+guaranteed globally optimal, they demonstrate strong perfor-         Alpa can match the specialized system Megatron-LM [40,49].
+mance empirically for training various large models.                 On GShard MoE models [31], compared to a hand-tuned
+   Guided by this new problem formulation, we design and             system Deepspeed [45], Alpa achieves a 3.5× speedup on
+implement Alpa, the first compiler that automatically gen-           2 nodes and a 9.7× speedup on 4 nodes. Unlike specialized
+erates parallel execution plans covering all data, operator,         systems, Alpa also generalizes to models without manual
+and pipeline parallelisms. Given the model description and a         strategies and achieves an 80% linear scaling efficiency on
+cluster configuration, Alpa achieves this by partitioning the        Wide-ResNet [59] with 4 nodes. This means developers can
+cluster into a number of device meshes, each of which con-           get efficient model-parallel execution of large DL models
+tains devices with preferably high-bandwidth connections,            out-of-the-box using Alpa.
+and partitioning the computation graph of the model into
+stages. It assigns stages to device meshes, and automatically        2      Background: Distributed Deep Learning
+orchestrates intra-operator parallelisms on a device mesh and        DL computation is commonly represented by popular ML
+inter-operator parallelisms between device meshes.                   frameworks [1, 9, 42] as a dataflow graph. Edges in the graph
+   In summary, we make the following contributions:                  represent multi-dimensional tensors; nodes are computational
+• We construct a two-level parallel execution plan space             operators, such as matrix multiplication (matmul), that trans-
+(Fig. 1e) where plans are specified hierarchically using inter-      form input tensors into output tensors. Training a DL model
+and intra-operator parallelisms.                                     for one iteration consists of computing a loss by forward-
+• We design tractable optimization algorithms to derive near-        ing a batch of data through the graph, deriving the updates
+optimal execution plans at each level.                               via a reverse backward pass, and applying the updates to the
+• We implement Alpa, a compiler system for distributed DL            parameters via weight update operations. In practice, model
+on GPU clusters. Alpa features: (1) a set of compilation passes      developers define the dataflow graph. An execution engine
+that generate execution plans using the hierarchical optimiza-       then optimizes and executes it on a compute device.
+tion algorithms, (2) a new runtime architecture that orches-            When either the model or data is large that a single device
+trates the inter-op parallelism between device meshes, and (3)       cannot complete the training in a reasonable amount of time,
+a number of system optimizations that improve compilation            we resort to ML parallelization approaches that parallelize
+and address cross-mesh communication.                                the computation on distributed devices.
+          Device 1      Device 2       Replicated    Row-partitioned      Column-partitioned   Inter-Operator Parallelism
+
+   Intra-Operator Parallelism                                                                         Time = 0     Time = 1     Time = 2     Time = 3   Time = 4
+                                                                                                x
+                w1          w2               w1        w2                 w1          w2
+                                                                                                w1     matmul      matmul       matmul        matmul
+
+      x       matmul      matmul   x       matmul    matmul      x      matmul      matmul      w2                 matmul       matmul        matmul    matmul
+
+          (a) Data Parallelism     (b) Operator Parallelism          (c) ZeRO Optimizer                                 (d) Pipeline Parallelism
+
+Figure 2: Common parallelization techniques for training a 2-layer Multi-layer Perceptron (MLP). Only the forward pass is
+shown. “x” is the input data. “w1” and “w2” are two weight matrices.
+
+2.1       Conventional View of ML Parallelism                                         cluster setups (§8.1).
+                                                                                      Automatic combination of parallelisms. The configurations
+Existing ML parallelization approaches are typically catego-
+                                                                                      of each individual parallelism, their interdependence, and their
+rized as data, operator, and pipeline parallelisms.
+                                                                                      dependence on model and cluster setups form an intractable
+Data parallelism. In data parallelism, the training data is                           space, which prevents the trivial realization of automatically
+partitioned across distributed workers, but the model is repli-                       combining these parallelisms. For examples, when coupled
+cated. Each worker computes the parameter updates on its                              with operator parallelism, each time adding a data-parallel
+independent data split, and synchronizes the updates with                             replica would require allocating a new set of devices (in-
+other workers before the weight update, so that all workers                           stead of one single device) as the worker, and figuring out
+observe consistent model parameters throughout training.                              the optimal operator parallelism configurations within those
+Operator parallelism. When the model is too large to fit in                           devices. When including pipeline parallelism, the optimal
+one device, operator parallelism is an effective model paral-                         pipelining scheme depends on the data and operator paral-
+lelism option. Operator parallelism refers to approaches that                         lelism choices of each pipeline stage and how devices are
+partition the computation of a specific operator (abbreviated                         allocated for each stage. With this conventional view, prior
+as op in the following text), such as matmul shown in Fig. 2b,                        explorations [17, 25, 55, 60] of auto-parallelization are lim-
+along non-batch axes, and compute each part of the operator                           ited to combining data parallelism with at most one model
+in parallel across multiple devices.                                                  parallelism approach, which misses substantial performance
+   Because input tensors are jointly partitioned, when a de-                          opportunities. We next develop our view of ML parallelisms.
+vice computes its op partition, the required portions of input
+tensors may not reside in its local memory. Communication is                          2.2      Intra- and Inter-Operator Parallelisms
+thus required to fetch the input data from other devices. When                        Different from the conventional view, in this paper, we re-
+the tensors are partitioned evenly, i.e., SPMD [57], all devices                      catalog existing parallelization approaches into two orthogo-
+will follow the same collective communication patterns such                           nal categories: intra-operator and inter-operator parallelisms.
+as all-reduce, all-gather, and all-to-all.                                            They are distinguished by if they involve partitioning opera-
+Pipeline parallelism. Instead of partitioning ops, pipeline                           tors along any tensor axis. We next use the examples in Fig. 2
+parallelism places different groups of ops from the model                             to introduce the two types of parallelisms.
+graph, referred as stages, on different workers; meanwhile, it                        Intra-operator parallelism. An operator works on multi-
+splits the training batch as a number of microbatches, and                            dimensional tensors. We can partition the tensor along some
+pipelines the forward and backward passes across micro-                               dimensions, assign the resulting partitioned computations to
+batches on distributed workers, as Fig. 2d shows. Unlike                              multiple devices, and let them execute different portions of
+operator parallelism, pipeline parallelism transfers intermedi-                       the operator at the same time. We define all parallelization
+ate activations at the forward and backward passes between                            approaches using this workflow as intra-operator parallelism.
+different workers using point-to-point communication.                                    Fig. 2a-c illustrates the application of several typical in-
+Manual combination of parallelisms. Recent development                                stantiations of intra-op parallelism on an MLP. Data paral-
+shows the approaches mentioned above need to be combined                              lelism [29], by definition, belongs to intra-op parallelism –
+to scale out today’s large DL models [40, 57]. The state-                             the input tensors and matmuls are partitioned along the batch
+of-the-art training systems, such as Megatron-LM [40, 49],                            dimension, and weight tensors are replicated. Alternatively,
+manually design a specialized execution plan that combines                            when the weights are very large, partitioning the weights
+these parallelisms for transformer language models, which is                          (Fig. 2b) leads to the aforementioned operator parallelism
+also known as 3D Parallelism. By assuming the model has the                           adopted in Megatron-LM. Besides operators in the forward
+same transformer layer repeated, it assigns an equal number                           or backward passes, one can also partition the operators from
+of layers to each pipeline stage and applies a hand-designed                          the weight update phase, yielding the weight update shard-
+operator and data parallelism configuration uniformly for                             ing or equivalently the ZeRO [44, 56] technique, commonly
+all layers. Despite the requirement of strong expertise, the                          comprehended as an optimization of data parallelism.
+manual plan cannot generalize to different models or different                           Due to the partitioning, collective communication is re-
+                                                                                                                     Computational                        Device
+quired at the split and merge of the operator. Hence, a key                                                             Graph                             Cluster
+characteristic of intra-operator parallelism is that it results in                            Inter-op Pass
+substantial communication among distributed devices.
+                                                                                                                     Stage 1              Stage 2               Stage N
+
+
+
+
+                                                                                 Compiler
+Inter-operator parallelism. We define inter-operator paral-                                   Intra-op Pass
+lelism as the orthogonal class of approaches that do not per-                                                        Sharded             Sharded          …     Sharded
+                                                                                                                     Stage 1             Stage 2                Stage N
+form operator partitioning, but instead, assign different opera-                               Runtime
+                                                                                             Orchestration
+tors of the graph to execute on distributed devices.                                                             Mesh Executable 1    Mesh Executable 2       Mesh Executable N
+
+   Fig. 2d illustrates the batch-splitting pipeline parallelism                               Intra-op Parallelism
+
+as a case of inter-operator parallelism.2 The pipeline exe-                                     Device Mesh 1                   Device Mesh 2                 Device Mesh N
+
+
+
+
+                                                                                 Runtime
+cution can follow different schedules, such as Gpipe [22],                                  Worker D0 D1 D2 D3            Worker D0 D1 D2 D3              Worker    Devices …
+PipeDream [38], and synchronous 1F1B [17, 39]. We adopt                                     Worker D0 D1 D2 D3            Worker D0 D1 D2 D3              Worker    Devices …
+the synchronous 1F1B schedule throughout this paper as it                                            …                             …                                …
+
+respects synchronous consistency, and has the same pipeline                                                                Inter-op Parallelism
+
+latency but lower peak memory usage compared to Gpipe.                           Figure 3: Compiler passes and runtime architecture. A
+   In inter-operator parallelism, devices communicate only be-                   sharded stage is a stage annotated with the sharding specs
+tween pipeline stages, typically using point-to-point commu-                     generated by intra-op pass.
+nication between device pairs. The required communication
+volume can be much less than the collective communication                             # Put @parallelize decorator on top of the Jax functions
+                                                                                      @parallelize
+in intra-operator parallelism. Regardless of the schedule used,
+                                                                                      def train_step(state, batch):
+due to the data dependency between stages, inter-operator par-                            def loss_func(params):
+allelism results in some devices being idle during the forward                                out = state.forward(params, batch["x"])
+                                                                                              return jax.numpy.mean((out - batch["y"]) ** 2)
+and backward computation.
+   By this categorization, the two parallelisms take place at                                 grads = grad(loss_func)(state.params)
+different granularities of the DL computation and have distinct                               new_state = state.apply_gradient(grads)
+                                                                                              return new_state
+communication requirements, which happen to match the
+structure of today’s compute clusters. We will leverage these                         # A typical training loop
+properties to design hierarchical algorithms and compilation                          state = create_train_state()
+                                                                                      for batch in data_loader:
+passes to auto-generate execution plans. Several concurrent                               state = train_step(state, batch)
+work [2, 33, 39, 50] have proposed similar categorization, but
+Alpa is the first end-to-end system that uses this categorization                Figure 4: An example to demonstrate Alpa’s API for Jax.
+to automatically generate parallel plans from the full space.                    The developers uses a Python decorator @parallelize to
+                                                                                 annotate functions that need to be parallelized. The rest of the
+3    Overview                                                                    program is kept intact.
+Alpa is a compiler that generates model-parallel execution
+plans by hierarchically optimizing the plan at two different                     locally near-optimal at their respective level of the hierarchy.
+levels: intra-op and inter-op parallelism. At the intra-op level,                   To achieve this, Alpa implements three novel compilation
+Alpa minimizes the cost of executing a stage (i.e., subgraph)                    passes as Fig. 3 shows. Given a model description, in the
+of the computational graph, with respect to its intra-operator                   form of a Jax [9] intermediate representation (IR), and a clus-
+parallelism plan, on a given device mesh, which is a set of                      ter configuration, the inter-op compilation pass slices the IR
+devices that may have high bandwidth between each other                          into a number of stages, and slices the device cluster into a
+(e.g., GPUs within a single server). Different meshes might                      number of device meshes. The inter-op pass uses a Dynamic
+have different numbers of computing devices according to the                     Programming (DP) algorithm to assign stages to meshes and
+workload assigned. At the inter-op level, Alpa minimizes the                     invokes the intra-op compilation pass on each stage-mesh pair,
+inter-op parallelization latency, with respect to how to slice                   to query the execution cost of this assignment. Once invoked,
+the model and device cluster into stages and device meshes                       the intra-op pass optimizes the intra-op parallel execution
+and how to map them as stage-mesh pairs. The inter-op op-                        plan of the stage running on its assigned mesh, by minimizing
+timization depends on knowing the execution cost of each                         its execution cost using an Integer Linear Programming (ILP)
+stage-mesh pair reported by the intra-op optimizer. Through                      formulation, and reports the cost back to the inter-op pass. By
+this hierarchical optimization process, Alpa generates the exe-                  repeatedly querying the intra-op pass for each allocation of
+cution plan consisting of intra-op and inter-op plans which are                  a stage-mesh pair, the inter-op pass uses the DP to minimize
+                                                                                 the inter-op parallel execution latency and obtains the best
+    2 Device placement [36] is another case of inter-op parallelism, which
+                                                                                 slicing scheme of stages and meshes.
+partitions the model graph and executes them on different devices but does not
+saturate pipelines using multiple microbatches. Hence pipeline parallelism is       Given the output hierarchical plan and a designated
+often seen as a better alternative to it because of less device idle time.       pipeline-parallel schedule, each stage is first compiled as a
+parallel executable on its located mesh. A runtime orchestra-      Table 1: Sharding specs of a 2-dimentional tensor on a 2 × 2
+tion pass is invoked to fulfill the communication requirement      device mesh. A is a (N, M) tensor. The device mesh is [[De-
+between two adjacent stages that require communication be-         vice 0, Device 1], [Device 2, Device 3]]. Each device stores a
+tween the two meshes they locate on. The runtime orchestra-        partition of A. The first column is the name of the sharding
+tion pass then generates static instructions specific to each      spec. The latter columns use Numpy syntax to describe the
+mesh according to the pipeline-parallel schedule and invokes       partitions stored on each device.
+the execution on all meshes.
+API. Alpa has a simple API shown in Fig. 4. Alpa requires          Spec       Device 0               Device 1               Device 2                    Device 3
+developers to annotate functions to be parallelized, such as        RR     A[0 : N, 0 : M]       A[0 : N, 0 : M]         A[0 : N, 0 : M]              A[0 : N, 0 : M]
+the train_step(), using a Python decorator @parallelize.           S0 S1 A[0 :   N        M              N M
+                                                                                                                : M] A[ N2 : N, 0 :     M
+                                                                                                                                                     A[ N2 : N, M2 : M]
+                                                                                  2 ,0 : 2 ]     A[0 :   2, 2                           2]
+Upon the first call to train_step(), Alpa traces the whole
+                                                                   S1 S0   A[0 : N2 , 0 : M2 ]   A[ N2 : N, 0 :   M
+                                                                                                                  2]    A[0 :   N M
+                                                                                                                                2, 2   : M] A[ N2 : N, M2 : M]
+function to get the model IR, invokes the compilation, and
+                                                                    S0 R   A[0 : N2 , 0 : M]     A[0 :    N
+                                                                                                          2 , 0 : M]    A[ N2   : N, 0 : M]          A[ N2 : N, 0 : M]
+converts the function to a parallel version.
+                                                                    S1 R   A[0 : N2 , 0 : M]     A[ N2   : N, 0 : M]     A[0 : N2 , 0 : M]           A[ N2 : N, 0 : M]
+   Since the inter-op pass depends on the intra-op pass, in the
+following text, we first describe the intra-op pass, followed by    RS0    A[0 : N, 0 : M2 ]     A[0 : N, 0 :      M
+                                                                                                                   2]   A[0 : N, M2 : M]             A[0 : N, M2 : M]
+the inter-op pass, and finally the runtime orchestration pass.      RS1    A[0 : N, 0 : M2 ]     A[0 : N,   M
+                                                                                                            2   : M]     A[0 : N, 0 : M2 ]           A[0 : N, M2 : M]
+                                                                   S01 R   A[0 : N4 , 0 : M]     A[ N4: N2 , 0 : M]     A[ N2 : 3N
+                                                                                                                                 4 , 0 : M]          A[ 3N
+                                                                                                                                                         4 : N, 0 : M]
+4     Intra-Operator Parallelism                                   RS01    A[0 : N, 0 : M4 ]     A[0 : N, M4 : M2 ]     A[0 : N, M2 : 3M             A[0 : N, 3M
+                                                                                                                                         4 ]                   4 : M]
+Alpa optimizes the intra-operator parallelism plan within a de-
+vice mesh. Alpa adopts the SPMD-style intra-op parallelism         Table 2: Several cases of resharding. all-gather(x, i) means
+[31, 57] which partitions operators evenly across devices and      an all-gather of x bytes along the i-th mesh axis. M is the size
+executes the same instructions on all devices, as per the fact     of the tensor. (n0 , n1 ) is the mesh shape.
+that devices within a single mesh have equivalent compute
+                                                                                #      Src Spec          Dst Spec       Communication Cost
+capability. This SPMD style significantly reduces the space
+of intra-op parallelism plans; meanwhile, it conveniently ex-                   1         RR               S0 S1                   0
+presses and unifies many important approaches such as data                      2        S0 R               RR             all-gather(M, 0)
+parallelism, ZeRO, Megatron-LM’s operator parallelism, and                      3        S0 S1              S0 R           all-gather( nM , 1)
+                                                                                                                                             0
+
+their combinations, which are not fully covered by existing                     4         S0 R              RS0             all-to-all( nM , 0)
+                                                                                                                                             0
+
+automatic operators parallelism systems, such as Tofu [55]                      5        S0 S1             S01 R          all-to-all( n M·n , 1)
+                                                                                                                                         0       1
+
+and FlexFlow [25]. Unlike systems that perform randomized
+search [25] or assume linear graphs [55], Alpa formalizes the      the first mesh dimension and the second mesh dimension with
+problem as an integer linear programming (ILP) and shows it        different bandwidths. We assume different groups of devices
+can be solved efficiently for computational graphs with tens       along the same mesh dimension have the same communi-
+of thousands of operators. Next, we describe the space of          cation performance. For a set of physical devices, there can
+intra-op parallelism and our solution.                             be multiple logical views. For example, given 2 nodes and 8
+                                                                   GPUs per node (i.e., 16 devices in total), we can view them as
+4.1    The Space of Intra-Operator Parallelism                     a 2 × 8, 1 × 16, 4 × 4, 8 × 2, or 16 × 1 device mesh. The map-
+Given an operator in the computational graph, there are multi-     ping between physical devices and the logical device mesh
+ple possible parallel algorithms to run it on a device mesh. For   view is optimized by the inter-op pass (§5). In the rest of this
+example, a matrix multiplication Ci j = ∑k Aik Bk j corresponds    section, we consider one fixed device mesh view.
+to a three-level for-loop. To parallelize it, we can parallelize   Sharding Spec. We use sharding spec to define the layout
+the loop i, loop j, loop k, or combinations of them across         of a tensor. For an N-dimensional tensor, its sharding spec
+devices, which would have different computation and commu-         is defined as X0 X1 · · · Xn−1 , where Xi ∈ {S, R}. If Xi = S, it
+nication costs, require different layouts for the input tensors,   means the i-th axis of the tensor is partitioned. Otherwise, the
+and result in output tensors with different layouts. If an input   i-th axis is replicated. For example, for a 2-dimensional tensor
+tensor does not satisfy the layout requirement, a layout conver-   (i.e., a matrix), SR means it is row-partitioned, RS means it
+sion is required, which introduces extra communication costs.      is column-partitioned, SS means it is both row- and column-
+The goal of the intra-op pass is to pick one parallel algorithm    partitioned. RR means it is replicated without any partitioning.
+for every operator to minimize the execution time of the en-       After we define which tensor axes are partitioned, we then
+tire graph. Next, we formally define the device mesh and the       have to map the partitioned tensor axes to mesh axes. We
+layout of a tensor and discuss the cost of layout conversion.      only consider 2-dimensional device meshes, so a partitioned
+Device mesh. A device mesh is a 2-dimensional logical view         tensor axis can be mapped to either the first or the second
+of a set of physical devices. Each device in the mesh has the      axis of the device mesh, or both. We added a superscript to
+same compute capability. Devices can communicate along             S to denote the device assignment. For example, S0 means
+Table 3: Several parallel algorithms for a batched matmul                 4.2    ILP Formulation
+Cb,i, j = ∑k Ab,i,k Bb,k, j . The notation all-reduce(x, i) means
+                                                                          The total execution cost of a computational graph G = (V, E)
+an all-reduce of x bytes along the i-th mesh axis. M is the size
+                                                                          is the sum of the compute and communication costs on all
+of the output tensor. (n0 , n1 ) is the mesh shape.
+                                                                          nodes v ∈ V and the resharding costs on all edges e ∈ E.
+        Parallel     Output        Input            Communication         We formulate the cost minimization as an ILP and solve it
+  #
+        Mapping       Spec         Specs               Cost
+                                                                          optimally with an off-the-shelf solver [18].
+  1   i → 0, j → 1   RS0 S1     RS0 R, RRS1                 0                 For node v, the number of possible parallel algorithms is
+  2   i → 0, k → 1   RS0 R     RS0 S1 , RS1 R       all-reduce( nM , 1)   kv . It then has a communication cost vector cv of length kv ,
+                                                                  0
+  3   j → 0, k → 1   RRS0      RRS1 , RS1 S0        all-reduce( nM , 1)
+                                                                  0       or cv ∈ Rkv , where cvi is the communication cost of the i-th
+  4   b → 0, i → 1   S0 S1 R   S0 S1 R, S0 RR               0
+  5   b → 0, k → 1   S0 RR     S0 RS1 , S0 S1 R                  M
+                                                    all-reduce( n , 1)
+                                                                          algorithm. Similarly, node v has a compute cost vector dv ∈
+  6     i → {0, 1}   RS01 R     RS01 R, RRR                 0
+                                                                  0
+                                                                          Rkv . For each node v, we define an one-hot decision vector
+  7    k → {0, 1}     RRR      RRS01 , RS01 R     all-reduce(M, {0, 1})   sv ∈ {0, 1}kv to represent the algorithm it uses. svi = 1 means
+                                                                          we pick the i-th algorithm for node v. For the resharding
+                                                                          cost between node v and node u, we define a resharding cost
+the partitions are along the 0-th axis of the mesh, S01 means             matrix Rvu ∈ Rkv ×ku , where Rvui j is the resharding cost from
+the partitions take place along both mesh axes. S0 R means                the output of i-th strategy of node v to the input of j-th strategy
+the tensor is row-partitioned into two parts – The first part is          of node u. The objective of the problem is
+replicated on device 0 and device 1, and the second part is
+replicated on device 2 and device 3. Table 1 shows all possible                        min
+                                                                                        s
+                                                                                             ∑ s|v (cv + dv ) + ∑        s|v Rvu su ,    (1)
+                                                                                             v∈V               (v,u)∈E
+sharding specs of a 2-dimensional tensor on a 2 × 2 mesh with
+4 devices.                                                                where the first term is the compute and communication cost of
+Resharding. When an input tensor of an operator does not                  node v, and the second is the resharding cost of the edge (v, u).
+satisfy the sharding spec of the chosen parallel algorithm                In this formulation, s is the variable, and the rest are constant
+for the operator, a layout conversion, namely resharding, is              values. The term s|v Rvu su in Eq. 1 is quadratic, and cannot be
+required, which might require cross-device communication.                 fed into an ILP solver. We linearize [19] the quadratic term
+Table 2 lists several cases of resharding. For instance, to con-          by introducing a new decision vector evu ∈ {0, 1}kv ·ku which
+vert a fully replicated tensor to any other sharding specs (case          represents the resharding decision between node v and u.
+#1), we can slice the tensor locally without communication; to               Although we can use profiling to get the accurate costs
+swap the partitioned axis (case #4), we perform an all-to-all.            for cv , dv , and Rvu , we use the following methods to estimate
+                                                                          them for simplicity. For communication costs cv and Rvu , we
+Parallel algorithms of an operator. With the definitions                  compute the numbers of communicated bytes and divide them
+above, consider parallelizing a batched matmul Cb,i, j =                  by the mesh dimension bandwidth to get the costs. For com-
+∑k Ab,i,k Bb,k, j on a 2D mesh – Table 3 lists several intra-op           pute costs dv , we set all of them as zero following the same
+parallel algorithms for a batched matmul. Algorithm#1 maps                motivation in [55]. This is reasonable because: (1) For heavy
+loop i to the 0-th mesh axis and loop j to the 1-th mesh axis,            operators such as matmul, we do not allow replicated compu-
+resulting in the output tensor C with a sharding spec RS0 S1 .            tation. All parallel algorithms always evenly divide the work
+As the LHS operand Ab,i,k and RHS operand Bb,k, j both have               to all devices, so all parallel algorithms of one operator have
+only one parallelized index, their sharding specs are writ-               the same arithmetic complexity; (2) For lightweight operators
+ten as RS0 R and RRS1 , respectively. In this algorithm, each             such as element-wise operators, we allow replicated computa-
+device has all its required input tiles (i.e., a partition of the         tion of them, but their computation costs are negligible.
+tensor) stored locally to compute its output tile, so there is no            To simplify the graph, we merge computationally-trivial
+communication cost. In Algorithm #2 in Table 3, when the                  operators, such as element-wise operators, transpose, and re-
+reduction loop k is parallelized, all-reduce communication is             duction, into one of their operands and propagate the sharding
+needed to aggregate the partial sum. Similarly, we can derive             spec from the operand. This greatly reduces the number of
+the sharding specs and communication costs of other parallel              nodes in the graph, thus the ILP problem size. We do a breath-
+algorithms for a batched matmul.                                          first-search and compute the depth of each node. The node is
+   For other primitive operators such as convolution and re-              merged to the deepest operand.
+duction, we can get a list of possible parallel algorithms fol-              Once the parallel plan is decided by ILP, we also apply a
+lowing a similar analysis of their math expressions. In the               set of post-ILP communication optimizations, such as replac-
+intra-op pass, the model graph is represented in XLA’s HLO                ing all-reduce with reduce-scatter and all-gather, whenever
+format [51], which summarizes common DL operators into                    applicable, because the latter reduces the number of replicated
+less than 80 primitive operators, so we can manually enu-                 tensors and corresponding computations, while keeping the
+merate the possible parallel algorithms for every primitive               communication volume the same. This achieves the effect of
+operator.                                                                 weight update sharding [56] or ZeRO optimizer [44].
+                                                                                                                                            (B - 1) ⋅ t3
+5     Inter-Operator Parallelism
+                                                                                   Stage 1   a b c d e f g h
+In this section, we develop methods to slice the model and                         Stage 2 t1 a     b       c       d   e           f   g       h
+device cluster into stage-mesh pairs. Our optimization goal                        Stage 3     t2       a           b           c           d           e       f       g       h   t4
+is to minimize the end-to-end pipeline execution latency for
+                                                                                   Stage 4          t3          a           b           c           d       e       f       g       h
+the entire computational graph. Previous works [17, 33] have
+considered simplified problems, such as assuming the device                                                                             Time
+for each stage is pre-assigned, and all stages have fixed data                    Figure 5: Illustration of the total latency of a pipeline, which
+or operator parallelism plan. Alpa rids these assumptions by                      is determined by two parts: the total latency of all stages (t1 +
+jointly considering device mesh assignment and the existence                      t2 + t3 + t4 ) and the latency of the slowest stage ((B − 1) · t3 ).
+of varying intra-op parallelism plans on each stage.
+
+5.1     The Space for Inter-Operator Parallelism                                  5.2    DP Formulation
+Assume the computational graph contains a sequence of
+                                                                                  To ensure all submeshes (n1 , m1 ), . . . , (nS , mS ) fully cover
+operators following the topology order of the graph3 , no-
+                                                                                  the N × M cluster mesh, we reduce the available submesh
+tated as o1 , . . . , oK , where the inputs of an operator ok are
+                                                                                  shapes into two options: (1) one-dimensional submeshes of
+from operators o1 , . . . , ok−1 . We slice the operators into S
+                                                                                  sizes (1, 1), (1, 2), (1, 4) . . . (1, 2m ) and (2) two-dimensional
+stages s1 , . . . , sS , where each stage si consists of operators
+                                                                                  submeshes of size (2, M), (3, M), . . . , (N, M) that fully use
+(oli , . . . , ori ), and we assign each stage si to a submesh of
+                                                                                  the second dimension of the cluster mesh (i.e., on a GPU
+size ni × mi , sliced from a computer cluster that contains de-
+                                                                                  cluster, this means using all compute devices in each physical
+vices, notated as the cluster mesh with shape N × M. Let
+                                                                                  machine). We include a theorem in Appendix A that proves
+ti = tintra (si , Mesh(ni , mi )) be the latency of executing stage si
+                                                                                  these submesh shapes can always fully cover the cluster mesh.
+on a submesh of ni × mi , minimized by the ILP and reported
+                                                                                  To assign physical devices in the cluster to the resulting sub-
+back by the intra-op pass (§4). As visualized in Fig. 5, assum-
+                                                                                  meshes find by the DP algorithm, we enumerate by assigning
+ing we have B different input microbatches for the pipeline,
+                                                                                  devices to larger submeshes first and then to smaller ones.
+the total minimum latency4 for the entire computation graph
+                                                                                  When there are multiple pipeline stages with the same sub-
+is written as:
+                               (                            )                     mesh shape, we tend to put neighboring pipeline stages closer
+                                      S                                           on the device mesh to reduce communication latency.
+    T∗ =           min               ∑ ti + (B − 1) · 1≤max  {t j }   .   (2)
+                 s1 ,...,sS ;
+                                     i=1                 j≤S                         The simplification on submesh shapes works well for most
+           (n1 ,m1 ),...,(nS ,mS )
+                                                                                  available cloud deep learning setups: On AWS [3], the GPU
+    The overall latency contains two terms: the first term is the                 instances have 1, 2, 4, or 8 GPUs; on GCP [20], the TPU
+total latency of all stages, interpreted as the latency of the first              instances have 8, 32, 128, 256 or 512 TPUs. The set of
+microbatch going through the pipeline; the second term is the                     submesh shapes (n, m) excluded by the assumption is with
+pipelined execution time for the rest of B − 1 microbatches,                      n > 1 and m < M, which we observe lead to inferior re-
+which is bounded by the slowest stage (stage 3 in Fig. 5).                        sults, since an alternative submesh with shape (n0 , M) where
+    We aim to solve Eq. 2 with two additional constraints: (1)                    n0 · M = n · m has more devices that can communicate with
+For an operator in the forward pass of the graph, we want                         high bandwidth. With this reduction, we only need to ensure
+to colocate it with its corresponded backward operator on                         that ∑Si=1 ni · mi = N · M.
+the same submesh. Since backward propagation usually uses                            To find T ∗ in Eq. 2, we develop a DP algorithm. The DP
+the similar set of tensors during forward propagation, this                       first enumerates the second term tmax = max1≤ j≤S t j and min-
+effectively reduces the amount of communication to fetch the                      imizes the first term ttotal (tmax ) = ∑1≤i≤S ti for each differ-
+required tensors generated at the forward pass to the backward                    ent tmax . Specifically, we use the function F(s, k, d;tmax ) to
+pass. We use the sum of forward and backward latency for                          represent the minimal total latency when slicing operators
+tintra , so Eq. 2 reflects the total latency, including both forward              ok to oK into s stages and putting them onto d devices so
+and backward propagation. (2) We need the sliced submeshes                        that the latency of each stage is less than tmax . We start with
+(n1 , m1 ), . . . , (nS , mS ) to fully cover the N × M cluster mesh              F(0, K + 1, 0;tmax ) = 0, and derive the optimal substructure
+– we do not waste any compute device resources. We next                           of F as
+elaborate on our DP formulation.
+    3 We simply use the order of how users define each operator, reflected in        F(s, k, d;tmax )                                                    (3)
+the model IR, with the input operator as the origin. This allows us to leverage                                                                       
+the inherent locality present in the user’s program – closely related nodes in                 tintra ((ok , . . . , oi ), Mesh(ns , ms ), s)
+                                                                                                                                                      
+                                                                                                                                                       
+the graph will be more likely to be partitioned into the same stage.                = min         + F(s − 1, i + 1, d − ns · ms ;tmax )                  ,
+    4 This formulation holds for GPipe and synchronous 1F1B schedules.                k≤i≤K                                                           
+                                                                                     ns ·ms ≤d | tintra ((ok , . . . , oi ), Mesh(ns , ms ), s) ≤ tmax
+                                                                                                                                                      
+Other pipeline schedules may require a different formulation.
+and derive the optimal total latency as                                     Algorithm 1 Inter-op pass summary.
+                                                                             1:   Input: Model graph G and cluster C with shape (N, M).
+   T ∗ (tmax ) = min{F(s, 0, N · M;tmax )} + (B − 1) · tmax .       (4)
+                   s                                                         2:   Output: The minimal pipeline execution latency T ∗ .
+                                                                             3:   // Preprocess graph.
+   The value of tintra ((ok , . . . , oi ), Mesh(ns , ms ), s) is deter-
+                                                                             4:   (o1 , . . . , oK ) ← Flatten(G)
+mined by the intra-op pass. It is the lowest latency of exe-
+                                                                             5:   (l1 , . . . , lL ) ← OperatorClustering(o1 , . . . , oK )
+cuting the subgraph (ok , . . . , oi ) on mesh Mesh(ns , ms ) with s
+                                                                             6:   // Run the intra-op pass to get costs of different stage-
+subsequent stages. Note that Mesh(ns , ms ) is a set of physical
+                                                                                  mesh pairs.
+devices – hence, we enumerate all the potential choices of
+                                                                             7:   submesh_shapes ← {(1, 1), (1, 2), (1, 4), . . . , (1, M)} ∪
+logical device mesh shapes (nl , ml ) satisfying nl · ml = ns · ms .
+                                                                                  {(2, M), (3, M), . . . , (N, M)}
+For each choice, we query the intra-op pass with subgraph
+                                                                             8:   for 1 ≤ i ≤ j ≤ L do
+(ok , . . . , oi ), logical mesh (nl , ml ), and other intra-op options
+                                                                             9:      stage ← (li , . . . , l j )
+as inputs and get an intra-op plan. We then compile the sub-
+                                                                            10:      for (n, m) ∈ submesh_shapes do
+graph with this plan and all other low-level compiler optimiza-
+                                                                            11:           for s from 1 to L do
+tions (e.g., fusion, memory planning) to get an executable for
+                                                                            12:                 t_intra(stage, Mesh(n, m), s) ← ∞
+precise profiling. The executable is profiled in order to get
+                                                                            13:           end for
+the stage latency (tl ) and the memory required on each device
+                                                                            14:           for (nl , ml ), opt ∈ LogicalMeshShapeAndIntraOp
+to run the stage (memstage ) and to store the intermediate ac-
+                                                                                          Options(n, m) do
+tivations (memact ). We check whether the required memory
+                                                                            15:                 plan ← IntraOpPass(stage, Mesh(nl , ml ), opt)
+fits the device memory (memdevice ) according to the chosen
+                                                                            16:                 tl , memstage , memact ← Profile(plan)
+pipeline execution schedule. For example, for 1F1B sched-
+                                                                            17:                 for s satisfies Eq. 5 do
+ule [17, 39], we check
+                                                                            18:                      if tl < t_intra(stage, Mesh(n, m), s) then
+               memstage + s · memact ≤ memdevice .                  (5)     19:                          t_intra(stage, Mesh(n, m), s) ← tl
+                                                                            20:                      end if
+We pick the logical mesh shape that minimizes tl and fits into              21:                 end for
+the device memory. If none of them fits, we set tintra = ∞.                 22:           end for
+   Our algorithm builds on top of that in TeraPipe [33]. How-               23:      end for
+ever, TeraPipe assumes all pipeline stages are the same, and                24:   end for
+the goal is to find the optimal way to batch input tokens into              25:   // Run the inter-op dynamic programming
+micro-batches of different sizes. Instead, Alpa aims to group               26:   T∗ ← ∞
+the operators of a computational graph into different pipeline              27:   for tmax ∈ SortedAndFilter(t_intra, ε) do
+stages, while assuming the input micro-batches are of the                   28:      if B · tmax ≥ T ∗ then
+same size. In addition, Alpa optimizes the mesh shape in the                29:           break
+DP algorithm for each pipeline stage in inter-op parallelism.               30:      end if
+Complexity. Our DP algorithm computes the slicing in                        31:      F(0, L + 1, 0;tmax ) ← 0
+O(K 3 NM(N + log(M))) time for a fixed tmax . tmax has at most              32:      for s from 1 to L do
+O(K 2 (N + log(M))) choices: tintra ((oi , . . . , o j ), Mesh(ns , ms ))   33:           for l from L down to 1 do
+for i, j = 1, . . . , K and all the submesh choices. The complex-           34:                 for d from 1 to N · M do
+ity of this DP algorithm is thus O(K 5 NM(N + log(M))2 ).                   35:                      Compute F(s, l, d;tmax ) according to Eq. 3
+   This complexity is not feasible for a large computational                36:                 end for
+graph of more than ten thousand operators. To speed up this                 37:           end for
+DP, we introduce a few practical optimizations.                             38:      end for
+Performance optimization #1: early pruning. We use one                      39:      T ∗ (tmax ) ← mins {F(s, 0, N · M;tmax )} + (B − 1) · tmax
+optimization that is similar to that in TeraPipe [33]. We enu-              40:      if T ∗ (tmax ) < T ∗ then
+merate tmax from small to large. When B · tmax is larger than               41:           T ∗ ← T ∗ (tmax )
+the current best T ∗ , we immediately stop the enumeration.                 42:      end if
+This is because larger tmax can no longer provide a better so-              43:   end for
+lution. Also, during enumeration of tmax , we only evaluate a
+choice of tmax if it is sufficiently larger than the last tmax (by
+at least ε). This allows the gap between the solution found                 Performance optimization #2: operator clustering. Many
+by the DP algorithm and the global optima to be at most B · ε.              operators in a computational graph are not computationally
+We empirically choose ε = 10−6 s, and we find that the solu-                intensive (e.g., ReLU), and the exact placement of these oper-
+tion output by our algorithm is the same as the real optimal                ators has little impact on the total execution time. We develop
+solution (ε = 0) for all our evaluated settings.                            another DP algorithm [4] to cluster neighboring operators to
+                                                                                   Mesh 1       Mesh 2                 Mesh 2                   Mesh 2
+reduce the total size of the graph Eq. 2 works on. We cluster
+                                                                                   Device 0    Device 0                Device 0                 Device 0
+the operators (o1 , . . . , oK ) into a series of layers5 (l1 , . . . , lL ),       Tile 0      Tile 0
+                                                                                                          Mesh 1
+                                                                                                                        Tile 0
+                                                                                                                                  Mesh 1
+                                                                                                                                                 Tile 0
+                                                                                                          Device 0                Device 0
+where L  K. The goal of the algorithm is to merge two types                        Tile 1      Tile 1                  Tile 1                   Tile 1
+                                                                                                           Tile 0                  Tile 0
+of operators: (1) those that do not call for much computation                      Device 1    Device 1
+                                                                                                           Tile 1
+                                                                                                                       Device 1
+                                                                                                                                   Tile 1
+                                                                                                                                                Device 1
+                                                                                    Tile 0      Tile 0                  Tile 0                   Tile 0
+but lengthen the computational graph and (2) neighboring                            Tile 1      Tile 1                  Tile 1                   Tile 1
+operators that may cause substantial communication if put
+                                                                                     (a) Megatron-LM      (b) Naïve send/recv     (c) Local all-gather
+on different device meshes. We define function G(k, r) as
+the minimum of maximal amount of data received by a sin-                        Figure 6: Cross-mesh resharding. Red arrows denote
+gle layer when clustering operators (o1 , . . . , ok ) into r layers.           send/recv on slow connections. Green arrows denote all-
+Note that G has the following optimal substructure:                             gather on fast connections. (a) The scatter-gather optimiza-
+                                                                                tion for equal mesh shapes in Megatron-LM. (b) The naive
+      G(k, r)                                             (6)                   send/recv for unequal mesh shapes. (c) The generalized local
+                                                      
+             max{G(i − 1, r − 1),C(i, k)}
+                                                      
+                                                                               all-gather optimization for unequal mesh shapes.
+     = min                             (1 + δ)FLOPtotal ,
+             FLOP(oi , . . . , ok ) ≤
+      1≤i≤k                                           
+                                              L
+                                                       
+                                                                                two equivalent device meshes (Fig. 6a). In Alpa, the device
+                                                                                meshes holding two adjacent stages might have different mesh
+where C(i, k) denotes the total size of inputs of (oi , . . . , ok ) re-
+                                                                                shapes, and the tensor to communicate between two stages
+ceived from (o1 , . . . , oi−1 ) and FLOPtotal = FLOP(o1 , . . . , oK )
+                                                                                might have different sharding specs (Fig. 6b and Fig. 6c). We
+is the total FLOP of the whole computational graph. We make
+                                                                                call this communication pattern as cross-mesh resharding,
+sure that each clustered layer’s FLOP is within 1 + δ times of
+                                                                                which is a many-to-many multicast problem.
+the average FLOP per layer while minimizing the communi-
+cation. For the solutions with the same communication cost,                         Given the sharding specs of the tensor on the sender and re-
+we choose the one with the most uniform structure by also                       ceiver mesh, Alpa generates a communication plan to address
+minimizing the variance of per-layer FLOP. With our DP al-                      cross-mesh sharding in two iterations. In the first iteration,
+gorithm, we can compute the best layer clustering in O(K 2 L)                   Alpa calculates the correspondences between tensor partitions
+time. Note that L here is a hyperparameter to the algorithm.                    (a.k.a. tiles) on the source and destination mesh. Based on
+In practice, we choose a small L based on the number of de-                     that, it generates P2P send/recv primitives between the source
+vices and the number of heavy operators in the graph. We                        devices and destination devices to fulfill the communication.
+find different choices of L do not affect the final performance                 It then takes a second iteration to identify opportunities where
+significantly.                                                                  the destination tensor has a replication in its sharding spec.
+   Alg. 1 summarizes the workflow of the inter-op pass and                      In this case, the tensor only needs to be transferred once be-
+illustrates its interactions with the intra-op pass in §4.                      tween two meshes, then exchanged via all-gather across the
+                                                                                devices on the destination mesh using its higher bandwidth
+6     Parallelism Orchestration                                                 (Fig. 6) – it rewrites send/recv generated at the first iteration
+After stages, device meshes, and their assignments are de-                      into all-gather to avoid repeated communication.
+cided, at the intra-op level, Alpa compiles each stage against                      We call this approach as local all-gather cross-mesh re-
+its assigned device mesh, respecting the intra-op parallelism                   sharding. Since the communication between stages is nor-
+plan output by the ILP solver. The compilation depends on                       mally small by our design, our experiments show that it per-
+XLA [51] and GSPMD [57], and generates parallel executa-                        forms satisfactorily well (§8.5). We defer the development of
+bles for each stage-mesh pair. When needed, the compilation                     the optimal cross-mesh resharding plan to future work.
+automatically inserts collective communication primitives                       Generating pipeline execution instructions. As the final
+(see §4) to address the within-mesh communication caused                        step, Alpa generates static execution instructions to launch
+by intra-op parallelism.                                                        the training on clusters. Since each stage has different sets of
+   At the inter-op level, Alpa implements an additional paral-                  operators and may locate on meshes with different shapes, in
+lelism orchestration pass to address the cross-mesh commu-                      contrast to many SPMD pipeline-parallel training systems [40,
+nication between stages, and generate static instructions for                   57], Alpa adopts an MPMD-style runtime to orchestrate the
+inter-op parallel execution.                                                    inter-op parallel execution – Alpa generates distinct static
+Cross-mesh resharding. Existing manual systems, such as                         execution instructions for each device mesh.
+Megatron-LM [45, 49], constrain all pipeline stages to have                         Alpa develops a set of instructions for inter-op parallel
+the same degrees of data and tensor model parallelism, so                       execution, including instructions for allocating and deallocat-
+the communication between pipeline stages is trivially re-                      ing memory for tensors in a stage, communicating tensors
+alized by P2P send/recv between corresponded devices of                         between stages following the cross-mesh resharding plan,
+    5 Notethat the clustering does not exactly reproduce the layers with        synchronization, and computation, etc. According to a user-
+original machine learning semantics in the model definition.                    selected pipeline schedule, Alpa uses a driver process to gen-
+                                                                  Table 4: Models used in the end-to-end evaluation. LM =
+erate the instructions in advance and dispatches the whole
+                                                                  language model. IC = image classification.
+instruction lists to each worker before execution, avoiding
+driver-worker coordination overheads during runtime.                     Model         Task   Batch size       #params (billion)          Precision
+                                                                      GPT-3 [10]       LM       1024       0.35, 1.3, 2.6, 6.7, 15, 39     FP16
+7   Limitations and Discussion                                      GShard MoE [31]    LM       1024       0.38, 1.3, 2.4, 10, 27, 70      FP16
+                                                                    Wide-ResNet [59]   IC       1536       0.25, 1.0, 2.0, 4.0, 6.7, 13    FP32
+In this section, we discuss advantages of our view of paral-
+lelisms and several limitations of our algorithms.                V100 16 GB GPUs, 64 vCPUs, and 488 GB memory. The
+   Compared to existing work that manually combines data,         8 GPUs in a node are connected via NVLink. The 8 nodes
+operator, and pipeline parallelism, such as 3D parallelism [45]   are launched within one placement group with 25Gbps cross-
+and PTD-P [40], Alpa’s hierarchical view of inter- and intra-     node bandwidth.
+op parallelisms significantly advances them with three major         We compare Alpa against two state-of-the-art distributed
+flexibility: (1) pipeline stages can contain an uneven number     systems for training large-scale models on GPUs. We then iso-
+of operators or layers; (2) pipeline stages in Alpa might be      late different compilation passes and perform ablation studies
+mapped to device meshes with different shapes; (3) within         of our optimization algorithms. We also include a case study
+each stage, the data and operator parallelism configuration is    of the execution plans found by Alpa.
+customized non-uniformly on an operator-by-operator basis.
+Together, they allow Alpa to unify all existing model paral-      8.1     End-to-End Performance
+lelism approaches and generalize to model architectures and       Models and training workloads. We target three types of
+cluster setups with more heterogeneity.                           models listed in Table 4, covering models with both homoge-
+   Despite these advantages, Alpa’s optimization algorithms       neous and heterogeneous architectures. GPT-3 is a homoge-
+currently have a few limitations:                                 neous transformer-based LM by stacking many transformer
+• Alpa does not model the communication cost between dif-         layers whose model parallelization plan has been extensively
+ferent stages because the cross-stage communication cost is       studied [40, 49]. GShard MoE is a mixed dense and sparse
+by nature small. In fact, modeling the cost in either the DP or   LM, where mixture-of-experts layers are used to replace the
+ILP is possible, but would require enumerating exponentially      MLP at the end of a transformer, every two layers. Wide-
+more intra-op passes and DP states.                               ResNet is a variant of ResNet with larger channel sizes. It is
+• The inter-op pass currently has a hyperparameter: the num-      vastly different from the transformer models and there are no
+ber of micro-batches B, which is not optimized by our current     existing manually designed strategies.
+formulation but can be searched by enumeration.                      To study the ability to train large models, we follow com-
+• The inter-op pass models pipeline parallelism with a static     mon ML practice to scale the model size along with the num-
+linear schedule, without considering more dynamic schedules       ber of GPUs, with the parameter range reported in Table 4.
+that, for example, parallelize different branches in a computa-   More precisely, for GPT-3, we increase the hidden size and the
+tional graph on different devices.                                number of layers together with the number of GPUs follow-
+• Alpa does not optimize for the best scheme of overlapping       ing [40], whereas for MoE we mainly increase the number of
+computation and communication; Alpa can only handle static        experts suggested by [31, 57]. For Wide-ResNet, we increase
+computational graphs with all tensor shapes known at compi-       the channel size and width factor in convolution layers. For
+lation time.                                                      each model, we adopt the suggested global batch size per ML
+   Nevertheless, our results on weak scaling (§8) suggest that    practice [10, 31, 40, 59] to keep the same statistical behavior.
+Alpa is able to generate near-optimal execution plans for many    We then tune the best microbatch size for each model and
+notable models.                                                   system configuration that maximizes the system performance.
+                                                                  The gradients are accumulated across microbatches. The de-
+8   Evaluation                                                    tailed model specifications are provided in Appendix B.
+Alpa is implemented using about 16K LoC in Python and             Baselines. For each model, we compare Alpa against a strong
+6K LoC in C++. Alpa uses Jax as the frontend and XLA as           baseline. We use Megatron-LM v2 [40] as the baseline system
+the backend. The compiler passes are implemented on Jax’s         for GPT-3. Megatron-LM is the state-of-the-art system for
+and XLA’s intermediate representation (i.e., Jaxpr and HLO).      training homogeneous transformer-based LMs on GPUs. It
+For the distributed runtime, we use Ray [37] actor to imple-      combines data parallelism, pipeline parallelism, and manually-
+ment the device mesh worker, XLA runtime for executing            designed operator parallelism (denoted as TMP later). The
+computation, and NCCL [41] for communication.                     combination of these techniques is controlled by three integer
+   We evaluate Alpa on training large-scale models with bil-      parameters that specify the parallelism degrees assigned to
+lions of parameters, including GPT-3 [10], GShard Mixture-        each technique. We grid-search the three parameters follow-
+of-Experts (MoE) [31], and Wide-ResNet [59]. The testbed          ing the guidance of their paper and report the results of the
+is a typical cluster consisting of 8 nodes and 64 GPUs. Each      best configuration. Megatron-LM is specialized for GPT-like
+node is an Amazon EC2 p3.16xlarge instance with 8 NVIDIA          models, so it does not support other models in Table 4.
+Throughput (PFLOPS)
+
+
+
+
+                                                               Throughput (PFLOPS)
+
+
+
+
+                                                                                                                               Throughput (PFLOPS)
+                      4.0                                                            3.0                                                             0.6
+                            Megatron-LM                                                    Deepspeed                                                       PP-DP
+                      3.0   Inter-op only                                                  Inter-op only                                                   Inter-op only
+                                                                                     2.0                                                             0.4
+                            Intra-op only                                                  Intra-op only                                                   Intra-op only
+                      2.0
+                            Alpa (ours)                                                    Alpa (ours)                                                     Alpa (ours)
+                                                                                     1.0                                                             0.2
+                      1.0   Linear-scaling                                                 Linear-scaling                                                  Linear-scaling
+
+                                                                                                                    X    XX                                                      XX    XX
+                      0.0                                                            0.0                                                             0.0
+                            1     4      8      16   32   64                               1     4      8      16   32    64                               1     4      8   16    32    64
+                                 The number of GPUs                                             The number of GPUs                                              The number of GPUs
+                                      (a) GPT                                                        (b) MoE                                                   (c) Wide-ResNet
+                            Figure 7: End-to-end evaluation results. “×” denotes out-of-memory. Black boxes represent linear scaling.
+
+   We use DeepSpeed [45] as the baseline for MoE. Deep-                                                     this manual plan with the best grid-searched parameters en-
+Speed provides a state-of-the-art implementation for training                                               ables Megatron-LM to achieve super-linear weak scaling on
+MoE on GPUs. It combines handcrafted operator parallelism                                                   GPT-3. Nevertheless, compared to Megatron-LM, Alpa auto-
+for MoE layers and ZeRO-based [44] data parallelism. The                                                    matically generates execution plans and even achieves slightly
+combination of these techniques is controlled by several inte-                                              better scaling on several settings. If compared to methods that
+ger parameters that specify the parallelism degree assigned to                                              only use intra-operator parallelism, our results are consistent
+each technique. We also grid-search them and report the best                                                with recent studies – “Intra-op only” performs poorly on >16
+results. The performance of DeepSpeed on GPT-3 is similar                                                   GPUs because even the best plan has to communicate tensors
+to or worse than Megatron-LM, so we skip it on GPT-3. Note                                                  heavily on cross-node connections, making communication a
+that original GShard-MoE [31] implementation is only avail-                                                 bottleneck. Surprisingly, “Inter-op only” performs well and
+able on TPUs, thus we do not include its results, though their                                              maintains linear scaling on up to 64 GPUs.
+strategies [31] are covered by Alpa ’s strategy space.                                                         We investigate the grid-searched parameters of the manual
+   For large Wide-ResNet, there is no specialized system or                                                 plan on Megatron-LM, and compare it to the plan generated
+manually designed plan for it. We use Alpa to build a baseline                                              by Alpa. It reveals two major findings. First, in Megatron-LM,
+“PP-DP” whose space only consists of data parallelism and                                                   the best manual plan has TMP as 1, except in rare settings,
+pipeline parallelism, which mimics the parallelism space of                                                 such as fitting the 39B model on 64 GPUs, where pipeline
+PipeDream [38] and Dapple [17].                                                                             parallelism alone is unable to fit the model (stage) in GPU
+   For all models, we also include the results of using Alpa                                                memory; meanwhile, data parallelism is maximized whenever
+with only one of intra- and inter-operator parallelism, which                                               memory allows. In practice, gradient accumulation (GA) is
+mimics the performance of some other auto-parallel systems.                                                 turned on to achieve a desired global batch size (e.g., 1024
+The open-source Flexflow [25] does not support the models                                                   in our setting). GA amortizes the communication of data
+we evaluate, as it lacks support for many necessary opera-                                                  parallelism and reduces the bubbles of pipeline parallelism,
+tors (e.g., layer normalization [5], mixed-precision operators).                                            but the communication of TMP grows linearly with GA steps,
+Tofu [55] only supports single node execution and is not open-                                              which puts TMP disadvantaged. Second, Alpa-generated plan
+sourced. Due to both theoretical and practical limitations, we                                              closely resembles the best-performed ones in Megatron-LM,
+do not include their results and we do not expect Flexflow or                                               featuring (1) evenly-sized stages, (2) partitioning along the
+Tofu to outperform the state-of-the-art manual baselines in                                                 batch dimension in stages when memory is not stressed, but
+our evaluation.                                                                                             along non-batch dimensions when memory is stressed. One
+Evaluation metrics. Alpa does not modify the semantics of                                                   key difference between our plan and the manual plan is that
+the synchronous gradient descent algorithm, thus does not                                                   Alpa also partitions the weight update operations when data
+affect the model convergence. Therefore, we measure training                                                parallelism exists, which contributes to the slight performance
+throughput in our evaluation. We evaluate weak scaling of the                                               improvement over Megatron-LM. This attributes to the fact
+system when increasing the model size along with the number                                                 that Alpa, as a generic compiler system, can compose a wide
+of GPUs. Following [40], we use the aggregated peta floating-                                               range of parallelism approaches, while Megatron-LM, for
+point operations per second (PFLOPS) of the whole cluster                                                   now, misses weight update sharding support.
+as the metric6 . We measure it by running a few batches with                                                MoE results. DeepSpeed adopts a manual operator paral-
+dummy data after proper warmup. All our results (including                                                  lelism plan for MoE models, developed by GShard [31], called
+those in later sections) have a standard deviation within 0.5%,                                             expert parallelism, which uses a simple rule: it partitions the
+so we skip the error bars in our figures.                                                                   expert axis for the operators in MoE layers, but switches back
+GPT-3 results. The parallelization plan for GPT-3 has been                                                  to data parallelism for non-expert layers. This expert paral-
+extensively studied [10, 33, 40]. We observe in Fig. 7a that                                                lelism is then combined with ZeRO data parallelism and TMP.
+   6 As the models are different for different numbers of GPUs, we cannot                                   All of these techniques belong to intra-operator parallelism.
+measure scaling on the system throughput such as tokens per second or                                       Unfortunately, DeepSpeed’s specialized implementation does
+images per second.                                                                                          not include any inter-operator parallelism approach, which is
+                                                                                                0.4
+
+
+
+
+                                                                          Throughput (PFLOPS)
+                       0.6
+Throughput (PFLOPS)
+
+
+
+
+                                                                                                                                                                           Throughput (PFLOPS)
+                               Data              ZeRO-3                                               Data             ZeRO-3                                                                    0.06                          Data               ZeRO-3
+                      0.45     Heuristic         ILP (ours)                                     0.3   Heuristic        ILP (ours)                                                                                              Heuristic          ILP (ours)
+                               ZeRO-2            Linear-scaling                                       ZeRO-2           Linear-scaling                                                            0.04                          ZeRO-2             Linear-scaling
+                       0.3                                                                      0.2
+
+                      0.15                                                                      0.1                                                                                              0.02
+
+                                       X              X           X   X                                       X             X                              X     X                                                                                     X            X   X
+                                1            2            4           8                               1            2            4                                8                                                              1             2            4            8
+                                    The number of GPUs                                                     The number of GPUs                                                                                                         The number of GPUs
+                                           (a) GPT                                                                (b) MoE                                                                                                            (c) Wide-ResNet
+                        Figure 8: Intra-operator parallelism ablation study. “×” denotes out-of-memory. Black boxes represent linear scaling.
+                                                                                                                                                                      Equal operator                                            Equal layer        DP (ours)
+required for scaling across multiple nodes with low inter-node
+                                                                                                                                                           2.0                                                                0.25
+
+
+
+
+                                                                                                                                     Throughput (PFLOPS)
+
+
+
+
+                                                                                                                                                                                                        Throughput (PFLOPS)
+bandwidth. Therefore, Deepspeed only maintains a good per-
+formance within a node (≤ 8 GPUs) on this cluster. “Intra-op                                                                                                                                                                   0.2
+                                                                                                                                                           1.5
+only” fails to scale across multiple nodes due to the same                                                                                                                                                                    0.15
+reason. “Inter-op only” runs out of memory on 32 GPUs and                                                                                                  1.0                                                                 0.1
+64 GPUs because it is not easy to equally slice the model
+                                                                                                                                                                                                                              0.05
+when the number of GPUs is larger than the number of layers                                                                                                0.5
+of the model. The imbalanced slicing makes some memory-                                                                                                               16                                                                8            16        32
+                                                                                                                                                                     #GPUs                                                                        #GPUs
+intensive stages run out of memory.
+                                                                                                                                                               (a) GPT                                                               (b) Wide-ResNet
+   By contrast, Alpa automatically discovers the best execu-
+                                                                                                                                    Figure 9: Inter-operator parallelism ablation study.
+tion plans that combine intra- and inter-operator parallelism.
+For intra-operator parallelism, Alpa finds a strategy similar
+to expert parallelism and combines it with ZeRO data par-                                                                  benchmark is done on one AWS p3.16xlarge instance with
+allelism, thanks to its ILP-based intra-op pass. Alpa then                                                                 8 GPUs. In order to simulate an execution environment of
+constructs stages and uses inter-operator parallelism to fa-                                                               large-scale training in one node, we use larger hidden sizes,
+vor small communication volume on slow connections. Alpa                                                                   smaller batch sizes, and smaller numbers of layers, compared
+maintains linear scaling on 16 GPUs and scales well to 64                                                                  to the model configurations in §8.1.
+GPUs. Compared to DeepSpeed, Alpa achieves 3.5× speedup                                                                    Baselines. We compare automatic solutions for intra-operator
+on 2 nodes and a 9.7× speedup on 4 nodes.                                                                                  parallelism. “Data” is vanilla data parallelism. “ZeRO-2” [44]
+Wide-ResNet results. Unlike the previous two models that                                                                   is a memory-efficient version of data parallelism which par-
+stack the same layer, Wide-ResNet has a more heterogeneous                                                                 titions gradients and optimizer states. “ZeRO-3” [44] addi-
+architecture. As the data batch is forwarded through layers,                                                               tionally partitions parameters on top of “ZeRO-2”. “Heuris-
+the size of the activation tensor shrinks while the size of the                                                            tic” uses a rule combined with the sharding propagation in
+weight tensor inflates. This leads to an imbalanced distribu-                                                              GSPMD. It marks the largest dimension of every input tensor
+tion of memory usage and compute intensity across layers.                                                                  as partitioned and runs sharding propagation to get the shard-
+For this kind of model, it is difficult, if not impossible, to                                                             ing specs for all nodes in the graph. “ILP” is our solution
+manually design a plan. However, Alpa still achieves a scal-                                                               based on the ILP solver.
+able performance on 32 GPUs with 80% scaling. The base-                                                                    Results. As shown in Fig. 8, “Data” runs out of memory
+lines “PP-DP” and “Inter-op only” run out of memory when                                                                   quickly and cannot train large models. “ZeRO-2” and “ZeRO-
+training large models, because they cannot partition weights                                                               3” resolve the memory problem of data parallelism, but they
+to reduce the memory usage, and it is difficult to construct                                                               do not optimize for communication as they always commu-
+memory-balanced stages for them. “Intra-only” requires a lot                                                               nicate the gradients. When the gradients are much larger
+of communication on slow connections, so it cannot scale                                                                   than activations, their performance degenerates. “Heuristic”
+across multiple nodes. A case study on the generated plan for                                                              solves the memory issue by partitioning all tensors, but can
+Wide-ResNet is in §8.6.                                                                                                    be slowed down by larger communication. “Auto-sharding”
+                                                                                                                           performs best in all cases and maintains a near-linear scaling,
+8.2                          Intra-Op Parallelism Ablation Study                                                           because it figures out the correct partition plan that always
+We study the effectiveness of our intra-operator parallelism                                                               minimizes the communication overhead.
+optimization algorithm. We compare our ILP-based solution
+against alternatives such as ZeRO optimizer and rule-based
+                                                                                                                           8.3            Inter-Op Parallelism Ablation Study
+partitioning strategies.                                                                                                   We study the effectiveness of our inter-operator parallelism
+Experimental setup. We run a weak scaling benchmark in                                                                     optimization algorithm. We use “DP” to denote our algorithm.
+terms of model size similar to §8.1, but disable pipeline par-                                                             Experimental setup. We report the performance of three
+allelism and gradient accumulation to control variables. The                                                               variants of our DP algorithm on GPT and Wide-ResNet. The
+                 3000                                                   Table 5: Compilation time breakdown of GPT-39B.
+      Time (s)
+                 2000
+                                                                                                       Steps                Ours     w/o optimization
+                 1000
+                                                                                     Compilation                         1582.66 s       > 16hr
+                        2   4    8     16    32    64                                  Profiling                          804.48 s       > 24hr
+                            The number of GPUs                                  Stage Construction DP                      1.65 s         N/A
+                                                                                        Other                              4.47 s         N/A
+Figure 10: Alpa’s compilation time on all GPT models. The                                Total                           2393.26 s       > 40hr
+model size and #GPUs are simultaneously scaled.
+
+
+
+
+                                                                          Throughput (PFLOPS)
+                                                                                                 0.3
+benchmark settings are the same as the settings in §8.1.                                                  Signal send/recv
+                                                                                                0.25
+Baselines. We compare our DP algorithm with two rule-based                                       0.2      w/o local all-gather
+algorithms. “Equal operator” disables our DP-based operator                                               w/ local all-gather
+                                                                                                0.15
+clustering but assigns the same number of operators to each                                      0.1
+cluster. “Equal layer” restricts our DP algorithm to use the                                    0.05
+same number of layers for all stages.                                                                           16                        32
+Results. Fig. 9 shows the result. “DP” always outperforms                                                                  #GPUs
+“Equal operator”. This is because “Equal operator” merges op-           Figure 11: Cross-mesh resharding on Wide-ResNet.
+erator that should be put onto different device meshes. Alpa’s
+algorithm can cluster operators based on the communication        mance. “w/o local all-gather” disables our local all-gather
+cost and computation balance. Whether “DP” can outperform         optimization and uses only send/recv. “w/ local all-gather”
+“Equal layer” depends on the model architecture. On homo-         enables our local all-gather optimization to move more com-
+geneous models like GPT, the solution of our DP algorithm         munication from slow connections to fast local connections,
+uses the same number of layers for all stages, so “Equal layer”   which brings 2.0× speedup on 32 GPUs.
+performs the same as “DP”. On Wide-ResNet, the optimal
+                                                                  8.6        Case Study: Wide-ResNet
+solution can assign different layers to different stages, so
+“Equal layer” is worse than the full flexible DP algorithm. For   We visualize the parallelization strategies Alpa finds for Wide-
+Wide-ResNet on 32 GPUs, our algorithm outperforms “Equal          ResNet on 16 GPUs in Fig. 12. We also include the visualiza-
+operator” and “Equal layer” by 2.6× and 1.6×, respectively.       tion of results on 4 and 8 GPUs in Appendix C. On 4 GPUs,
+                                                                  Alpa uses only intra-operator parallelism. The intra-operator
+8.4    Compilation Time                                           solution partitions along the batch axis for the first dozens of
+Fig. 10 shows Alpa’s compilation time for all the GPT set-        layers and then switches to partitioning the channel axis for
+tings in §8.1. The compilation time is a single run of the full   the last few layers. On 16 GPUs, Alpa slices the model into 3
+Alg. 1 with a provided number of microbatches B. According        stages and assigns 4, 4, 8 GPUs to stage 1, 2, 3, respectively.
+to the result, Alpa scales to large models or large clusters      Data parallelism is preferred in the first two stages because
+well, because compilation time grows linearly with the size       the activation tensors are larger than weight tensors. In the
+of the model and the number of GPUs in the cluster. Table 5       third stage, the ILP solver finds a non-trivial way of partition-
+reports the compilation time breakdown for the largest GPT        ing the convolution operators. The result shows that it can be
+model in our evaluation (39B, 64 GPUs). Most of the time          opaque to manually create such a strategy for a heterogeneous
+is spent on enumerating stage-mesh pairs and profiling them.      model like Wide-ResNet, even for domain experts.
+For the compilation part, we accelerate it by compiling differ-
+ent stages in parallel with distributed workers. For profiling,
+                                                                  9     Related Work
+we accelerate it using a simple cost model built at the XLA       Systems for data-parallel training. Horovod [47] and Py-
+instruction level, which estimates the cost of matrix multipli-   TorchDDP [32] are two commonly adopted data-parallel
+cation and communication primitives with a piece-wise linear      training systems that synchronize gradients using all-reduce.
+model. With these optimizations, the compilation and search       BytePS [26, 43] unifies all-reduce and parameter servers and
+for a model take at most several hours, which is acceptable       utilizes heterogeneous resources in data center clusters. Au-
+as it is much shorter than the actual training time, which can    toDist [60] uses learning-based approaches to compose a
+take several weeks.                                               data-parallel training strategy. ZeRO [44, 56] improves the
+                                                                  memory usage of data parallelism by reducing replicated ten-
+8.5    Cross-Mesh Resharding                                      sors. MiCS [61] minimizes the communication scale on top of
+We evaluate our generalized local all-gather optimization for     ZeRO for better scalability on the public cloud. In Alpa, data
+cross-mesh resharding between meshes with different shapes        parallelism [27] reduces to a special case of intra-operator
+on Wide-ResNet, as shown in Fig. 11. “signal send/recv” is        parallelism – partitioned along the batch axis.
+a synthetic case where we only send 1 signal byte between         Systems for model-parallel training. The two major classes
+stages, which can be seen as the upper bound of the perfor-       of model parallelisms have been discussed in §2. Mesh-
+                                           Stage 1: 4 GPUs                                     Stage 2: 4 GPUs
+
+
+
+
+       Inputs/activations                                    Stage 3: 8 GPUs
+       Weights
+
+       Partitioned on batch/input axis
+       Partitioned on hidden/output axis
+       Replicated
+
+
+Figure 12: Visualization of the parallel strategy of Wide-ResNet on 16 GPUs. Different colors represent the devices a tensor is
+distributed on. Grey blocks indicate a tensor is replicated across the devices. The input data and resulting activation of each
+convolution and dense layer can be partitioned along the batch axis and the hidden axis. The weights can be partitioned along the
+input and output channel axis.
+
+TensorFlow [48], GSPMD [31, 57] and OneFlow [58] provide                       14, 21, 23, 28, 46], communication compression [6, 53], and
+annotation APIs for users to manualy specifiy the intra-op                     low-precision training [35]. Alpa can incorporate many of
+parallel plan. ColocRL [36] puts disjoint model partitions                     these techniques. For example, Alpa uses rematerialization to
+on different devices without pipelining, thereby the concur-                   reduce memory usage and uses mixed-precision training to
+rency happens only when there exist parallel branches in the                   accelerate computation.
+model. In contrast, Gpipe [22] splits the input data into micro-               Compilers for deep learning. Compiler techniques have
+batches and forms pipeline parallelisms. PipeDream [38, 39]                    been introduced to optimize the execution of DL mod-
+improves GPipe by using asynchronous training algorithms,                      els [13,24,34,51,52,54,62]. Most of them focus on optimizing
+reducing memory usage, and integrating it with data paral-                     the computation for a single device. In contrast, Alpa is a com-
+lelism. However, PipeDream is asynchronous while Alpa is a                     piler that supports a comprehensive space of execution plans
+synchronous training system. TeraPipe [33] discovers a new                     for distributed training.
+pipeline parallelism dimension for transformer-based LMs.                      Distributed tensor computation in other domains. Besides
+Google’s Pathway system [7] is a concurrent work of Alpa.                      deep learning, libraries and compilers for distributed tensor
+Pathway advocates a single controller runtime architecture                     computation have been developed for linear algebra [8] and
+combining "single program multiple data" (SPMD) and "mul-                      stencil computations [15]. Unlike Alpa, they do not consider
+tiple program multiple data" (MPMD) model. This is similar                     necessary parallelization techniques for DL.
+to Alpa’s runtime part, where SPMD is used for intra-op par-
+allelisms and MPMD is used for inter-op parallelism.                           10    Conclusion
+                                                                               We present Alpa, a new architecture for automated model-
+Automatic search for model-parallel plans. Another line
+                                                                               parallel distributed training, built on top of a new view of
+of work focuses on the automatic discovery of model-parallel
+                                                                               machine learning parallelization approaches: intra- and inter-
+training plans. Tofu [55] develops a dynamic programming
+                                                                               operator parallelisms. Alpa constructs a hierarchical space
+algorithm to generate the optimal intra-op strategy for lin-
+                                                                               and uses a set of compilation passes to derive efficient parallel
+ear graphs on a single node. FlexFlow [25] proposes a
+                                                                               execution plans at each parallelism level. Alpa orchestrates
+“SOAP” formulation and develops an MCMC-based random-
+                                                                               the parallel execution on distributed compute devices on two
+ized search algorithm. However, it only supports device place-
+                                                                               different granularities. Coming up with an efficient paral-
+ment without pipeline parallelism. Its search algorithm cannot
+                                                                               lelization plan for distributed model-parallel deep learning is
+scale to large graphs or clusters and does not have optimality
+                                                                               historically a labor-intensive task, and we believe Alpa will de-
+guarantees. TensorOpt [11] develops a dynamic program-
+                                                                               mocratize distributed model-parallel learning and accelerate
+ming algorithm to automatically search for intra-op strategies
+                                                                               the adoption of emerging large deep learning models.
+that consider both memory and computation cost. Varuna [2]
+targets low-bandwidth clusters and focuses on automating                       11    Acknowledgement
+pipeline and data parallelism. Piper [50] also finds a parallel
+                                                                               We would like to thank Shibo Wang, Yu Emma Wang, Jinliang
+strategy with both inter- and intra-op parallelism, but it re-
+                                                                               Wei, Zhen Zhang, Siyuan Zhuang, anonymous reviewers, and
+lies on manually designed intra-op parallelism strategies and
+                                                                               our shepherd, Ken Birman, for their insightful feedback. In
+analyzes on a uniform network topology and asynchronous
+                                                                               addition to NSF CISE Expeditions Award CCF-1730628, this
+pipeline parallel schedules.
+                                                                               research is supported by gifts from Alibaba Group, Ama-
+Techniques for training large-scale models. In addition to                     zon Web Services, Ant Group, CapitalOne, Ericsson, Face-
+parallelization, there are other complementary techniques for                  book, Futurewei, Google, Intel, Microsoft, Nvidia, Scotiabank,
+training large-scale models, such as memory optimization [12,                  Splunk, and VMware.
+References                                                      [11] Zhenkun Cai, Xiao Yan, Kaihao Ma, Yidi Wu, Yuzhen
+ [1] Martín Abadi, Paul Barham, Jianmin Chen, Zhifeng                Huang, James Cheng, Teng Su, and Fan Yu. Tensoropt:
+     Chen, Andy Davis, Jeffrey Dean, Matthieu Devin, San-            Exploring the tradeoffs in distributed dnn training with
+     jay Ghemawat, Geoffrey Irving, Michael Isard, et al.            auto-parallelism. IEEE Transactions on Parallel and
+     Tensorflow: a system for large-scale machine learning.          Distributed Systems, 33(8):1967–1981, 2021.
+     In 12th USENIX Symposium on Operating Systems De-          [12] Jianfei Chen, Lianmin Zheng, Zhewei Yao, Dequan
+     sign and Implementation (OSDI 16), pages 265–283,               Wang, Ion Stoica, Michael W Mahoney, and Joseph E
+     2016.                                                           Gonzalez. Actnn: Reducing training memory footprint
+ [2] Sanjith Athlur, Nitika Saran, Muthian Sivathanu, Ra-            via 2-bit activation compressed training. In International
+     machandran Ramjee, and Nipun Kwatra. Varuna: scal-              Conference on Machine Learning, 2021.
+     able, low-cost training of massive deep learning models.
+                                                                [13] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin
+     In Proceedings of the Seventeenth European Conference
+                                                                     Zheng, Eddie Yan, Haichen Shen, Meghan Cowan,
+     on Computer Systems, pages 472–487, 2022.
+                                                                     Leyuan Wang, Yuwei Hu, Luis Ceze, et al. Tvm: An au-
+ [3] AWS Cluster Configuratoins. https://aws.amazon.                 tomated end-to-end optimizing compiler for deep learn-
+     com/ec2/instance-types/p3/.                                     ing. In 13th USENIX Symposium on Operating Systems
+                                                                     Design and Implementation (OSDI 18), pages 578–594,
+ [4] Kevin Aydin, MohammadHossein Bateni, and Vahab                  2018.
+     Mirrokni. Distributed balanced partitioning via linear
+     embedding. In Proceedings of the Ninth ACM Inter-          [14] Tianqi Chen, Bing Xu, Chiyuan Zhang, and Carlos
+     national Conference on Web Search and Data Mining,              Guestrin. Training deep nets with sublinear memory
+     pages 387–396, 2016.                                            cost. arXiv preprint arXiv:1604.06174, 2016.
+ [5] Jimmy Lei Ba, Jamie Ryan Kiros, and Geoffrey E             [15] Tyler Denniston, Shoaib Kamil, and Saman Amaras-
+     Hinton.    Layer normalization.  arXiv preprint                 inghe. Distributed halide. ACM SIGPLAN Notices,
+     arXiv:1607.06450, 2016.                                         51(8):1–12, 2016.
+ [6] Youhui Bai, Cheng Li, Quan Zhou, Jun Yi, Ping Gong,        [16] Nan Du, Yanping Huang, Andrew M. Dai, Simon Tong,
+     Feng Yan, Ruichuan Chen, and Yinlong Xu. Gradient               Dmitry Lepikhin, Yuanzhong Xu, Maxim Krikun, Yanqi
+     compression supercharged high-performance data par-             Zhou, Adams Wei Yu, Orhan Firat, Barret Zoph, Liam
+     allel dnn training. In Proceedings of the ACM SIGOPS            Fedus, Maarten Bosma, Zongwei Zhou, Tao Wang,
+     28th Symposium on Operating Systems Principles CD-              Yu Emma Wang, Kellie Webster, Marie Pellat, Kevin
+     ROM, pages 359–375, 2021.                                       Robinson, Kathy Meier-Hellstern, Toju Duke, Lucas
+ [7] Paul Barham, Aakanksha Chowdhery, Jeff Dean, San-               Dixon, Kun Zhang, Quoc V Le, Yonghui Wu, Zhifeng
+     jay Ghemawat, Steven Hand, Daniel Hurt, Michael Is-             Chen, and Claire Cui. Glam: Efficient scaling of lan-
+     ard, Hyeontaek Lim, Ruoming Pang, Sudip Roy, et al.             guage models with mixture-of-experts, 2021.
+     Pathways: Asynchronous distributed dataflow for ml.
+                                                                [17] Shiqing Fan, Yi Rong, Chen Meng, Zongyan Cao, Siyu
+     Proceedings of Machine Learning and Systems, 4, 2022.
+                                                                     Wang, Zhen Zheng, Chuan Wu, Guoping Long, Jun
+ [8] L Susan Blackford, Jaeyoung Choi, Andy Cleary, Ed-              Yang, Lixue Xia, et al. Dapple: A pipelined data paral-
+     uardo D’Azevedo, James Demmel, Inderjit Dhillon, Jack           lel approach for training large models. In Proceedings
+     Dongarra, Sven Hammarling, Greg Henry, Antoine Pe-              of the 26th ACM SIGPLAN Symposium on Principles
+     titet, et al. ScaLAPACK users’ guide. SIAM, 1997.               and Practice of Parallel Programming, pages 431–445,
+                                                                     2021.
+ [9] James Bradbury, Roy Frostig, Peter Hawkins,
+     Matthew James Johnson, Chris Leary, Dougal Maclau-         [18] John Forrest and Robin Lougee-Heimer. Cbc user guide.
+     rin, George Necula, Adam Paszke, Jake VanderPlas,               In Emerging theory, methods, and applications, pages
+     Skye Wanderman-Milne, and Qiao Zhang. JAX: com-                 257–277. INFORMS, 2005.
+     posable transformations of Python+NumPy programs,
+     2018.                                                      [19] Richard J Forrester and Noah Hunt-Isaak. Computa-
+                                                                     tional comparison of exact solution methods for 0-1
+[10] Tom B Brown, Benjamin Mann, Nick Ryder, Melanie                 quadratic programs: Recommendations for practitioners.
+     Subbiah, Jared Kaplan, Prafulla Dhariwal, Arvind Nee-           Journal of Applied Mathematics, 2020, 2020.
+     lakantan, Pranav Shyam, Girish Sastry, Amanda Askell,
+     et al. Language models are few-shot learners. arXiv        [20] Google Clould TPU Cluster Configurations. https:
+     preprint arXiv:2005.14165, 2020.                                //cloud.google.com/tpu.
+[21] Chien-Chin Huang, Gu Jin, and Jinyang Li. Swapad-              et al. Automating system configuration of distributed
+     visor: Pushing deep learning beyond the gpu memory             machine learning. In 2019 IEEE 39th International Con-
+     limit via smart swapping. In Proceedings of the Twenty-        ference on Distributed Computing Systems (ICDCS),
+     Fifth International Conference on Architectural Support        pages 2057–2067. IEEE, 2019.
+     for Programming Languages and Operating Systems,
+     pages 1341–1355, 2020.                                    [31] Dmitry Lepikhin, HyoukJoong Lee, Yuanzhong Xu, De-
+                                                                    hao Chen, Orhan Firat, Yanping Huang, Maxim Krikun,
+[22] Yanping Huang, Youlong Cheng, Ankur Bapna, Orhan               Noam Shazeer, and Zhifeng Chen. Gshard: Scaling gi-
+     Firat, Dehao Chen, Mia Chen, HyoukJoong Lee, Jiquan            ant models with conditional computation and automatic
+     Ngiam, Quoc V Le, Yonghui Wu, et al. Gpipe: Effi-              sharding. arXiv preprint arXiv:2006.16668, 2020.
+     cient training of giant neural networks using pipeline
+     parallelism. Advances in neural information processing    [32] Shen Li, Yanli Zhao, Rohan Varma, Omkar Salpekar,
+     systems, 32:103–112, 2019.                                     Pieter Noordhuis, Teng Li, Adam Paszke, Jeff Smith,
+                                                                    Brian Vaughan, Pritam Damania, et al. Pytorch dis-
+[23] Paras Jain, Ajay Jain, Aniruddha Nrusimha, Amir Gho-           tributed: Experiences on accelerating data parallel train-
+     lami, Pieter Abbeel, Kurt Keutzer, Ion Stoica, and             ing. arXiv preprint arXiv:2006.15704, 2020.
+     Joseph E Gonzalez. Checkmate: Breaking the mem-
+     ory wall with optimal tensor rematerialization. arXiv     [33] Zhuohan Li, Siyuan Zhuang, Shiyuan Guo, Danyang
+     preprint arXiv:1910.02653, 2019.                               Zhuo, Hao Zhang, Dawn Song, and Ion Stoica. Terapipe:
+                                                                    Token-level pipeline parallelism for training large-scale
+[24] Zhihao Jia, Oded Padon, James Thomas, Todd Warsza-             language models. arXiv preprint arXiv:2102.07988,
+     wski, Matei Zaharia, and Alex Aiken. Taso: optimizing          2021.
+     deep learning computation with automatic generation
+                                                               [34] Lingxiao Ma, Zhiqiang Xie, Zhi Yang, Jilong Xue,
+     of graph substitutions. In Proceedings of the 27th ACM
+                                                                    Youshan Miao, Wei Cui, Wenxiang Hu, Fan Yang, Lintao
+     Symposium on Operating Systems Principles, pages 47–
+                                                                    Zhang, and Lidong Zhou. Rammer: Enabling holistic
+     62, 2019.
+                                                                    deep learning compiler optimizations with rtasks. In
+[25] Zhihao Jia, Matei Zaharia, and Alex Aiken. Beyond              14th USENIX Symposium on Operating Systems Design
+     data and model parallelism for deep neural networks.           and Implementation (OSDI 20), pages 881–897, 2020.
+     arXiv preprint arXiv:1807.05358, 2018.
+                                                               [35] Paulius Micikevicius, Sharan Narang, Jonah Alben, Gre-
+[26] Yimin Jiang, Yibo Zhu, Chang Lan, Bairen Yi, Yong              gory Diamos, Erich Elsen, David Garcia, Boris Ginsburg,
+     Cui, and Chuanxiong Guo. A unified architecture for            Michael Houston, Oleksii Kuchaiev, Ganesh Venkatesh,
+     accelerating distributed dnn training in heterogeneous         et al. Mixed precision training. arXiv preprint
+     gpu/cpu clusters. In 14th USENIX Symposium on Oper-            arXiv:1710.03740, 2017.
+     ating Systems Design and Implementation (OSDI 20),
+                                                               [36] Azalia Mirhoseini, Hieu Pham, Quoc V Le, Benoit
+     pages 463–479, 2020.
+                                                                    Steiner, Rasmus Larsen, Yuefeng Zhou, Naveen Kumar,
+[27] Soojeong Kim, Gyeong-In Yu, Hojin Park, Sungwoo                Mohammad Norouzi, Samy Bengio, and Jeff Dean. De-
+     Cho, Eunji Jeong, Hyeonmin Ha, Sanha Lee, Joo Seong            vice placement optimization with reinforcement learn-
+     Jeong, and Byung-Gon Chun. Parallax: Sparsity-aware            ing. In International Conference on Machine Learning,
+     data parallel training of deep neural networks. In Pro-        pages 2430–2439. PMLR, 2017.
+     ceedings of the Fourteenth EuroSys Conference 2019,
+                                                               [37] Philipp Moritz, Robert Nishihara, Stephanie Wang,
+     pages 1–15, 2019.
+                                                                    Alexey Tumanov, Richard Liaw, Eric Liang, Melih Eli-
+[28] Marisa Kirisame, Steven Lyubomirsky, Altan Haan, Jen-          bol, Zongheng Yang, William Paul, Michael I Jordan,
+     nifer Brennan, Mike He, Jared Roesch, Tianqi Chen,             et al. Ray: A distributed framework for emerging ai
+     and Zachary Tatlock. Dynamic tensor rematerialization.         applications. In 13th USENIX Symposium on Operating
+     arXiv preprint arXiv:2006.09616, 2020.                         Systems Design and Implementation (OSDI 18), pages
+                                                                    561–577, 2018.
+[29] Alex Krizhevsky. One weird trick for paralleliz-
+     ing convolutional neural networks. arXiv preprint         [38] Deepak Narayanan, Aaron Harlap, Amar Phanishayee,
+     arXiv:1404.5997, 2014.                                         Vivek Seshadri, Nikhil R Devanur, Gregory R Ganger,
+                                                                    Phillip B Gibbons, and Matei Zaharia. Pipedream: gen-
+[30] Woo-Yeon Lee, Yunseong Lee, Joo Seong Jeong,                   eralized pipeline parallelism for dnn training. In Pro-
+     Gyeong-In Yu, Joo Yeon Kim, Ho Jin Park, Beomyeol              ceedings of the 27th ACM Symposium on Operating
+     Jeon, Wonwook Song, Gunhee Kim, Markus Weimer,                 Systems Principles, pages 1–15, 2019.
+[39] Deepak Narayanan, Amar Phanishayee, Kaiyu Shi, Xie              Young, et al. Mesh-tensorflow: Deep learning for super-
+     Chen, and Matei Zaharia. Memory-efficient pipeline-             computers. arXiv preprint arXiv:1811.02084, 2018.
+     parallel dnn training. In International Conference on
+     Machine Learning, pages 7937–7947. PMLR, 2021.             [49] Mohammad Shoeybi, Mostofa Patwary, Raul Puri,
+                                                                     Patrick LeGresley, Jared Casper, and Bryan Catanzaro.
+[40] Deepak Narayanan, Mohammad Shoeybi, Jared Casper,               Megatron-lm: Training multi-billion parameter lan-
+     Patrick LeGresley, Mostofa Patwary, Vijay Korthikanti,          guage models using model parallelism. arXiv preprint
+     Dmitri Vainbrand, Prethvi Kashinkunti, Julie Bernauer,          arXiv:1909.08053, 2019.
+     Bryan Catanzaro, et al. Efficient large-scale language
+                                                                [50] Jakub M Tarnawski, Deepak Narayanan, and Amar Phan-
+     model training on gpu clusters using megatron-lm. In
+                                                                     ishayee. Piper: Multidimensional planner for dnn paral-
+     Proceedings of the International Conference for High
+                                                                     lelization. Advances in Neural Information Processing
+     Performance Computing, Networking, Storage and Anal-
+                                                                     Systems, 34, 2021.
+     ysis, pages 1–15, 2021.
+                                                                [51] Google XLA Team. Xla: Optimizing compiler for ma-
+[41] NVIDIA. The nvidia collective communication library,
+                                                                     chine learning, 2017.
+     2018.
+                                                                [52] The Theano Development Team, Rami Al-Rfou, Guil-
+[42] Adam Paszke, Sam Gross, Francisco Massa, Adam
+                                                                     laume Alain, Amjad Almahairi, Christof Angermueller,
+     Lerer, James Bradbury, Gregory Chanan, Trevor Killeen,
+                                                                     Dzmitry Bahdanau, Nicolas Ballas, Frédéric Bastien,
+     Zeming Lin, Natalia Gimelshein, Luca Antiga, et al.
+                                                                     Justin Bayer, Anatoly Belikov, et al. Theano: A python
+     Pytorch: an imperative style, high-performance deep
+                                                                     framework for fast computation of mathematical expres-
+     learning library. In Advances in Neural Information
+                                                                     sions. arXiv preprint arXiv:1605.02688, 2016.
+     Processing Systems, pages 8024–8035, 2019.
+                                                                [53] Thijs Vogels, Sai Praneeth Karinireddy, and Martin
+[43] Yanghua Peng, Yibo Zhu, Yangrui Chen, Yixin Bao,                Jaggi. Powersgd: Practical low-rank gradient compres-
+     Bairen Yi, Chang Lan, Chuan Wu, and Chuanxiong Guo.             sion for distributed optimization. Advances In Neu-
+     A generic communication scheduler for distributed dnn           ral Information Processing Systems 32 (Nips 2019),
+     training acceleration. In Proceedings of the 27th ACM           32(CONF), 2019.
+     Symposium on Operating Systems Principles, pages 16–
+     29, 2019.                                                  [54] Haojie Wang, Jidong Zhai, Mingyu Gao, Zixuan Ma,
+                                                                     Shizhi Tang, Liyan Zheng, Yuanzhi Li, Kaiyuan Rong,
+[44] Samyam Rajbhandari, Jeff Rasley, Olatunji Ruwase, and           Yuanyong Chen, and Zhihao Jia. Pet: Optimizing tensor
+     Yuxiong He. Zero: Memory optimizations toward train-            programs with partially equivalent transformations and
+     ing trillion parameter models. In SC20: International           automated corrections. In 15th USENIX Symposium on
+     Conference for High Performance Computing, Network-             Operating Systems Design and Implementation (OSDI
+     ing, Storage and Analysis, pages 1–16. IEEE, 2020.              21), pages 37–54, 2021.
+[45] Jeff Rasley, Samyam Rajbhandari, Olatunji Ruwase, and      [55] Minjie Wang, Chien-chin Huang, and Jinyang Li. Sup-
+     Yuxiong He. Deepspeed: System optimizations enable              porting very large models using automatic dataflow
+     training deep learning models with over 100 billion pa-         graph partitioning. In Proceedings of the Fourteenth
+     rameters. In Proceedings of the 26th ACM SIGKDD                 EuroSys Conference 2019, pages 1–17, 2019.
+     International Conference on Knowledge Discovery &
+     Data Mining, pages 3505–3506, 2020.                        [56] Yuanzhong Xu, HyoukJoong Lee, Dehao Chen, Hongjun
+                                                                     Choi, Blake Hechtman, and Shibo Wang. Automatic
+[46] Jie Ren, Samyam Rajbhandari, Reza Yazdani Am-                   cross-replica sharding of weight update in data-parallel
+     inabadi, Olatunji Ruwase, Shuangyan Yang, Minjia                training. arXiv preprint arXiv:2004.13336, 2020.
+     Zhang, Dong Li, and Yuxiong He. Zero-offload: De-
+     mocratizing billion-scale model training. arXiv preprint   [57] Yuanzhong Xu, HyoukJoong Lee, Dehao Chen, Blake
+     arXiv:2101.06840, 2021.                                         Hechtman, Yanping Huang, Rahul Joshi, Maxim Krikun,
+                                                                     Dmitry Lepikhin, Andy Ly, Marcello Maggioni, et al.
+[47] Alexander Sergeev and Mike Del Balso. Horovod: fast             Gspmd: General and scalable parallelization for ml
+     and easy distributed deep learning in tensorflow. arXiv         computation graphs. arXiv preprint arXiv:2105.04663,
+     preprint arXiv:1802.05799, 2018.                                2021.
+[48] Noam Shazeer, Youlong Cheng, Niki Parmar, Dustin           [58] Jinhui Yuan, Xinqi Li, Cheng Cheng, Juncheng Liu, Ran
+     Tran, Ashish Vaswani, Penporn Koanantakool, Peter               Guo, Shenghang Cai, Chi Yao, Fei Yang, Xiaodong Yi,
+     Hawkins, HyoukJoong Lee, Mingsheng Hong, Cliff                  Chuan Wu, et al. Oneflow: Redesign the distributed
+     deep learning framework from scratch. arXiv preprint
+     arXiv:2110.15032, 2021.
+[59] Sergey Zagoruyko and Nikos Komodakis. Wide residual
+     networks. arXiv preprint arXiv:1605.07146, 2016.
+
+[60] Hao Zhang, Yuan Li, Zhijie Deng, Xiaodan Liang,
+     Lawrence Carin, and Eric Xing. Autosync: Learning to
+     synchronize for data-parallel distributed deep learning.
+     Advances in Neural Information Processing Systems, 33,
+     2020.
+[61] Zhen Zhang, Shuai Zheng, Yida Wang, Justin Chiu,
+     George Karypis, Trishul Chilimbi, Mu Li, and Xin Jin.
+     Mics: Near-linear scaling for training gigantic model on
+     public cloud. arXiv preprint arXiv:2205.00119, 2022.
+[62] Lianmin Zheng, Chengfan Jia, Minmin Sun, Zhao Wu,
+     Cody Hao Yu, Ameer Haj-Ali, Yida Wang, Jun Yang,
+     Danyang Zhuo, Koushik Sen, et al. Ansor: Generating
+     high-performance tensor programs for deep learning. In
+     14th USENIX Symposium on Operating Systems Design
+     and Implementation (OSDI 20), pages 863–879, 2020.
+A     Proof of Submesh Shape Covering
+We prove the following theorem which shows we can al-
+ways find a solution that fully covers the cluster mesh
+(N, M) with our selected submesh shapes in §5.2: (1) one-
+dimensional submeshes of shape (1, 1), (1, 2), (1, 4) . . . (1, 2m )                 Table 6: GPT-3 Model Specification
+where 2m = M and (2) two-dimensional submeshes of shape
+(2, M), (3, M), . . . , (N, M) .                                           #params      Hidden size        #layers      #heads      #gpus
+                                                                            350M             1024             24          16          1
+Theorem            1. For a              list of submesh shapes
+                                                                            1.3B             2048             24          32          4
+(n1 , m1 ), . . . (nS , mS ), if ∑i ni · mi = N · M and each (ni , mi )
+                                                                            2.6B             2560             32          32          8
+satisfies either (1) ni = 1 and mi = 2 pi is a power of 2 or
+                                                                            6.7B             4096             32          32         16
+(2) mi = M, then we can always cover the full (N, M) mesh
+                                                                             15B             5120             48          32         32
+where M = 2m with these submesh shapes.
+                                                                             39B             8192             48          64         64
+Proof. We start with putting the second type submesh into
+the full mesh. In this case, because mi = M, these submeshes
+can cover the full second dimension of the full mesh. After
+putting all the second kind of submeshes into the mesh, we
+reduce the problem to fit a cluster mesh of shape (N, M) with
+submeshes with shape (1, 2 p1 ), . . . , (1, 2 pS ) where all pi ∈
+{0, 1, . . . , m − 1}. Note that now we have
+
+                     2 p1 + · · · + 2 pS = N · 2m .                (7)
+                                                                                  Table 7: GShard MoE Model Specification
+We start an induction on m. When m = 1, we have all pi = 0
+and thus all the submeshes are of shape (1, 1), which means
+                                                                          #params    Hidden size    #layers    #heads     #experts    #gpus
+that all the submeshes can definitely cover the full mesh. As-
+sume the above hold for all m = 1, 2, . . . , k − 1. When m = k,           380M          768           8           16           8         1
+                                                                           1.3B          768          16           16          16         4
+note that in this case the number of submeshes with pi = 0
+                                                                           2.4B         1024          16           16          16         8
+should be an even number, because otherwise the left hand                   10B         1536          16           16          32         16
+side of Eq. 7 will be an odd number while the right hand side is            27B         2048          16           32          48         32
+always an even number. Then we can split all submeshes with                 70B         2048          32           32          64         64
+shape pi = 0 into pairs, and we co-locate each pair to form
+a (1, 2) mesh. After this transformation, we have all pi > 0,
+so we can subtract all pi and m by 1 and reduce to m = k − 1
+case. Therefore, the theorem holds by induction.
+
+B     Model Specifications
+For GPT-3 models, we use sequence length = 1024 and vo-
+cabulary size = 51200 for all models. Other parameters of the
+models are listed in Table. 6. The last column is the number
+of GPUs used to train the corresponding model.                                    Table 8: Wide-ResNet Model Specification
+   For GShard MoE models, we use sequence length = 1024
+and vocabulary size = 32000 for all models. Other parameters              #params     #layers   Base channel         Width factor    #gpus
+of the models are listed in Table. 7. The last column is the
+                                                                           250M        50            160                  2            1
+number of GPUs used to train the corresponding model.
+                                                                             1B        50            320                  2            4
+   For Wide-ResNet models, we use input image size = (224,                   2B        50            448                  2            8
+224, 3) and #class = 1024 for all models. Other parameters                   4B        50            640                  2           16
+of the models are listed in Table. 8. The last column is the               6.8B        50            320                 16           32
+number of GPUs used to train the corresponding model.                       13B        101           320                 16           64
+C     Extra Case Study
+We visualize the parallelization strategies Alpa finds for Wide-
+ResNet on 4 and 8 GPUs in Fig. 13.
+                     Inputs/activations       Weights         Partitioned on batch/input axis   Partitioned on hidden/output axis   Replicated
+
+                                      Stage 1: 4 GPUs
+
+
+
+
+                                                    (a) Parallel strategy of Wide-ResNet on 4 GPUs.
+
+                                          Stage 1: 4 GPUs
+
+
+
+
+                                                        Stage 2: 4 GPUs
+
+
+
+
+                                                    (b) Parallel strategy of Wide-ResNet on 8 GPUs.
+
+Figure 13: Visualization of the parallel strategy of Wide-ResNet on 4 and 8 GPUs. Different colors represent the devices a tensor
+is distributed on. Grey blocks indicate a tensor is replicated across all devices. The input data and resulting activation of each
+convolution or dense layer can be partitioned along the batch axis and the hidden axis. The weights can be partitioned along the
+input and output channel axis.
+

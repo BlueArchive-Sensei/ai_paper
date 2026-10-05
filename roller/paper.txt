@@ -1,0 +1,388 @@
+                                               Predictive Power of Computational Astrophysics as a Discovery
+                                               Tool
+                                               Proceedings IAU Symposium No. 362, 2022                © 2022 International Astronomical Union
+                                               D. Bisikalo, T. Hanawa, C. Boily & J. Stone, eds.             DOI: 00.0000/X000000000000000X
+
+
+                                                   Dynamical evolution modeling of the
+                                                 Collinder 135 & UBC 7 binary star cluster
+                                                                     Marina Ishchenko1 , Peter Berczik1,2,3 ,
+                                                                              Nina Kharchenko1
+                                                        1
+                                                         Main Astronomical Observatory, National Academy of Sciences of Ukraine,
+arXiv:2201.12040v3 [astro-ph.GA] 31 Jan 2023
+
+
+
+
+                                                                   27 Akademika Zabolotnoho St, 03143 Kyiv, Ukraine
+                                                   2
+                                                     Astronomisches Rechen-Institut, Zentrum für Astronomie, University of Heidelberg,
+                                                                   Mönchhofstrasse 12-14, 69120, Heidelberg, Germany
+                                                3
+                                                  Konkoly Observatory, Research Centre for Astronomy and Earth Sciences, Eötvös Loránd
+                                                   Research Network (ELKH), Konkoly Thege Miklós út 15-17, 1121 Budapest, Hungary
+
+
+                                               Abstract. The purpose of the present work is a detailed investigation of the dynamical evolution
+                                               of Collinder 135 and UBC 7 star clusters. We present a set of dynamical numerical simulations
+                                               using realistic star cluster N -body modeling technique with the forward integration of the star-
+                                               by-star cluster models to the present day, based on best-available 3D coordinates and velocities
+                                               obtained from the latest Gaia EDR3 data release. We have established that Collinder 135 and
+                                               UBC 7 are probably a binary star cluster and have common origin. We carried out a full star-
+                                               by-star N-body simulation of the stellar population of both clusters using the new algorithm of
+                                               Single Stellar Evolution and performed a comparison of the results obtained in the observational
+                                               data (like cumulative number counts), which showed a fairly good agreement.
+
+                                               Keywords. galaxies: star clusters, methods: n-body simulations
+
+
+
+
+                                               1. Introduction
+                                                 Recently, based on analysis of positions and kinematic data of Gaia space mission
+                                               (Gaia Collaboration et al., 2016), several pairs of star clusters showed a probable com-
+                                               mon origin (for example: Bisht et al., 2021, Pang et al., 2020, Zhong et al., 2019, Kovaleva et al., 2020).
+                                               Collinder 135 (hereafter Cr 135) and newly discovered (Castro-Ginard et al., 2018) UBC 7
+                                               are located in the Vela-Puppis region which attracts active attention since Gaia data al-
+                                               lowed to appreciate its complicated history of evolution, space and kinematic structure
+                                               (Beccari et al., 2018, Cantat-Gaudin et al., 2019b, Cantat-Gaudin et al., 2019a, Beccari et al., 2020).
+                                               We have demonstrated (Kovaleva et al., 2020) that these two clusters locations and ve-
+                                               locities suggest that they might have been closer to each other at their initial history,
+                                               ≈ 50 Myr ago. Backward orbital integration indicates also that the clusters might have
+                                               been even gravitationally bound in the past, assuming that they was significantly more
+                                               massive before their violent relaxation (Kovaleva et al., 2020).
+                                                 We used Gaia DR2 and EDR3 data to restore the most probable members of Cr 135
+                                               and UBC 7, using the method presented in Kharchenko et al., 2012. Based on obtained
+                                               dataset, we constrain present day parameters of the two clusters, such as space positions,
+                                               space velocities, masses and density profiles. These data are used further as boundary
+                                               conditions for star-by-star numerical simulation of dynamical evolution of this pair of
+                                               star clusters.
+                                                                                              1
+2                                    M. Ishchenko et al.
+2. N-body modeling of the star clusters evolution
+                                  2.1. Numerical method
+We used the ϕ−GPU code for the numerical solution of the equations of motion. The
+ϕ−GPU package uses a high order Hermite integration scheme and individual block
+time steps (the code supports time integration of particle orbits with schemes of 4th , 6th
+and even 8th order). Such a direct N -body code evaluates in principle all pairwise forces
+between the gravitating particles, and its computational complexity scales asymptotically
+with N 2 . We refer the more interested readers to a general discussion about different N -
+body codes and their implementation in Spurzem et al., 2011a, Spurzem et al., 2011b.
+   The ϕ−GPU code is fully parallelized using the MPI library. This code is written from
+scratch in C++ and is based on earlier CPU serial N -body code, Nitadori and Makino, 2008.
+The MPI parallelization was done in the same j particle parallelization mode as in the
+earlier ϕ−GRAPE code, Harfst et al., 2007. The current version of the code uses a na-
+tive GPU support and direct code access to the GPU’s using the NVIDIA native CUDA
+library. The multi GPU support is achieved through global MPI parallelization. Simul-
+taneously, our code effectively exploits also the current CPU’s OpenMP parallelization.
+More details about the GPU code public version and its performance we are presented
+in Spurzem et al., 2012 and Berczik et al., 2013. The present code is well tested and has
+already been used to obtain important results in our earlier large scale (up to few mil-
+lion body) simulations, for more details see Khan et al., 2018, Panamarev et al., 2019,
+Shukirgaliyev et al., 2017 and Ernst et al., 2011.
+
+                                2.2. Initial parameter space
+We were looking for the best-fitting King models (King, 1966) for the current observations
+from Gaia DR3. We assume that the clusters age is exactly 50 Myr. Our main goal was
+to reproduce the final cumulative mass profiles M (r) for both objects. For the Cr 135
+we used the range within 0 < r < 20 pc and for UBC 7 – 0 < r < 15 pc. These
+limits corresponds to the clusters current Jacobi radius’s. Because the initial masses of
+the clusters are quite uncertain, we used for the modelling the initial masses as one
+of the initial fitting parameters. Since clusters are formed in molecular clouds with a
+low star formation efficiency, they are most probably supervirial after the initial gas
+expulsion phase (Shukirgaliyev et al., 2021). For the initial mass function we used the
+Kroupa, 2001 approximation, with the lower mass ml = 0.1 M⊙ and the upper mass mh
+= 10 M⊙ limits. The other two main parameters for the cluster initial models was a Rcore
+and the King concentration parameter W0 , individually for ach clusters (see Table 2).
+For the stellar metallicity we used the value Z = 2% (assumed as a Solar value) for both
+clusters.
+   For the initial positions and orbital velocities of the star clusters centre we used the
+selected #(53,61) model from our Kovaleva et al., 2020 paper. The initial conditions for
+the clusters center of mass coordinates and velocities taken from this model (see Table 1).
+
+
+Table 1. Initial position and velocity values for Cr 135 and UBC 7 center of mass in Cartesian
+      Galactic coordinates. Taken from #(53,61) model, Kovaleva et al., 2020.
+
+         Cluster    X, pc       Y , pc     Z, pc    Vx , km/s Vy , km/s Vz , km/s
+          Cr 135 -1061.421 -8382.545 -22.70332       -230.559   33.1769    5.52892
+          UBC 7 -1065.137 -8386.942 -14.5731         -230.792   34.0251    5.86780
+                                    Collinder 135 & UBC 7 binary star cluster                                                 3
+   More than 50 individual models with stellar evolution have been computed. The total
+running time for one typical model on a AMD 3600X 4.1 GHz CPU with a GeForce
+RTX 2600 Super GPU card was about 2 min. Minimizing the difference between the
+cumulative number distributions of the observed clusters and the numerical models we
+find simultaneously the best-fit parameters for both clusters, see Table 2.
+
+                Table 2. Initial values of physical parameters for Cr 135 and UBC 7.
+
+                                               Cluster M⊙           N        R, pc W0
+                                               Cr 135     230 442                 10       3
+                                               UBC 7      200 384                  7       11
+
+
+
+   After the first set of fitting procedure we run extra 20 more numerical models (with
+the clusters same physical parameters but using different randomization parameters).
+First we generated 10 random sets with different initial mass function (different color
+lines), keeping fixed the initial positions and velocities of the stars, see Fig. 1. For the
+second 10 random sets we used one selected initial muss function and randomize the stars
+positions and velocities (different color lines), see Fig. 2. On these figures we present as
+a black thick line the observed cumulative number distribution of stars for both clusters.
+The total cumulative number distribution of stars including the stellar background are
+presented on the figures as a constantly growing gray line. Because the observations have
+own limitations due to the Gaia satellite specifications, we select from the numerical
+models only the stars which are inside the specific stellar mass range - from 0.28 to
+4.0 M⊙ . On our comparison figures we also exclude the neutron stars and black holes.
+The dotted gray lines on the figures represents the one ±σ difference levels from observed
+cumulative number distribution of stars.
+     350                                                                    350
+           Col 135 Count                                                            UBC 7 Count
+              Count-Back                                                             Count-Back
+           imf.rand. #1                                                           imf.rand. #1
+     300   imf.rand. #2                                                     300   imf.rand. #2
+           imf.rand. #3                                                           imf.rand. #3
+           imf.rand. #7                                                           imf.rand. #7
+     250   imf.rand. #9                                                     250   imf.rand. #9
+           imf.rand. #4                                                           imf.rand. #4
+           imf.rand. #5                                                           imf.rand. #5
+     200   imf.rand. #6                                                     200   imf.rand. #6
+           imf.rand. #8                                                           imf.rand. #8
+           imf.rand. #10                                                          imf.rand. #10
+ N
+
+
+
+
+                                                                        N
+
+
+
+
+     150                                                                    150
+
+
+     100                                                                    100
+
+
+     50                                                                     50
+
+
+      0                                                                      0
+            2      4       6   8    10    12    14   16   18   20                      2    4     6      8     10   12   14
+                                   R [pc]                                                             R [pc]
+
+
+Figure 1. Cumulative number distribution of stars for clusters Cr 153 (left panel) and UBC 7
+(right panel). The different color lines represents the set of randomization for initial mass func-
+tion when the coordinates and velocities of the stars are fixed.
+
+   As we can see from figures Fig. 1 and Fig. 2 both sets of randomization of our best
+fitted physical model for clusters Cr 135 and UBC 7 are well inside the one ±σ gap.
+
+
+3. Results
+  We present a numerical simulations using realistic star cluster N-body modelling
+by integrating a star-by-star cluster models in the analytic Milky Way potential to
+4                                                         M. Ishchenko et al.
+        350                                                                   350
+              Col 135 Count                                                           UBC 7 Count
+                 Count-Back                                                            Count-Back
+              coo.rand. #1                                                          coo.rand. #1
+        300   coo.rand. #2                                                    300   coo.rand. #2
+              coo.rand. #3                                                          coo.rand. #3
+              coo.rand. #4                                                          coo.rand. #4
+        250   coo.rand. #5                                                    250   coo.rand. #5
+              coo.rand. #6                                                          coo.rand. #6
+              coo.rand. #7                                                          coo.rand. #7
+        200   coo.rand. #8                                                    200   coo.rand. #8
+              coo.rand. #9                                                          coo.rand. #9
+              coo.rand. #10                                                         coo.rand. #10
+    N
+
+
+
+
+                                                                          N
+        150                                                                   150
+
+
+        100                                                                   100
+
+
+        50                                                                    50
+
+
+         0                                                                      0
+               2     4        6   8   10       12   14   16   18   20                 2       4     6        8   10      12   14
+                                      R [pc]                                                            R [pc]
+
+    Figure 2. Same as Fig. 1 but randomization for initial coordinates and velocities was done
+                           with the fixed initial stellar mass function.
+
+the present day. The code taking in to account up to date stellar evolution models
+(Banerjee et al., 2020). The average model relative errors between the observations and
+numerical simulations are better than 1%. This is remarkable small error taking in ac-
+count that the observational average line of site velocity error is around 10%.
+
+    Table 3. Comparison of position and velocity values for Cr 135 and UBC 7 center mass in
+     Cartesian Galactic coordinates at 50 Myr with numerical simulation and observations.
+
+                   Cluster Type             X, pc         Y , pc        Z, pc       Vx , km/s Vy , km/s Vz , km/s
+                   Cr 135         Sim      -8282.94      -284.32    -34.25            -7.65         237.32       -5.01
+                                  Obs      -8282.14      -271.00    -36.16            -7.38         237.94       -4.85
+                   UBC 7          Sim      -8284.14      -251.01    -45.80            -7.43         237.61       -4.65
+                                  Obs      -8276.21      -250.87    -43.63            -7.00         238.13       -4.27
+
+
+
+  The orbits integration with a simple integrator yielded the initial position of the Cr 135
+ans UBS 7 at the time of their formation (see Table 1). The present-day position and
+velocity of the Cr 135 and UBC 7 obtained from numerical simulation are given in
+Table 3. The full 3D orbits of the evolution are shown in Fig. 3. It should be noted that
+the clusters rotate around each other during their orbital motion.
+
+
+4. Conclusions
+   We present a numerical simulations using realistic star cluster N-body modelling by
+integrating a star-by-star cluster models in the analytic Milky Way potential to the
+present day. We were looking for the best-fitting King models for the observations from
+Gaia DR3 after 50 Myr of evolution. The comparative result of observational data and
+simulations for 50 Myr showed a fairly good agreement. The probability of a random
+coincidence chance is only about 2%.
+
+
+5. Acknowledgements
+  This work has made use of data from the European Space Agency (ESA) mission
+Gaia, processed by the Gaia Data Processing and Analysis Consortium. PB and MI
+express their great thanks for the hospitality of the Nicolaus Copernicus Astronomical
+Centre, Polish Academy of Sciences where some part of the work was done. The work of
+                         Collinder 135 & UBC 7 binary star cluster                               5
+
+                                                         Cr 135
+                                                         Cr 135, t = 0 Myr
+                                                         UBC 7
+                         80                              UBC 7, t = 0 Myr
+                         60                                                   250
+                         40
+                         20                                                   200
+                  Z [pc] 0
+
+
+
+
+                                                                                    t [Myr]
+                                                                              150
+                        −20
+                        −40                                                   100
+                        −60                                                   50
+                        −80
+                                                                              0
+                                                                             −50
+                         10
+                              5
+
+                       X [kpc] 0
+                                   −5                                 −10
+                                                               −5
+                                                       0
+                                    −10 10    5      Y [kpc]
+
+
+
+
+ Figure 3. 3D orbits evolution of the Cr 135 (solid line) and UBS 7 (dotted line) up to 250
+           Myr. Black and black unfilled circles are position of clusters at Myr.
+
+
+PB and MI was supported by the DFG (German Research Foundation) SFB 881 (”The
+Milky Way System”) and by the Volkswagen Foundation grant No. 97778. PB and MI
+acknowledges the support by Ministry of Education and Science of Ukraine under the
+French-Ukrainian collaborative grant No. M63-17.11.2021 and by the National Academy
+of Sciences of Ukraine under the Main Astronomical Observatory GPU computing cluster
+project No. 13.2021.MM. The work of PB was also supported by the Volkswagen Foun-
+dation under the special stipend No. 9B870 (2022) and by the Science Committee of the
+Ministry of Education and Science of the Republic of Kazakhstan grant No. AP08856184.
+
+
+References
+Banerjee, S., Belczynski, K., Fryer, C. L., Berczik, P., Hurley, J. R., Spurzem, R., & Wang,
+     L. 2020, BSE versus StarTrack: Implementations of new wind, remnant-formation, and
+     natal-kick schemes in NBODY7 and their astrophysical consequences. A&A, 639, A41.
+Beccari, G., Boffin, H. M. J., & Jerabkova, T. 2020, Uncovering a 260 pc wide, 35-Myr-old
+     filamentary relic of star formation. M N RAS, 491(2), 2205–2216.
+Beccari, G., Boffin, H. M. J., Jerabkova, T., Wright, N. J., Kalari, V. M., Carraro, G., De Marchi,
+     G., & de Wit, W.-J. 2018, A sextet of clusters in the Vela OB2 region revealed by Gaia.
+     M N RAS, 481(1), L11–L15.
+Berczik, P., Spurzem, R., Wang, L., Zhong, S., & Huang, S. Up to 700k GPU cores, Kepler,
+     and the Exascale future for simulations of star clusters around black holes. In Third
+     International Conference ”High Performance Computing”, HPC-UA 2013, p. 52-59 2013,,
+     pp. 52–59.
+Bisht, D., Zhu, Q., Yadav, R. K. S., Ganesh, S., Rangwal, G., Durgapal, A., Sariya, D. P., &
+     Jiang, I.-G. 2021, Multicolour photometry and Gaia EDR3 astrometry of two couples of
+     binary clusters (NGC 5617 and Trumpler 22) and (NGC 3293 and NGC 3324). M N RAS,
+     503(4), 5929–5947.
+Cantat-Gaudin, T., Jordi, C., Wright, N. J., Armstrong, J. J., Vallenari, A., Balaguer-Núñez,
+     L., Ramos, P., Bossini, D., Padoan, P., Pelkonen, V. M., Mapelli, M., & Jeffries, R. D.
+     2019,a Expanding associations in the Vela-Puppis region. 3D structure and kinematics of
+     the young population. A&A, 626a, A17.
+Cantat-Gaudin, T., Mapelli, M., Balaguer-Núñez, L., Jordi, C., Sacco, G., & Vallenari, A. 2019,b
+     A ring in a shell: the large-scale 6D structure of the Vela OB2 complex. A&A, 621b, A115.
+Castro-Ginard, A., Jordi, C., Luri, X., Julbe, F., Morvan, M., Balaguer-Núñez, L., & Cantat-
+6                                     M. Ishchenko et al.
+     Gaudin, T. 2018, A new method for unveiling open clusters in Gaia. New nearby open
+     clusters confirmed by DR2. A&A, 618, A59.
+Ernst, A., Just, A., Berczik, P., & Olczak, C. 2011, Simulations of the Hyades. A&A, 536, A64.
+Gaia Collaboration, Prusti, T., de Bruijne, J. H. J., Brown, A. G. A., & et al. 2016, The Gaia
+     mission. A&A, 595, A1.
+Harfst, S., Gualandris, A., Merritt, D., Spurzem, R., Portegies Zwart, S., & Berczik, P. 2007,
+     Performance analysis of direct N-body algorithms on special-purpose supercomputers.
+     N ewAstr, 12, 357–377.
+Khan, F. M., Capelo, P. R., Mayer, L., & Berczik, P. 2018, Dynamical Evolution and Merger
+     Timescales of LISA Massive Black Hole Binaries in Disk Galaxy Mergers. ApJ, 868(2), 97.
+Kharchenko, N. V., Piskunov, A. E., Schilbach, E., Röser, S., & Scholz, R.-D. 2012, Global
+     survey of star clusters in the Milky Way. I. The pipeline and fundamental parameters in
+     the second quadrant. A&A, 543, A156.
+King, I. R. 1966, The structure of star clusters. III. Some simple dynamical models. AJ, 71, 64.
+Kovaleva, D. A., Ishchenko, M., Postnikova, E., Berczik, P., Piskunov, A. E., Kharchenko, N. V.,
+     Polyachenko, E., Reffert, S., Sysoliatina, K., & Just, A. 2020, Collinder 135 and UBC 7: A
+     physical pair of open clusters. A&A, 642, L4.
+Kroupa, P. 2001, On the variation of the initial mass function. M N RAS, 322(2), 231–246.
+Nitadori, K. & Makino, J. 2008, Sixth- and eighth-order Hermite integrator for N-body simula-
+     tions. N ewAstr, 13, 498–507.
+Panamarev, T., Just, A., Spurzem, R., Berczik, P., Wang, L., & Arca Sedda, M. 2019, Direct
+     N-body simulation of the Galactic centre. M N RAS, 484(3), 3279–3290.
+Pang, X., Li, Y., Tang, S.-Y., Pasquato, M., & Kouwenhoven, M. B. N. 2020, Different Fates of
+     Young Star Clusters after Gas Expulsion. ApJL, 900(1), L4.
+Shukirgaliyev, B., Otebay, A., Sobolenko, M., Ishchenko, M., Borodina, O., Panamarev, T.,
+     Myrzakul, S., Kalambay, M., Naurzbayeva, A., Abdikamalov, E., Polyachenko, E., Banerjee,
+     S., Berczik, P., Spurzem, R., & Just, A. 2021, Bound mass of Dehnen models with a centrally
+     peaked star formation efficiency. A&A, 654, A53.
+Shukirgaliyev, B., Parmentier, G., Berczik, P., & Just, A. 2017, Impact of a star formation
+     efficiency profile on the evolution of open clusters. A&A, 605, A119.
+Spurzem, R., Berczik, P., Berentzen, I., Ge, W., Wang, X., Schive, H.-Y., Nitadori, K., &
+     Hamada, T. Supermassive Black Hole Binaries in High Performance Massively Parallel
+     Direct N-body Simulations on Large GPU Clusters. In Dubitzky, W., Kurowski, K., &
+     Schott, B., editors, Large Scale Computing Techniques for Complex Systems and Simula-
+     tions 2011,a, Wiley Publishers, pp. 35–58.
+Spurzem, R., Berczik, P., Hamada, T., Nitadori, K., Marcus, G., Kugel, A., Männer, R.,
+     Berentzen, I., Fiestas, J., Banerjee, R., & Klessen, R. 2011,b Astrophysical Particle Simula-
+     tions with Large Custom GPU Clusters on Three Continents. Computer Science - Research
+     and Development (CSRD), 26b, 145–151.
+Spurzem, R., Berczik, P., Zhong, S., Nitadori, K., Hamada, T., Berentzen, I., & Veles, A. Su-
+     permassive Black Hole Binaries in High Performance Massively Parallel Direct N-body
+     Simulations on Large GPU Clusters. In Capuzzo-Dolcetta, R., Limongi, M., & Tornambè,
+     A., editors, Advances in Computational Astrophysics: Methods, Tools, and Outcome 2012,,
+     volume 453 of Astronomical Society of the Pacific Conference Series, 223.
+Zhong, J., Chen, L., Kouwenhoven, M. B. N., Li, L., Shao, Z., & Hou, J. 2019, Substructure
+     and halo population of Double Cluster h and χ Persei. A&A, 624, A34.
+
+
+6. Discussion
+  Q: Thank you for presenting the simulation results. I have a question about how the
+comparison of the results of the simulation with the observational data was carried out?
+Such as figure 1 or 2 (Christian Boily) A: To compare our results with observational
+data, we performed a transformation of the galactocentric coordinates into equatorial
+coordinate system. (Marina Ishchenko)
+

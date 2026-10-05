@@ -1,0 +1,784 @@
+                                            Glow: Graph Lowering Compiler Techniques for
+                                                         Neural Networks
+                                                 Nadav Rotem, Jordan Fix, Saleem Abdulrasool, Garret Catron, Summer Deng,
+                                               Roman Dzhabarov, Nick Gibson, James Hegeman, Meghan Lele, Roman Levenstein,
+                                                 Jack Montgomery, Bert Maher, Satish Nadathur, Jakob Olesen, Jongsoo Park,
+                                                              Artem Rakhov, Misha Smelyanskiy, Man Wang
+                                                                                Facebook
+arXiv:1805.00907v3 [cs.PL] 3 Apr 2019
+
+
+
+
+                                        Abstract                                                       optimizations in order to execute neural networks effi-
+                                                                                                       ciently on DSAs. This paper describes some of these
+                                        This paper presents the design of Glow, a machine              techniques as implemented in Glow, an open-source
+                                        learning compiler for heterogeneous hardware. It is            machine learning compiler framework for heteroge-
+                                        a pragmatic approach to compilation that enables               neous hardware.
+                                        the generation of highly optimized code for multi-                Traditional machine learning frameworks iterate
+                                        ple targets. Glow lowers the traditional neural net-           over the nodes in the graph and execute them one
+                                        work dataflow graph into a two-phase strongly-typed            by one. Unfortunately this node-visitor method of
+                                        intermediate representation. The high-level inter-             execution is inefficient, even on traditional processors.
+                                        mediate representation allows the optimizer to per-            As a result, machine learning frameworks have started
+                                        form domain-specific optimizations. The lower-level            to hand over the graph to compilers [2, 3] that exe-
+                                        instruction-based address-only intermediate represen-          cute code more efficiently. Based on the increasing
+                                        tation allows the compiler to perform memory-related           importance of neural networks, the need for energy
+                                        optimizations, such as instruction scheduling, static          efficiency in data centers and mobile devices, and the
+                                        memory allocation and copy elimination. At the low-            design principles of domain-specific architectures, we
+                                        est level, the optimizer performs machine-specific code        believe that the machine learning frameworks of the
+                                        generation to take advantage of specialized hardware           future will focus on providing attractive programming
+                                        features. Glow features a lowering phase which en-             models on top of a layer that integrates compilers for
+                                        ables the compiler to support a high number of input           many different targets.
+                                        operators as well as a large number of hardware targets           In Glow, we focus on the lower parts of the soft-
+                                        by eliminating the need to implement all operators on          ware stack. We work to provide PyTorch [4] and
+                                        all targets. The lowering phase is designed to reduce          other frameworks with a low-level graph and a code
+                                        the input space and allow new hardware backends to             generator for neural networks. The name Glow is an
+                                        focus on a small number of linear algebra primitives.          abbreviation for Graph-Lowering, which is the main
+                                                                                                       technique that the compiler uses for generating effi-
+                                                                                                       cient code. The Glow low-level graph will not replace
+                                        1     Introduction                                             the machine learning high-level graph, in the same
+                                                                                                       way that the low-level intermediate representation in
+                                        The end of power saving due to Moore’s Law, com-
+                                                                                                       compilers does not replace the abstract syntax tree.
+                                        bined with the increased demand for compute power
+                                                                                                          We aim to provide a useful compiler toolkit that will
+                                        driven by machine learning, has led to a wave of in-
+                                                                                                       allow hardware developers to focus on implementing
+                                        novation in computer architecture. Hennessy and
+                                                                                                       efficient acceleration hardware, each of which likely
+                                        Patterson [1] present five principles that guide the de-
+                                                                                                       differ in capabilities, and use Glow for automating
+                                        sign of machine-learning domain specific architectures
+                                                                                                       compilation tasks such as instruction selection, mem-
+                                        (DSA): dedicated local memories, large numbers of
+                                                                                                       ory allocation and graph scheduling. The full compiler
+                                        arithmetic units, simple forms of parallelism, reduced
+                                                                                                       toolkit is open-source and publicly available1 .
+                                        bit-widths, and domain-specific programming mod-
+                                        els. Compilers need to perform advance whole-graph               1 http://github.com/pytorch/glow
+
+
+
+
+                                                                                                   1
+   Cadence R , Esperanto R , Habana R , Intel R , and            for (...) A [ i ] = 3;
+Qualcomm Technologies Inc. R , a subsidiary of Qual-             for (...) A [ i ] = 4;
+                                                                 return A [0];
+comm Incorporated R , have committed to supporting
+Glow in future silicon products. Each of their acceler-          Figure 1: Compilers struggle to analyze and optimize
+ators will likely differ in capabilities, and can use Glow       this code when the two loops come from two different
+for automating compilation tasks such as instruction             nodes in the dataflow graph.
+selection, memory allocation, and graph scheduling.
+
+                                                                 for TensorFlow, in a similar way that Glow is work-
+2     Related Work                                               ing toward providing for PyTorch and other neural
+                                                                 network frameworks.
+2.1    Relationship to Neural Network                               TVM/NNVM [3, 13] lowers nodes into a low-level
+                                                                 Halide-based IR wherein loop-based optimizations can
+       Frameworks                                                be performed. Halide [14] is then used to generate
+Frameworks such as PyTorch [4], Caffe [5], and Ten-              LLVM or CUDA/Metal/OpenCL source code. On the
+sorFlow [6] have found success by providing a useful             other hand, DLVM [15] lowers DLVM IR into LLVM
+way for developers to create neural network models,              IR, benefiting from the LLVM’s mature optimizer and
+and executing them on specific architectures. How-               code generator.
+ever, supporting new architectures and operators is                 Yet another approach is taken by nGraph [16],
+not scalable, because adding a new operator requires             which consumes a framework’s (such as Tensorflow)
+it to be implemented on each supported architecture,             compute graph to represent internally in a single level
+and adding a new architecture requires all operators             IR, and then lowers that to different backends such
+be implemented for it. Glow is designed to consume a             as cuDNN and MKL-DNN [17].
+neural network compute graph, optimize it, and code                 Finally, Tensor Comprehensions [18] provides a lan-
+generate for it for a diverse set of backends in a more          guage for neural network developers to specify their
+scalable way. This includes target-independent opti-             networks such that a JIT compiler can algorithmically
+mizations and analysis prior to efficiently targeting a          search for the most efficient execution plan possible.
+specific backend.                                                This execution plan is then generated in a language
+   ONNX [7] is an open-source format for represent-              suited for a specific backend, such as CUDA for a
+ing and serializing AI models. It allows for interop-            GPU, and compiled by a compiler for that language.
+erability between different AI frameworks, allowing              Tensor Comprehensions is a good solution for pro-
+compute graphs from one framework such as PyTorch                grammers that seek to create new operators that do
+to be converted to or from another framework such                not exist today and execute them efficiently.
+as Cognitive Toolkit (CNTK) [8].                                    Similar to Glow, these systems include one or more
+                                                                 levels of IR (Section 3) which represent the compute
+                                                                 graph of some neural network model. Additionally,
+2.2    Compiler-Related Projects                                 like Glow, many represent tensors as first-class mem-
+Several prior systems use a compiler-oriented ap-                bers with a shape and an element type. Glow uses
+proach to optimizing neural networks. TensorFlow’s               multiple levels of its own IR in the entire stack, and
+XLA [2] compiles neural networks for CPUs, GPUs                  leaves it up to each backend to implement further low-
+and accelerators. It is a practical compiler that solves         ering if desired. For example, Glow’s CPU backend
+actual problems. XLA is used in production to drive              executes low-level Glow instructions and calls into its
+a massive fleet of accelerators at Google. It lowers             own libjit standard library kernels implemented in
+nodes into primitive linear algebra operations, and              C++ and compiled with LLVM (Section 5).
+then calls into a backend-specific library for different
+backend (such as Eigen [9] for CPUs, or cuDNN [10]
+for GPUs) to perform the bulk of computation. We
+                                                                 3     Intermediate Representation
+point out that XLA emits vectorized LLVM interme-
+                                                                 3.1    Motivation
+diate representation (IR) [11] for some nodes (such
+as dot), and relies on the LLVM vectorizer [12] for              In this section we describe the motivation for having
+other nodes. It aims to provide a backend flexibility            a high-level intermediate representation (IR). Neu-
+
+
+                                                             2
+ral networks are dataflow graphs where each opera-              put tensors known at compile time (e.g. pre-trained
+tion represents some mathematical operation, such               weights). The graph is strongly typed, which means
+as element-wise add or matrix multiplication. One               that inputs and output have a known tensor type
+way to compile this graph into an executable would              (consisting of the tensor’s shape and element type),
+be to translate each mathematical operation directly            and that the types of nodes are verified by the com-
+into some low-level compiler IR that contains loops             piler. For example, the element-wise add instruction
+and other low-level instructions. However, we be-               must operate on operands of the same type.
+lieve that the high-level domain specific intermediate             Some strongly-typed programming languages repre-
+representation is necessary for optimizing the graph.           sent dynamic types at runtime in a safe way. Swift [19]
+   Consider the code in Figure 1. Two for-loops                 generics are an example for such type system that
+write into some memory region, and later the return-            allows compilation for unknown yet constrained types.
+statement reads from some element in the array. Nei-            We have considered the idea of developing some kind
+ther GCC nor LLVM were able to remove the first                 of parametric tensor types to support features such
+loop, which is redundant, or replace the load opera-            as varying batch sizes. However, we have decided to
+tion with the constant value ‘4’. The reason is that            implement a simple strict type system instead and
+analyzing loops and memory is difficult. The com-               let the high-level machine learning framework spe-
+piler needs to prove that the indices in the loops do           cialize the computation before constructing the Glow
+not overflow, and that pointers in the program do               graph. We evaluated the mechanisms that the mod-
+not alias, and that the result of the computation is            ern programming languages use to implement generics
+accurate and conform with the specification of the C            and concluded that most hardware accelerators do
+programming language.                                           not support some of these mechanisms. Production
+   Thus, trusting a sufficiently good C++ compiler to           systems that use Glow may generate multiple Glow
+optimize neural networks is not a viable strategy, be-          graphs for different batch sizes, or recompute the
+cause for example it is difficult to reverse engineer a         graph just-in-time.
+sequence of 7 loops into a convolution. Instead we                 The Glow graph is structured as a module that con-
+have implemented a high-level intermediate represen-            tains multiple functions that contain multiple nodes.
+tation that allows a compiler to reason about and               Storage nodes, which are similar to global variables
+optimize high-level constructs such as tensors and              in C programs, are owned by the module and acces-
+operations.                                                     sible to all functions of the same module. All other
+   Glow is a retargetable compiler that supports a              nodes are owned by functions and represent the dif-
+number of different backends. This means that the               ferent operations of a neural network. For example,
+first few phases of the compiler are target-independent,        Convolution, MaxPool, MatrixMultiply, and so on
+but as you get closer to instruction selection the IR be-       are represented as nodes. These nodes are able to
+comes more target-specific. This design is not unique           reference and access storage nodes that are owned by
+to Glow. Many compilers and virtual machines use                their containing module.
+similar techniques to gradually canonicalize, optimize             Storage nodes are the base class for, and are im-
+and lower programs into instruction streams. The                plemented as, Constant and Placeholder nodes. Con-
+first two levels of IR are shared between all compi-            stant nodes are backed by a concrete, known tensor
+lation targets. Compiler backends may implement                 at compilation time. Thus, the optimizer can inspect
+additional levels of intermediate representations.              and optimize them as it sees fit. For example, the
+                                                                optimizer is able to delete unused Constant nodes,
+                                                                transpose them, quantize them (Section 4), perform
+3.2    High-Level IR
+                                                                constant propagation, etc. An example of a Constant
+The high-level IR is a dataflow node-based graph rep-           node is the pre-trained weight input to a Convolution
+resentation that is similar to the graph that you may           node during inference.
+find inside Caffe. When we load a neural network                   Placeholder nodes are symbolic nodes that may
+model we construct this graph with a direct trans-              have backing tensors assigned or changed after com-
+lation of one operator to one or more nodes. The                pilation. This means that unlike Constant nodes, the
+high-level IR is a simple graph that allows basic trans-        optimizer cannot inspect or optimize the contents
+formations, such as replacing all uses of some node             of Placeholder nodes. If the same function is com-
+with another node, or modifying the content of in-              piled using different backing tensors bound to the
+
+
+                                                            3
+Placeholder nodes, the semantics of the program are                Placeholder         Placeholder             Placeholder
+                                                                   name : "ret"        name : "A"              name : "Ex"
+unchanged. Inputs and outputs of Glow programs                     output : float<1>   output : float<1>       output : float<1>
+                                                                   users : 1           users : 4               users : 1
+                                                                   trainable : 0       trainable : 1           trainable : 0
+should be modeled using Placeholder nodes. An ex-
+                                                                        Output             Output                   Output
+ample of a Placeholder node is the input image data
+tensor for image classification in a convolutional neu-
+                                                                                                 LHS         RHS
+ral network; this input image data tensor can be                Input    Output                 Sub                       Splat
+                                                                                                name : rgn_grad           name : learningRateSplat
+changed without recompiling the function.                       Save
+                                                                                                LHS : float<1>            Value : -3.000000e-02
+                                                                name : ret                                                users : 1
+                                                                                                RHS : float<1>
+   As an end-to-end example, one module could con-              Input : float<1>
+                                                                Output : float<1>               users : 1                 Result : float<1>
+                                                                                                Result : float<1>
+tain both an inference function and the gradient of             users : 0                                                           Result
+                                                                                                      Result
+that inference function. The weights (to be trained by
+the gradient function) would be created as Placeholder
+                                                                                                                  LHS      RHS
+nodes, as they are not constant during training. Exe-                                                          Mul
+                                                                                                               name : dx1
+cuting the gradient function would update the tensors                                                          LHS : float<1>
+                                                                                                               RHS : float<1>
+backing the weight Placeholder nodes. The nodes in                                                             users : 1
+                                                                                                               Result : float<1>
+the inference function could then reference and access
+                                                                                                                     Result
+the weight Placeholder nodes (backed by the now-
+trained weights tensors). Thus, the Placeholder nodes
+                                                                                                            LHS         RHS
+can be converted to Constant nodes, and the inference                                                      Add
+                                                                                                           name : newW
+function can be better optimized during compilation,                                                       LHS : float<1>
+                                                                                                           RHS : float<1>
+knowing these nodes are Constant.                                                                          users : 1
+                                                                                                           Result : float<1>
+   The compiler has a debug method for dumping
+                                                                                                                Result
+textual and graphical representations of the graph.
+Figure 2 depicts the compute graph of a regression of
+                                                                                                                                   Input     Output
+A automatically differentiated by Glow, with the value                                                                             Save
+                                                                                                                                   name : A_saveGrad
+of Placeholder node A updated with the gradient of                                                                                 Input : float<1>
+                                                                                                                                   Output : float<1>
+the expression. Glow lowers the nodes that compute                                                                                 users : 0
+the gradient of the expression and the stochastic gra-
+dient descent (SGD) node into a sequence of low-level          Figure 2: A lowered compute graph in Glow’s high-
+operators (Sub, Mul, Add, and Save). The different             level IR, representing a regression of A, automatically
+compiler backends do not need to implement support             differentiated by Glow.
+for the DivGrad or SGD nodes.
+   By contrast, classic machine learning frameworks
+                                                               avoiding some computation. It can particularly be use-
+that are not able to automatically generate fused
+                                                               ful when applied to Recurrent Neural Networks [20],
+kernels (Section 5.2) need to implement hundreds
+                                                               because different elements of the batch may have dif-
+of CUDA and CPU compute kernels that represent
+                                                               ferent lengths and do not need to perform the same
+the un-lowered operators. This limits their ability to
+                                                               amount of computation.
+support new kinds of hardware and ties them to one
+or two major hardware vendors.
+                                                               3.4        Node Lowering
+3.3    Predication
+                                                               The Glow compilation pipeline solves the problem
+Predication is a well-known technique to control the           of targeting a large number of opcodes to many dif-
+execution of some node or instruction by means of a            ferent targets. Modern machine learning frameworks
+boolean flag. If the value of the flag at runtime is set       support hundreds of operators on many different hard-
+to ‘false’ then the predicated node or instructions may        ware backends. The approach that is taken by classic
+return any value. A correct program should know to             machine learning frameworks is to implement each
+ignore the output of the predicated instruction be-            opcode for each hardware target. In such frameworks,
+cause it could be zeros or uninitialized memory. The           ReLU would be implemented once for the GPU, once
+type of the flag must be a boolean value or a vector           for the CPU, once for some mobile DSP accelerator,
+of booleans that matches the batch size. Predicates            and so on. This approach does not scale as the num-
+could accelerate the performance of some networks by           ber of opcodes and the number of hardware targets
+
+
+                                                           4
+increase.                                                             that are not possible at the high-level, because mem-
+   Instead, Glow takes a different approach. Instead                  ory is not represented directly. An example of such a
+of compiling the high-level operators directly, Glow                  transformation is the optimization that allows certain
+performs "node lowering". In this phase, the compiler                 operations to transform some buffers in-place, such
+breaks the high-level operator nodes into low-level                   as element-wise arithmetic.
+linear algebra operator nodes. For example, the Fully-                   In the context of hardware acceleration, the low-
+Connected layer is represented as a matrix multiplica-                level instruction-based representation allows the com-
+tion followed by broadcasted add. Different compiler                  piler to represent device-specific operations such as
+backends do not have to implement the FullyCon-                       asynchronous DMA operations. Hiding the latency
+nected layer and a dozen other high-level opcodes,                    of memory operations is important for utilizing the
+just the low-level matrix multiplication.                             execution units of the hardware effectively, and the
+   This lowering phase drives many of the design deci-                instruction-based representation allows the compiler
+sions of the compiler. In Glow, lowering is performed                 to create a schedule that hides the latency of the
+as part of the high-level graph as described above,                   memory operations.
+prior to moving to low-level IR (Section 3.5). This is                   The IR is strongly typed and each instruction
+due to a number of reasons. First, the new lowered                    operand kind has known parameter types. It is de-
+graph may allow for additional graph-level optimiza-                  signed to be used as an in-memory form, though can
+tions. Second, the new graph structure may affect the                 be dumped to human readable assembly-like format.
+decisions of the instruction scheduler. And third, after                 A function in IR form contains two sections: ‘de-
+lowering we allow the backends to perform additional                  clare’ and ‘program’. In the first section of the IR we
+target-specific optimizations on the lowered graph.                   declare a number of memory regions that live through-
+   The lowering phase comes after the graph is differ-                out the lifetime of the program. This is similar to
+entiated. Because the lowering transformation does                    global variables in C. The second part of the IR is a
+not preserve the semantics of the graph, it is not pos-               list of instructions. Each variable is annotated with
+sible to differentiate the graph for certain operators.               the kind of initialization that the program should do.
+For example, the Regression node (which produces                         There are two kinds of memory regions which cor-
+gradient when optimizing total squared error) be-                     respond to these two sections: global memory re-
+comes a no-op for the inference case, but is translated               gions (found in ‘declare’) and locally allocated regions
+into an element-wise subtract for the training case.                  (found in ‘program’). The locally allocated memory
+Performing the lowering before differentiation would                  regions are similar to ‘alloca’ in LLVM IR3 . Memory
+prevent us from performing the correct lowering of                    regions are strongly typed, which means that the kind
+the Regression node.                                                  of type of tensor that the region represents is known.
+                                                                         Instructions operate on either these global mem-
+3.5     Low-Level IR                                                  ory regions or locally allocated regions.          Each
+                                                                      operand is annotated with one of the qualifiers
+After optimizing the graph with target-independent
+                                                                      ‘@in’/‘@out’/‘@inout’. ‘@in’ means that the buffer
+optimizations, and lowering from high-level operator
+                                                                      is read from. ‘@out’ means that the buffer is writ-
+nodes to linear algebra operator nodes, the code is
+                                                                      ten into. And ‘@inout’ means that the instruction
+further lowered into the low-level IR in a phase that
+                                                                      may read and write into the buffer. These operand
+is called "IRGen" (which stands for IR generation)2 .
+                                                                      qualifiers help the optimizer decide when it is legal to
+This is a one-to-many translation where each high-
+                                                                      perform certain optimizations, such as copy elimina-
+level node is translated into one or more instructions.
+                                                                      tion or buffer sharing. Instructions may have other
+   The low-level IR enables a different kind of target
+                                                                      attributes that specify the legality of some optimiza-
+independent optimizations that are not possible with
+                                                                      tions. For example, some instructions require that
+the high-level graph format. This is an instruction-
+                                                                      the data from the forward pass would be kept around
+based representation that operates on tensors that
+                                                                      for the backward pass, so if the program is not opti-
+are referenced by address. This gives the compiler
+                                                                      mized for inference-only mode then certain memory
+the ability to perform low-level memory optimizations
+                                                                      optimizations cannot happen.
+   2 IRGen  is optional; backends can it if they have their own
+software stack that prefers to consume the Node representation           3 http://llvm.org/docs/LangRef.html#
+
+of the program.                                                       alloca-instruction
+
+
+                                                                  5
+declare {                                                       BB . newInstr ( " AvgPool " )
+  %input = weight float <8 x 28 x 28 x 1 > ,                       . addOperand ( " Dest " , OperandKind :: Out )
+      broadcast , 0.0                                              . addOperand ( " Src " , OperandKind :: In )
+                                                                   . addMember ( MemberType :: VectorUnsigned , " Kernels " )
+  %filter = weight float <16 x 5 x 5 x 1 > ,
+                                                                   . addMember ( MemberType :: VectorUnsigned , " Strides " )
+      xavier , 25.0                                                . addMember ( MemberType :: VectorUnsigned , " Pads " )
+  %filter0 = weight float <16 > , broadcast ,                      . autoIRGen ()
+      0.100                                                        . autoVerify ( VerifyKind :: SameElementType ,
+  %weights = weight float <10 x 144 > , xavier ,                                             { " Dest " , " Src " })
+                                                                   . a d d G r a d i e n t I n s t r ({ " Dest " } , { " Dest " , " Src " }) ;
+      144.0
+  %bias = weight float <10 > , broadcast , 0.100
+                                                                Figure 4: Example class-gen for the Average Pool in-
+  %selected = weight index <8 x 1 >
+  ...
+                                                                struction.
+  %result = weight float <8 x 10 >
+}
+                                                                  6. The graph is scheduled into a linear sequence of
+program {                                                            nodes that minimizes memory usage.
+  %allo = alloc float <8 x 28 x 28 x 16 >
+  %conv = convolution [5 1 2 16] @out %allo ,                     7. IRGen converts the low-level graph into instruc-
+      @in %input , @in %filter3 , @in %bias0                         tions.
+  %allo0 = alloc float <8 x 28 x 28 x 16 >
+  %relu = max0 @out %allo0 , @in %allo                            8. Low-level IR optimizations are performed.
+  %allo1 = alloc index <8 x 9 x 9 x 16 x 2 >
+  %allo2 = alloc float <8 x 9 x 9 x 16 >                          9. Backend-specific optimizations and code genera-
+  %pool = pool max [3 3 0] @out %allo2 , @in                         tion are performed.
+      %allo0 , @inout %allo1
+  ...
+  %deal6 = dealloc @out %allo6                                  3.7       ClassGen
+  %deal7 = dealloc @out %allo7
+  %deal8 = dealloc @out %allo8                                  Glow uses automatic code generation techniques
+  %deal9 = dealloc @out %allo9                                  (class-gen) for defining instructions and nodes. The
+}
+                                                                purpose of the automatic code generation tools in
+      Figure 3: Unoptimized low-level Glow IR.                  Glow is similar to the motivation behind LLVM’s
+                                                                TableGen, which is to help a human develop and
+                                                                maintain records of domain-specific information.
+  Figure 3 shows an example of unoptimized Glow                    The current system is capable of generating two
+IR. Note that the ‘alloc’ instruction does not allocate         kinds of classes: Nodes for the high-level IR and In-
+memory; it just marks the lifetime of the activation.           structions for the low-level IR. Figure 4 shows an
+The low-level memory allocator is responsible for allo-         example of the code for generating the AvgPool in-
+cating all of the buffers into a single coalesced region.       struction. ClassGen generates most of the methods
+                                                                that instructions need to have, such as instruction
+3.6    Summary: The Lifetime of a Glow                          equality and hashing, cloning, printing, verification,
+       Instruction                                              etc.
+
+This section summarizes how instructions travel from
+the beginning of the compilation pipeline, and through          4       Quantization
+the different levels of IR and to the backends. This is
+a high-level overview of the compilation process:               In the context of machine learning, quantization is the
+                                                                process of converting a neural network from floating-
+ 1. The graph is either loaded via the graph loader             point to integer arithmetic. Arithmetic using small
+    (from ONNX or Caffe2 format), or constructed                integers is more efficient than the computation of
+    via the C++ interface.                                      full-width floating-point numbers, and additionally
+ 2. The graph is differentiated if needed.                      decreases memory usage.
+ 3. The graph is optimized.                                        Glow is able to convert floating-point-based net-
+                                                                works into signed 8-bit integer networks. The canoni-
+ 4. Linear algebra node lowering takes place.                   cal quantization representation is using signed inte-
+ 5. Additional rounds of optimizations occur, both              gers, though it is possible to support other quantiza-
+    target independent and target specific.                     tion formats. Glow uses profile-guided quantization,
+
+
+                                                            6
+observing execution during inference to estimate the
+possible numeric range for each stage of the neural
+network. Training-based quantization is considered
+future work.
+
+
+
+4.1    Tensor Representation
+
+In Glow, tensors are typed and can represent floats,
+quantized non-floating-point values such as currently
+supported Int8 (8-bit signed integers), and index types.
+A quantized tensor’s type is made up of the underlying
+element type (Int8), as well as the possible range of
+the values in the tensor using ‘scale’ and ‘offset’ fields.
+To convert from the 8-bit integer range of [-128..127]
+to the floating-point number that they represent, Glow
+uses the conversion formula:
+
+      value = ( input - offset ) * scale
+                                                                     Figure 5: A quantized subgraph from Resnet50.
+
+
+  Activations, weights, and storage nodes all use the
+same type-system and represent information in a uni-              4.3    Compiler    Optimizations                   For
+form way.                                                                Quantization
+
+                                                                  Glow features a number of compiler optimizations
+4.2    Profile-Guided Quantization                                that transform the compute graph and make it more
+                                                                  efficient. There are a few classes of optimizations and
+Different parts of the network contain floating-point
+                                                                  parameters to optimize.
+values in different ranges. In some parts, the typical
+range of the numbers is between zero and one, while                  First, we attempt to minimize the number of con-
+in other parts of the network the possible range is in            versions between floating-point tensors and integer
+the hundreds. Choosing a single conversion scale for              tensors, in both directions. Some operations, such as
+the whole network would not work, because a single                ‘transpose’ and ‘concat’ operate on both types, and
+scale value could be imprecise for small values and               changing the representation can minimize conversions.
+truncate large values.
+                                                                    Second, the neural network contains ‘rescale’ nodes
+   We use profile-guided information to estimate the
+                                                                  that change the range of the integers. These nodes
+possible numeric range for each stage of the neural
+                                                                  are required to convert between numeric ranges that
+network. Our quantization conversion works using a
+                                                                  mimic the original floating-point network. However,
+two-phase process. First, we statically instrument the
+                                                                  in many cases, it is possible to fold the rescale oper-
+network with special profiling nodes that record the
+                                                                  ations into numeric-producing operations, and elimi-
+ranges of activations that flow in the network, opti-
+                                                                  nate them.
+mize the network including these profiling nodes, and
+then run inference. Then, we recompile the network                   Third, it’s possible to rescale the values in the net-
+using this profile information to convert the network             work in order to allow fast hardware implementations
+into a quantized form, allowing for static optimization           of the quantized operations. For example, consider
+of the quantized graph. We convert portions of the                the ‘max’ operations. By converting both sides of the
+network into islands of integer computation and aim               ‘max’ into the same scale we allow the hardware to
+to generate outputs in the range that the original                perform a simple comparison. By normalizing both
+floating-point network produces. Figure 5 shows a                 sides of the ‘max’ operation to the same scale we
+quantized subgraph from Resnet50.                                 enable this efficient optimization.
+
+
+                                                              7
+5     CPU Backend                                              Filter layout before transf ormati on :
+                                                                  [ depth , filter_x , filter_y , channel ]
+This section describes the implementation of the CPU           Filter layout after t ransfo rmatio n :
+                                                                  [ depth /N , filter_x , filter_y , channel , N ]
+backend. The Glow CPU backend compiles the low-
+level intermediate representation into an optimized            Figure 6: Transformation of a convolution’s filter’s mem-
+stream of instructions. It uses LLVM to optimize and           ory layout to optimize for SIMD memory accesses. Depth
+emit machine code and was tested on x86 and ARM64.             refers to the output depth of the filter, and channel refers
+The backend can emit a stand-alone object file to disk         to the input channel.
+or execute code in just-in-time mode. The backend
+emits debug information, which makes it possible to
+debug Glow in a debugger and place a breakpoint in             5.2    Operator Stacking
+specific operator, or understand the performance of
+networks using a profiler.                                     One important optimization that the CPU backend
+                                                               implements is stacking of data-parallel operators. Con-
+                                                               sider a sequence of operators that operate one element
+5.1    Standard Library
+                                                               at a time, for example a ReLU, Add, Sub. Iterating
+One interesting aspect of the Glow CPU backend is              over a large buffer multiple times is inefficient because
+the use of a small target independent standard library.        it requires the CPU to load the memory multiple times,
+The CPU backend needs to generate code for machine             each time invalidating the whole cache. Instead, Glow
+learning operators such as Convolution and SoftMax.            stacks operators and performs a few data-parallel
+One possibility is to call into some external library          operators one after the other on the same memory
+such as Eigen. This is easy to do, and many machine            location. Notice that as described above, this is not
+learning frameworks use this technique. The disad-             an optimization that LLVM can perform by itself and
+vantage of this technique is that the external binary          it requires a special high-level data structure.
+library has no information about the specific opera-              Operator stacking is similar to operator fusion.
+tion that is being compiled. Some of the parameters            However, when fusing multiple operators (e.g. Conv
+that an optimized implementation may care about                and ReLU fused together), all backends that want to
+are the specific tensor sizes, the exact addresses of          support this fused operator must implement a specific
+buffers in memory, and whether some pointer aliases            kernel for each permutation of operators. In contrast,
+another pointer.                                               Glow’s stacking automatically creates such kernels;
+   Glow compiles a small standard library that ships           all of the possible permutations of data-parallel nodes
+with the compiler into LLVM bitcode. During compila-           are automatically fused into a fast kernel.
+tion, Glow loads the bitcode from disk and specializes
+the operator implementations for the specific context.            The approach of stacking multiple operations has
+Glow replaces function arguments that represent the            many advantages. First, there is an immediate perfor-
+dimensions of some tensor or buffer addresses with             mance gain for places in the graph where data-parallel
+constants that LLVM can optimize to generate effi-             operators are placed one on top of the other. Sec-
+cient code. The compiler can decide on the kind and            ond, backends do not need to implement kernels for
+level of operator specialization to perform, trading           all possible permutations of consecutive data-parallel
+compile time and binary size for performance.                  nodes. And lastly, it allows Glow to lower high-level
+   Most operators are very simple and the LLVM vec-            operators knowing that the backend can fuse them
+torizer [12] is able to generate very efficient code.          and recover the performance.
+Notice that by providing the exact tensor dimensions             For example, Glow lowers the SGD (stochastic gra-
+and loop trip count the vectorizer is able to generate         dient descent) operator into a sequence of low-level
+efficient code that does not contain pre-header legality       primitives that include addition, subtraction, and
+check and scalar loop to handle the remainder odd              multiplication. Lowering the SGD node into low-level
+iterations. The convolution and matrix multiplica-             primitives simplifies the design of the compiler by
+tion operations are hand-optimized in C++ using the            reducing the operator-space that the backend needs
+clang extended OpenCL vector syntax, and LLVM                  to handle. Operator stacking can also accelerate com-
+does a good job allocating registers and encoding the          putation on GPUs by reducing the kernel launch over-
+instructions, removing the need to use inline assembly.        head.
+
+
+                                                           8
+                                                                LBB14_1 :
+                                                                  vmovaps 3211264( % rcx , % rax ,4) , % ymm1
+                                                                  vmovaps 3211296( % rcx , % rax ,4) , % ymm2
+                                                                  vmovaps 3211328( % rcx , % rax ,4) , % ymm3
+                                                                  vaddps 6422528( % rcx , % rax ,4) , % ymm1 ,   % ymm1
+                                                                  vaddps 6422560( % rcx , % rax ,4) , % ymm2 ,   % ymm2
+                                                                  vmovaps 3211360( % rcx , % rax ,4) , % ymm4
+                                                                  vaddps 6422592( % rcx , % rax ,4) , % ymm3 ,   % ymm3
+                                                                  vaddps 6422624( % rcx , % rax ,4) , % ymm4 ,   % ymm4
+                                                                  vmaxps % ymm0 , % ymm1 , % ymm1
+                                                                  vmaxps % ymm0 , % ymm2 , % ymm2
+                                                                  vmaxps % ymm0 , % ymm3 , % ymm3
+                                                                  vmovaps % ymm1 , 6422528( % rcx , % rax ,4)
+                                                                  vmovaps % ymm2 , 6422560( % rcx , % rax ,4)
+                                                                  vmaxps % ymm0 , % ymm4 , % ymm1
+                                                                  vmovaps % ymm3 , 6422592( % rcx , % rax ,4)
+                                                                  vmovaps % ymm1 , 6422624( % rcx , % rax ,4)
+                                                                  addq $32 , % rax
+
+                                                                Figure 8: A loop in x86 assembly as generated by the
+                                                                Glow CPU Backend, with a fused element-wise addition
+                                                                and ReLU (max) operation.
+
+Figure 7: A subgraph from Resnet50 optimized for                   This 5-dimensional tensor layout allows for con-
+the CPU backend. The CPUConvDKKC8 node requires                 secutive SIMD memory access. The N parameter is
+weights with a modified memory layout for efficient SIMD        selected based on the iteration order and the block-
+access (Figure 6).                                              ing strategy for the convolution. The CPU backend
+                                                                traverses the graph and replaces any convolutions it
+                                                                would like to optimize in this way with this specialized
+5.3    Use Case: Optimizing Resnet50                            convolution. This can be seen in Figure 7.
+       for the CPU                                                 The second parameter that the compiler controls
+                                                                is the size of the convolution tile. Glow selects a
+Here we describe the way that Glow optimizes
+                                                                processing tile that depends on the size of the first
+Resnet50 to generate an efficient stream of x86 in-
+                                                                level cache of the processor.
+structions. Resnet50 is a residual convolutional neu-
+                                                                   Next, the low-level optimizer optimizes the instruc-
+ral network containing 54 convolutions as well as
+                                                                tion stream by shrinking the lifetime of memory allo-
+other operators such as element-wise addition, ReLU,
+                                                                cations for the activations, and then performs static
+batch normalization, max and average pooling, fully-
+                                                                memory allocation for the whole network into a single
+connected, and softmax. Glow optimizes Resnet50 by
+                                                                buffer. This reduces the mutable memory footprint
+performing high-level and low-level optimizations.
+                                                                of the network. From this point in the compilation
+   First, high-level transformations eliminate redun-
+                                                                pipeline the compiled code can refer to pointers in
+dant transpose operations and merge the batch nor-
+                                                                memory.
+malization operation with a convolution node. Next,
+                                                                   Finally, the compiler performs efficient code gen-
+the CPU backend transforms the graph into a target-
+                                                                eration for the non-convolution parts of the network.
+specific graph that allows device-specific optimization.
+                                                                For example, Figure 8 depicts the generated assembly
+The CPU backend identifies three kinds of convolu-
+                                                                for some part of the network. The compiler fused
+tions: convolutions with a small number of channels,
+                                                                two unrelated element-wise operations into a single
+convolutions where the size of the input activation
+                                                                loop. The Add and Max operations are performed on
+buffer is large, and convolutions where the filter weight
+                                                                the same memory buffer without reading the memory
+buffer is large. Each one of these convolutions requires
+                                                                twice.
+a different compilation strategy. Next, the target-
+specific optimizer mutates the graph and generates
+code that matches the selected convolution. Each                6    Glow Runtime
+convolution kind uses a different filter memory layout
+and tile size. Figure 6 depicts the transformed filter          After compiling a model, Glow provides a runtime
+memory layout.                                                  that is capable of partitioning models, queueing re-
+
+
+                                                            9
+  (Input, 01)                                   Executor: Converts Directed Graph into a Schedule
+
+                G1                    (Input, 02)                                                 Input: I1
+                                                                                                    G1
+                                                                                              Output: A1, A2
+
+                                                     G2                                           Input: I2
+                      (A1, 02)
+   (A1, 01)                                                                                         G2
+                                                                                              Output: A3, A4
+                                    (A2, 01)
+          G3                                             (A2, 02)                                              Input: A1, A2, A4
+                                                                                                                       G3
+                                                                                                                    Output: A5
+                                          G4
+                         (A3, 01)                                                                                                     Input: A4, A5
+                                                                                                                                          G4
+                                                                                                                                      Output: O1
+
+
+                                          (Output, 01)
+                                                                                             T0                T1                T2                   T3   T…
+
+Figure 9: A simple example showing a graph partitioned into multiple sub-graphs, themselves making up a directed
+graph, and then converted into a schedule by the executor.
+
+
+
+ Accelerator 1                                                                         6.1        Glow Runtime Components
+                 A1                        A3                            B2
+                                                                                       The Partitioner splits a network into sub-networks
+ Accelerator 2                                                                         that can be run on multiple devices. Depending on
+                                                A2                                     each accelerator’s available memory and the size of
+                                                                                       the weights of a model, we may want or need to parti-
+ Accelerator 3                                                                         tion an input network into sub-graphs across multiple
+                        A4                                          B2                 accelerators in order to saturate each accelerator. A
+                                                                                       network is divided into sub-networks based on differ-
+ Accelerator 4
+                                                                                       ent criteria: memory constraints, estimated time cost,
+                                     B1                                       C        and communication cost between devices.
+ Accelerator 5                                                                            The Provisioner assigns partitioned sub-graphs to
+                                     B1                                       D
+                                                                                       specific devices and calls into the backend and Device
+                                                                                       Manager to compile and load each sub-graph onto a
+ Accelerator N…                                                                        device. An example can be seen in Figure 10.
+                                                                                          The Device Manager serves as an abstraction
+Figure 10: Four networks (A, B, C, D) have been as-
+                                                                                       for the physical device. It handles network loading,
+signed to five accelerators. A and B have been partitioned,
+                                                                                       memory transfers, execution on the device, and tracks
+and B has been duplicated on multiple accelerators.
+                                                                                       hardware state. Just like we have a different backend
+                                                                                       per device type, there is a DeviceManager class per
+quests, and executing models across multiple devices.                                  device type and an instance of DeviceManager per
+It provides a host level abstraction for compiling and                                 physical accelerator on the host.
+loading models and handling concurrent inference                                          The Executor handles the execution of a network.
+requests on all those models. The runtime allows                                       It tracks each sub-network’s execution state and prop-
+users of Glow to target one interface without needing                                  agates sub-network inputs and outputs. The Executor
+to worry about the underlying hardware changing,                                       is responsible for asynchronously handing incoming
+and since it manages the host’s accelerator cards, it                                  inference requests for a network and returning the
+can take advantage of its intimate knowledge of the                                    collated results. Figure 9 shows a simple example of a
+hardware to do the best partitioning job possible.                                     partitioned, directed graph converted into a schedule.
+
+
+                                                                                  10
+6.2    Execution Flow
+Adding a network:
+
+ 1. The Partitioner splits the network into one or
+    more sub-networks.
+ 2. The Provisioner compiles each sub-network and
+    assigns them to one or more Devices.
+ 3. One or more DeviceManagers load the sub-
+    networks and their weights onto its associated
+    Device.
+
+Handling an inference request:
+
+ 1. The HostManager creates a new Execution graph              Figure 11: Glow vs. TensorFlow-1.7 and TVM on
+    with intermediate storage.                                 an Intel R Core i7-7600U; frames per second on a single
+ 2. The Executor kicks off the first sub-network exe-          thread.
+    cution.
+ 3. The DeviceManager loads inputs onto the card               and thus avoids im2col overhead. In addition, Glow
+    and begins execution. When done, it reads out-             performs shape-aware code-generation.
+    puts and signals completion.                                 Additionally, Glow is up to 1.3x faster than TVM.
+ 4. The Executor triggers any sub-networks with                Note that we did not use autotuning and improved
+    satisfied dependencies.                                    schedules with TVM; we expect this would improve
+ 5. When complete, the HostManager returns out-                TVM’s performance. TVM does not use im2col like
+    puts.                                                      TensorFlow; similar to Glow, TVM lowers nodes into a
+                                                               low-level IR. This IR is Halide-based, which generates
+                                                               LLVM IR that is compiled for the native architecture.
+7     Evaluation                                               TVM and Glow also both generate code with efficient
+                                                               memory access patterns such as tiling.
+We compare the performance of Glow vs. TensorFlow-
+1.7 and TVM. The experiments were run on a Kaby
+Lake Intel R Core i7-7600U (which does not support             8    Conclusion
+AVX-512) running on a single CPU core at 2.80 GHz.
+All three frameworks were compiled to support the              This paper presented the design of Glow, a machine
+native architecture. We used the Keras library [21]            learning compiler for heterogeneous hardware. Glow
+to supply and run pre-trained models for TensorFlow            lowers the compute graph of neural networks to multi-
+and TVM.                                                       level strongly-typed intermediate representations, en-
+   Two popular convolutional neural networks,                  abling analyses and optimizations appropriate for each
+Resnet50 [22] and VGG19 [23], are evaluated as seen            level to efficiently and scalably target many backends.
+in Figure 11. TensorFlow was compiled with XLA                 We hope our efforts will enable research in the area
+enabled. TVM was compiled with LLVM 6.0, but                   of machine learning acceleration.
+without auto-tuning enabled or any specialized sched-
+ules. Presented results used a batch size of 8 on all
+three frameworks. Each framework’s performance (in             9    Acknowledgements
+frames per second) did not vary significantly across
+batch sizes of 2, 4, and 8.                                    In addition to the core Glow team, many fellow people
+   As seen in Figure 11, Glow is up to 2.7x faster than        at Facebook have made contributions to the project,
+TensorFlow. This is due to the fact that TensorFlow            including Andrew Adams, Michel Aoun, William
+calls into Eigen which implements convolution using            Arnold, Sarah Bird, Brad Cottel, Stephen Chen,
+the classic im2col followed by matrix multiplication,          Evan Cheng, Soumith Chintala, Sy Choudhury, Chris
+while Glow compiles direct convolution (Section 5.2)           Dewan, Utku Diril, Marat Dukhan, Oniel Duncan,
+
+
+                                                          11
+Dmytro Dzhulgakov, Peter Goldsborough, Chris Got-                     [11] Chris Lattner and Vikram Adve. LLVM: A Compilation
+tbrath, Kim Hazelwood, Yangqing Jia, Aravind Kala-                         Framework for Lifelong Program Analysis & Transforma-
+                                                                           tion. In Proceedings of the International Symposium on
+iah, Daya S Khudia, Changkyu Kim, Bruce Lin,                               Code Generation and Optimization: Feedback-directed and
+Howard Mansell, Erik Meijer, Arun Moorthy, Sam                             Runtime Optimization, CGO ’04, pages 75–, Washington,
+Naghshineh, Maxim Naumov, Avinash Nayak, Pieter                            DC, USA, 2004. IEEE Computer Society.
+Noordhuis, Joe Pamer, Joel Pobar, Yuri Putivsky, Lin                  [12] Nadav Rotem and Arnold Schwaighofer. Vectorization
+Qiao, Vijay Rao, Martin Schatz, Alexander Sidorov,                         in LLVM. https://llvm.org/devmtg/2013-11/#talk10.
+                                                                           2013 LLVM Developers’ Meeting.
+Joe Spisak, Narayanan Sundaram, Andrew Tulloch,
+Mor Tzur, Nicolas Vasilache, Adam Weis, and Hector                    [13] University of Washington Paul G. Allen School of Com-
+                                                                           puter Science & Engineering, Amazon Web Service AI
+Yuen.                                                                      team, and DMLC open-source community. NNVM Com-
+  We also would like to thank Eli Bendersky, Chris                         piler: Open Compiler for AI Frameworks. http://tvmlang.
+Leary, Richard Wei, and Tianqi Chen for the develop-                       org/2017/10/06/nnvm-compiler-announcement.html.
+ment and release of their work to the open source.                    [14] Jonathan Ragan-Kelley, Connelly Barnes, Andrew Adams,
+                                                                           Sylvain Paris, Frédo Durand, and Saman Amarasinghe.
+                                                                           Halide: A Language and Compiler for Optimizing Paral-
+References                                                                 lelism, Locality, and Recomputation in Image Processing
+                                                                           Pipelines. In Proceedings of the 34th ACM SIGPLAN
+ [1] John L. Hennessy and David A. Patterson. Computer                     Conference on Programming Language Design and Im-
+     Architecture, Sixth Edition: A Quantitative Approach,                 plementation, PLDI ’13, pages 519–530, New York, NY,
+     chapter 7.2. 6th edition, 2017.                                       USA, 2013. ACM.
+ [2] XLA: Domain-specific compiler for linear algebra to opti-        [15] R. Wei, L. Schwartz, and V. Adve. DLVM: A modern
+     mizes tensorflow computations. https://www.tensorflow.                compiler infrastructure for deep learning systems. ArXiv
+     org/performance/xla.                                                  e-prints, November 2017.
+ [3] T. Chen, T. Moreau, Z. Jiang, H. Shen, E. Yan, L. Wang,          [16] S. Cyphers, A. K. Bansal, A. Bhiwandiwalla, J. Bobba,
+     Y. Hu, L. Ceze, C. Guestrin, and A. Krishnamurthy. TVM:               M. Brookhart, A. Chakraborty, W. Constable, C. Convey,
+     End-to-End Optimization Stack for Deep Learning. ArXiv                L. Cook, O. Kanawi, R. Kimball, J. Knight, N. Korovaiko,
+     e-prints, February 2018.                                              V. Kumar, Y. Lao, C. R. Lishka, J. Menon, J. Myers,
+                                                                           S. Aswath Narayana, A. Procter, and T. J. Webb. Intel
+ [4] Adam Paszke, Sam Gross, Soumith Chintala, Gregory
+                                                                           nGraph: An Intermediate Representation, Compiler, and
+     Chanan, Edward Yang, Zachary DeVito, Zeming Lin, Al-
+                                                                           Executor for Deep Learning. ArXiv e-prints, January
+     ban Desmaison, Luca Antiga, and Adam Lerer. Automatic
+                                                                           2018.
+     differentiation in PyTorch. In NIPS-W, 2017.
+                                                                      [17] Intel MKL. https://software.intel.com/en-us/mkl.
+ [5] Yangqing Jia, Evan Shelhamer, Jeff Donahue, Sergey
+      Karayev, Jonathan Long, Ross Girshick, Sergio Guadar-           [18] N. Vasilache, O. Zinenko, T. Theodoridis, P. Goyal, Z. De-
+      rama, and Trevor Darrell. Caffe: Convolutional Architec-             Vito, W. S. Moses, S. Verdoolaege, A. Adams, and A. Co-
+      ture for Fast Feature Embedding. In Proceedings of the               hen. Tensor Comprehensions: Framework-Agnostic High-
+     22nd ACM International Conference on Multimedia, MM                   Performance Machine Learning Abstractions. ArXiv e-
+     ’14, pages 675–678, New York, NY, USA, 2014. ACM.                     prints, February 2018.
+
+ [6] Martín Abadi, Paul Barham, Jianmin Chen, Zhifeng                 [19] Swift. https://developer.apple.com/swift/.
+     Chen, Andy Davis, Jeffrey Dean, Matthieu Devin, Sanjay           [20] Ian Goodfellow, Yoshua Bengio, and Aaron Courville.
+     Ghemawat, Geoffrey Irving, Michael Isard, Manjunath                   Deep Learning.    MIT Press, 2016.     http://www.
+     Kudlur, Josh Levenberg, Rajat Monga, Sherry Moore,                    deeplearningbook.org.
+     Derek G. Murray, Benoit Steiner, Paul Tucker, Vijay
+                                                                      [21] Keras: The Python Deep Learning library. https://
+     Vasudevan, Pete Warden, Martin Wicke, Yuan Yu, and
+                                                                           keras.io/.
+     Xiaoqiang Zheng. TensorFlow: A System for Large-scale
+     Machine Learning. In Proceedings of the 12th USENIX              [22] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian
+     Conference on Operating Systems Design and Implemen-                  Sun. Deep residual learning for image recognition. In
+     tation, OSDI’16, pages 265–283, Berkeley, CA, USA, 2016.              2016 IEEE Conference on Computer Vision and Pattern
+     USENIX Association.                                                   Recognition, CVPR 2016, Las Vegas, NV, USA, June
+                                                                           27-30, 2016, pages 770–778, 2016.
+ [7] Onnx. https://onnx.ai/.
+                                                                      [23] K. Simonyan and A. Zisserman. Very deep convolu-
+ [8] Frank Seide and Amit Agarwal. Cntk: Microsoft’s open-
+                                                                           tional networks for large-scale image recognition. CoRR,
+     source deep-learning toolkit. In Proceedings of the 22Nd
+                                                                           abs/1409.1556, 2014.
+     ACM SIGKDD International Conference on Knowledge
+     Discovery and Data Mining, KDD ’16, pages 2135–2135,
+     New York, NY, USA, 2016. ACM.
+ [9] Eigen. http://eigen.tuxfamily.org/.
+[10] NVIDIA cuDNN.          https://developer.nvidia.com/
+     cudnn.
+
+
+                                                                 12
+

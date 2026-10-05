@@ -1,0 +1,1983 @@
+                                        Instella-MoE Technical Report
+                                        Jiang Liu ⋆▲ , Sudhanshu Ranjan ▲ , Prakamya Mishra ▲ , Yonatan Dukler ▲ , Gowtham Ramesh ▲ ,
+                                        Jialian Wu, Ximeng Sun, Wen Xie, Chaojun Hou, Vikram Appia, Zhenyu Gu, Zicheng Liu ▲ , Emad
+                                        Barsoum
+                                        ⋆ Project lead ▲ Core contributors
+
+
+                                        In this work, we introduce Instella-MoE, a fully open Mixture-of-Experts (MoE) language model with
+                                        16 billion total parameters and 2.8 billion active parameters per token, trained entirely from scratch
+                                        on AMD Instinct™ MI300X and MI325X GPUs. Instella-MoE combines a sparsely activated MoE design
+                                        with architectural and system-level innovations, including Gated Multi-head Latent Attention (Gated
+                                        MLA) and FarSkip-Collective connectivity, enabling efficient large-scale training and inference. The
+arXiv:2609.00791v1 [cs.CL] 1 Sep 2026
+
+
+
+
+                                        model is developed through a multi-stage pipeline comprising pre-training, mid-training, long-context
+                                        extension, supervised fine-tuning with feedback-driven data curation, direct preference optimization,
+                                        and reinforcement learning with Multi-Teacher On-Policy Distillation. Instella-MoE achieves an aver-
+                                        age score of 76.7 across standard pre-training benchmarks, outperforming prior fully open models in-
+                                        cluding OLMo-3-7B, SmolLM3-3B, and OLMoE-1B-7B, while remaining competitive with open-weight
+                                        MoE and dense baselines at comparable active-parameter scales, including Moonlight-16B-A3B and
+                                        Qwen3.5-4B. After post-training, our final Think checkpoint achieves an average score of 73.2 across
+                                        instruction-following, reasoning, math, coding, and chat benchmarks, outperforming both fully open
+                                        and open-weight models with comparable or larger active-parameter counts in our evaluation. To
+                                        support transparent and reproducible research, we release the complete Instella-MoE model flow, in-
+                                        cluding model weights, training configurations, data mixtures, and training code. Together, these
+                                        contributions establish Instella-MoE a strong, fully open foundation for efficient, high-performing MoE
+                                        models and reproducible research.
+
+                                                                                                                  Models     Code                                    Blog
+
+
+                                                                                          Instella-MoE           Other MoE   Dense LMs                                    Fully Open          Open-Weight
+
+                                                                                         Base Models                                                                                   Post-Trained Models
+                                                               85                                                                                                     Instella-MoE-16B-A3B-Think
+                                                                    Instella-MoE-16B-A3B-Base                                                                                                             Gemma-4-E4B-it
+                                                                                                           Qwen3.5-4B-Base
+                                                               80
+                                                                                                                                                                70
+                                                               75
+                                                                                                   Moonlight-16B-A3B                                                                   Qwen3.5-4B        OLMo-3-7B-Think
+                                                                                                         OLMo-3-7B
+                                        Performance (Avg. %)
+
+
+
+
+                                                                                                                                         Performance (Avg. %)
+
+
+
+
+                                                                    SmolLM3-3B-Base                                                                             60
+                                                               70
+                                                                                                                                                                          Gemma-4-E2B-it            SmolLM3-3B
+                                                                                         Qwen3.5-2B-Base
+                                                               65
+                                                                                                  DeepSeek-V2-Lite                                              50
+                                                                                                  Llama-3.2-3B                                                                                 Moonlight-16B-A3B-Instruct
+                                                               60
+
+                                                               55          OLMoE-1B-7B                                                                          40    Qwen3.5-2B
+                                                                                Gemma-4-E4B
+                                                               50                                                                                                                          DeepSeek-V2-Lite-Chat
+                                                                                                                                                                30
+                                                               45
+                                                                        Gemma-4-E2B                                                                                          OLMoE-1B-7B-Instruct
+                                                                    1             2               4               8                                                   1                2            4              8
+                                                                               Active parameters (Billion)                                                                        Active parameters (Billion)
+
+                                        Figure 1: Performance vs. active parameters. Left: base models. Right: post-trained models. Color distin-
+                                        guishes MoE and dense architectures; marker shape distinguishes fully open and open-weight models.
+Contents
+1 Introduction                                                                                                                                                               3
+
+2 Instella-MoE                                                                                                                                                               4
+  2.1 Model Architecture . . . . . . . . . . . . . .        .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .    4
+       2.1.1 Architecture Overview . . . . . . . .          .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .    4
+       2.1.2 Gated Multi-head Latent Attention .            .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .    5
+       2.1.3 FarSkip-Collective Connectivity . . .          .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .    6
+  2.2 Training Pipeline Overview . . . . . . . . .          .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .    7
+  2.3 Training Infrastructure . . . . . . . . . . . .       .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .    8
+  2.4 Pre-training . . . . . . . . . . . . . . . . . .      .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .    8
+  2.5 Mid-training . . . . . . . . . . . . . . . . . .      .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .    9
+  2.6 Long-Context Extension . . . . . . . . . . .          .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .    9
+  2.7 Supervised Fine-Tuning . . . . . . . . . . .          .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   11
+  2.8 Direct Preference Optimization . . . . . . .          .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   13
+  2.9 Reinforcement Learning . . . . . . . . . . .          .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   13
+       2.9.1 RL Infrastructure . . . . . . . . . . .        .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   14
+       2.9.2 IF-specialized RL . . . . . . . . . . .        .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   14
+       2.9.3 Multi-Teacher On-Policy Distillation .         .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   15
+
+3 Results                                                                                                                                                                   16
+  3.1 Base Model . . . . . . . . . . . . . . . .    .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   16
+  3.2 Post-Trained Model . . . . . . . . . . . .    .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   17
+  3.3 Ablation Studies . . . . . . . . . . . . .    .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   18
+      3.3.1 Architecture Ablation . . . . . . .     .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   18
+      3.3.2 Reinforcement Learning Ablation         .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   18
+  3.4 Training Efficiency . . . . . . . . . . . .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   19
+
+4 Conclusion                                                                                                                                                                19
+
+Acknowledgements                                                                                                                                                            20
+
+A Overlapped Implementation of Instella-MoE                                                                                                                                 26
+
+B SFT Data Curation Details                                                                                                                                                 26
+
+C Training Data Details                                                                                                                                                     28
+
+
+
+
+                                                            2
+                                           Instella-MoE Technical Report
+
+1    Introduction
+The rapid advancement of artificial intelligence (AI), driven in large part by large language models
+(LLMs) (Gemini Team, 2026; OpenAI, 2026; Anthropic, 2026), has accelerated progress toward artificial
+general intelligence and transformed society at large. However, much of this progress continues to be led by
+proprietary releases (e.g., GPT-5.6 (OpenAI, 2026), Claude Fable 5 (Anthropic, 2026), Gemini 3.1 Pro (Gemini
+Team, 2026), and Muse Spark (Meta Superintelligence Labs, 2026)), where model weights and architecture
+are not released and training data, methods, and evaluation protocols remain opaque. While these models
+have set new state-of-the-art performance, their closed nature hinders scientific understanding, reproducibil-
+ity, and equitable access.
+In response, leading AI labs have increasingly released open-weight models whose trained parameters are
+available under permissive licenses. Recent systems such as GLM-5.3 (Z.ai Team, 2026), Qwen3.8-Max (Qwen
+Team, 2026b), Kimi K3 (Moonshot AI, 2026), Gemma 4 (Gemma Team, 2026), DeepSeek-V4 (DeepSeek-AI,
+2026), Llama 4 (Meta AI, 2025), and Mistral Large 3 (Mistral AI, 2025) demonstrate that high-performing
+models are increasingly available outside proprietary labs. Yet most of these releases remain open-weight
+rather than fully open: their pre-training corpora, preprocessing pipelines, and complete training recipes are
+either undisclosed or only partially documented. As a result, researchers cannot fully reproduce results, audit
+potential data contamination, or study how architectural and data choices interact at scale.
+At the same time, sparsely activated Mixture-of-Experts (MoE) architectures have become a central strategy
+for improving the cost–performance trade-off of large language models (Muennighoff et al., 2025; Meta AI,
+2025; DeepSeek-AI, 2026; Qwen Team, 2026b). By activating only a small subset of parameters per token,
+MoE models can achieve the representational capacity of much larger dense models while keeping per-token
+compute closer to that of a smaller dense baseline. This design now appears across leading open-weight
+systems (Qwen Team, 2026b; DeepSeek-AI, 2026; Moonshot AI, 2026; Z.ai Team, 2026). Despite these
+advances, fully open MoE models with competitive performance and complete training transparency remain
+comparatively rare. OLMoE (Muennighoff et al., 2025) established an important baseline with 6.9B total
+parameters and 1.3B active parameters, while Marco-MoE (Jiang et al., 2026) extended fully open sparse
+training to multilingual settings through dense-checkpoint upcycling.
+In this work, we introduce Instella-MoE, a fully open Mixture-of-Experts language model with 16 billion
+total parameters and 2.8 billion active parameters per token, trained entirely from scratch on AMD In-
+stinct™ MI300X and MI325X GPUs. Instella-MoE combines a decoder-only MoE architecture with two key
+innovations: Gated Multi-head Latent Attention (Gated MLA), which augments Multi-head Latent Attention
+(MLA) (DeepSeek-AI, 2024b) with a lightweight gating mechanism (Qiu et al., 2025) to improve model
+expressivity, and FarSkip-Collective (Dukler et al., 2026), an MoE connectivity pattern that overlaps expert-
+parallel communication with computation to improve the efficiency of both training and inference.
+We train Instella-MoE using a multi-stage pipeline spanning pre-training, mid-training, long-context exten-
+sion, supervised fine-tuning, direct preference optimization, and reinforcement learning. Pre-training uses
+7.1 trillion tokens from high-quality open corpora, including web text, mathematics, and code. During mid-
+training, we train on curated STEM- and reasoning-focused mixtures and combine checkpoints from multiple
+data-mixture variants through model souping. We then extend the context length from 4K to 64K tokens us-
+ing general and domain-targeted long-context mixtures, together with YaRN RoPE scaling (Peng et al., 2024)
+and document masking. Starting from the resulting base checkpoint, post-training proceeds in three stages:
+(i) supervised fine-tuning (SFT) with feedback-driven data curation targeting model weaknesses; (ii) direct
+preference optimization (DPO) (Rafailov et al., 2023) on contrastive preference data, with the auxiliary load-
+balancing loss and router bias updates disabled to reduce expert-routing drift; and (iii) reinforcement learning
+(RL) focused on instruction following, followed by Multi-Teacher On-Policy Distillation (MOPD) (Ma et al.,
+2026). The entire training pipeline is implemented on AMD hardware using the open-source Primus (AMD
+AI Brain, 2025) and Miles (RadixArk, 2025) frameworks.
+With only 2.8B active parameters per token, the Instella-MoE base checkpoint achieves an average score of
+76.7 across standard pre-training benchmarks. It outperforms prior fully open models, including OLMo-3-
+7B (Olmo et al., 2025), SmolLM3-3B (Bakouch et al., 2025), and OLMoE-1B-7B (Muennighoff et al., 2025),
+while remaining competitive with open-weight MoE and dense baselines with comparable or larger active-
+parameter counts, including Moonlight-16B-A3B (Liu et al., 2025b), Gemma-4-E4B (Gemma Team, 2026),
+and Qwen3.5-4B (Qwen Team, 2026a). After the full post-training pipeline, our final Think checkpoint
+achieves an average score of 73.2 across instruction-following, reasoning, math, coding, and chat bench-
+marks, outperforming the fully open OLMo-3-7B-Think (72.0) as well as the open-weight models Gemma-
+
+                                                        3
+                                            Instella-MoE Technical Report
+
+4-E4B (70.5) and Qwen3.5-4B (69.7), and yielding the strongest overall post-trained result in our compari-
+son. These quality gains are complemented by architectural and system-level efficiency improvements, with
+FarSkip-Collective increasing pre-training throughput by 12.7% through overlapping expert-parallel commu-
+nication, while expert-parallel serving with SGLang raises time-to-first-token throughput by up to 39.2%.
+In line with prior fully open model releases (Groeneveld et al., 2024; OLMo et al., 2024; Olmo et al., 2025;
+Ben Allal et al., 2024; Allal et al., 2025; Bakouch et al., 2025; Liu et al., 2025a; Wang et al., 2025; Sun et al.,
+2025), we release the complete Instella-MoE model flow: checkpoints from every major training stage—
+pre-training, mid-training, long-context extension, SFT, DPO, and RL—together with training configurations
+(Table 3), data mixtures (Table 4), training code, and evaluation protocols. The complete release enables
+the community to reproduce, audit, and extend every stage of MoE model development on AMD platforms,
+supporting transparent benchmarking and further research into fully open language models.
+To summarize, our contributions are fourfold:
+
+      • Instella-MoE, a fully open MoE model with 16B total parameters and 2.8B active parameters per to-
+        ken, trained entirely from scratch on AMD Instinct GPUs, featuring Gated MLA for enhanced attention
+        expressivity and FarSkip-Collective for efficient model training and inference.
+      • A complete multi-stage training pipeline, spanning pre-training, mid-training, long-context exten-
+        sion, SFT with feedback-driven data curation, DPO, and instruction-following RL followed by MOPD.
+      • State-of-the-art fully open performance, with the base checkpoint averaging 76.7 on pre-training
+        benchmarks and the final Think checkpoint averaging 73.2 on post-training benchmarks, both match-
+        ing or outperforming fully open and open-weight baselines at comparable active-parameter scales.
+      • Full transparency and reproducibility, through the release of stage-by-stage model weights, train-
+        ing recipes, data mixtures, training code, and evaluation protocols.
+
+
+2     Instella-MoE
+
+2.1     Model Architecture
+2.1.1   Architecture Overview
+Instella-MoE-16B-A3B is a text-only, decoder-only Transformer (Vaswani et al., 2017) with 27 layers, of which
+26 are sparsely activated Mixture-of-Experts (MoE) layers (Shazeer et al., 2017), giving a total of 16B pa-
+rameters and 2.8B active parameters per token. The MoE layers follow the standard shared-plus-routed
+expert design and dispatch each token to 6 of 64 routed experts alongside 2 shared experts. During pre-
+training and mid-training, we add a one-layer Multi-Token Prediction (MTP) head to support an auxiliary
+training objective. Instella-MoE extends the standard sparse-MoE architecture (DeepSeek-AI, 2024b;a; Liu
+et al., 2025b) with two innovations: Gated Multi-head Latent Attention (Gated MLA) to improve model qual-
+ity and FarSkip-Collective to improve compute efficiency. Gated MLA augments MLA (DeepSeek-AI, 2024b)
+with an input-conditioned output gate (Qiu et al., 2025) that modulates individual attention-output chan-
+nels (Sec. 2.1.2). FarSkip-Collective (Dukler et al., 2026) modifies the layer connectivity to let attention and
+expert-parallel communication overlap with independent computation in the layer (Sec. 2.1.3). Figure 2
+provides an overview of the architecture, and Table 1 lists the model hyperparameters.
+
+Mixture-of-Experts Layers. Instella-MoE follows the fine-grained, shared-plus-routed design of DeepSeek-
+V3 (DeepSeek-AI, 2024a), with the first decoder layer retained as a dense feed-forward network. Each of the
+remaining 26 MoE layers dispatches every token to the top K =6 of N =64 routed experts of intermediate size
+1,408, alongside two shared experts implemented as a single fused feed-forward network of intermediate
+size 2,816. The router weights of the selected experts are scaled by 2.5 following DeepSeek-V3.
+
+Load balancing. Our primary expert load-balance mechanism follows the bias-based loss-free balancing
+in (DeepSeek-AI, 2024a), where per-expert bias is added to the router score used for top-K selection but
+not to the mixture weights. The bias is updated between steps toward the target load at a rate of 1 × 10−3 .
+This adjusts the top-K assignments without introducing gradients from an auxiliary objective. We also use
+a sequence-level auxiliary load-balancing loss with coefficient 1 × 10−4 as a secondary regularizer. During
+
+                                                         4
+                                                          Instella-MoE Technical Report
+
+
+                                             Output
+                                                                                             shared      routed + shared                   Shared Expert
+              MTP Head                                                                                                                     Routed Expert
+             pre-training and                LM Head
+               mid-training
+
+
+         to next-layer attention             RMSNorm
+
+                      h̃ℓ                          hℓ                               1         2          1           2           3         N
+
+
+
+            shared                                 routed + shared
+                               FarSkip MoE                                                                       Router                  Top-K
+
+
+
+
+                                                                                                                                         hℓ−1
+                                              aℓ
+    × 26                                                                                               (b) FarSkip MoE
+
+                               Gated MLA
+                                                           FarSkip
+                                                           (hℓ−1 )
+                                                                                                      Linear
+                                                                                                                                                  σ
+
+                                                                                              Multi-Head Attention
+                                                                                     q                       k                       v
+                      h̃ℓ−1                        hℓ−1
+                                                                                         C                       C
+
+
+                                                                                                                           Linear
+                                   ×1      Dense Layer                                    RoPE        RoPE
+                                                                                                                         RMSNorm
+                                           Embedding
+           hℓ : routed-inclusive
+                                                                                   Linear                        Linear                         Linear
+           h̃ℓ : routed-free             Input Tokens
+                                                                                                                         h̃ℓ−1
+
+                     (a) Overall architecture                                                           (c) Gated MLA
+
+Figure 2: Instella-MoE-16B-A3B architecture. (a) Overall architecture. FarSkip-Collective allows the Dis-
+patch and Combine all-to-all collectives to overlap with attention and shared-expert computation. The MTP
+head is attached during pre-training and mid-training. (b) FarSkip-Collective MoE block. The MoE block
+returns both the shared and routed+shared experts explicitly. (c) Simplified Gated MLA block. An input-
+conditioned sigmoid gate modulates the per-head attention outputs before the output projection.
+
+
+direct preference optimization, we freeze the bias updates and set the auxiliary-loss coefficient to zero to
+limit routing drift (Sec. 2.8).
+
+Multi-Token Prediction. Following prior work (Gloeckle et al., 2024; DeepSeek-AI, 2024a), we attach a
+single Multi-Token Prediction (MTP) module during pre-training and mid-training. In addition to the standard
+next-token objective, the module predicts one additional future token at each position, providing a richer
+training signal. We weight the MTP loss by 0.3 during pre-training and reduce it to 0.1 during mid-training.
+The module is disabled during long-context extension and is not used at inference.
+
+2.1.2   Gated Multi-head Latent Attention
+Multi-head Latent Attention (MLA) (DeepSeek-AI, 2024b) compresses each token’s key–value states into a
+low-rank latent representation to reduce the KV-cache footprint. Standard MLA passes the concatenated per-
+head outputs of scaled dot-product attention directly through an output projection. Gated MLA retains the
+
+
+                                                                       5
+                                           Instella-MoE Technical Report
+
+                   Table 1: Architecture hyperparameters of Instella-MoE-16B-A3B.
+
+              Parameter                                Value
+             Backbone
+              Total / active parameters                16B / 2.8B
+              Decoder layers                           27 (1 dense + 26 MoE)
+              Hidden size                              2,048
+              Tokenizer / vocabulary size              DeepSeek-V3 / 128,896
+              Context length (base / extended)         4,096 / 65,536
+             Attention
+              Attention type                           Gated MLA
+              Attention heads                          16
+              KV latent rank                           512
+              QK dimensions (content / RoPE)           96 / 32
+              Value-head dimension                     128
+             Mixture-of-Experts
+              Routed experts N / active per token K    64 / 6
+              Shared experts                           2
+              Routed expert FFN size                   1,408
+              Fused shared-expert FFN size             2,816
+              Router top-K scaling factor              2.5
+              Connectivity                             FarSkip-Collective
+             Other
+              Normalization                            RMSNorm
+              Activation                               SwiGLU
+              Positional embedding                     RoPE
+              Auxiliary objective                      MTP (1 layer; pre-training and mid-training)
+
+
+low-rank key–value factorization but inserts an input-conditioned gate between the attention output and the
+output projection (Figure 2(c)).
+Following the best-performing configuration of Qiu et al. (2025), we use a multiplicative, sigmoid-activated
+element-wise gate. Let xt ∈ Rd be the RMSNorm-normalized layer input and ôt ∈ R Hdv the concatenated
+output of scaled dot-product attention, with H heads of value dimension dv . The Gated MLA output is
+                                                                                                         (1)
+                                                                   
+                                      yt = Wo Sigmoid(Wg xt ) ⊙ ôt .
+
+Here, Wg ∈ R Hdv ×d is the gate projection and Wo is the attention output projection. The gate allows each
+token to modulate individual value channels within each head. In our controlled 200B-token ablation, Gated
+MLA improves the average score from 49.86 to 50.33 over vanilla MLA, with the largest gains on MMLU and
+code generation (Table 13).
+
+2.1.3   FarSkip-Collective Connectivity
+Expert parallelism (EP) is crucial for sparse MoE deployment. In Instella-MoE, we address its communication
+overhead through aggressive computation–communication overlap. Concretely, the MoE layer is implemented
+in four main stages: router score computation, Dispatch, expert computation, and Combine. The router stage
+computes the expert routing map. Next the Dispatch stage uses the map to send the relevant tokens to the
+corresponding GPUs via an all-to-all communication call. After dispatching finishes, the GPUs compute the
+expert activations for their corresponding tokens. Lastly, the computed expert activations are mapped back
+to the original GPU placement via Combine, which runs an additional all-to-all communication call. With this
+sequence of operations, Dispatch relies on the previous layer and the Combine call depends on the expert
+computation to finish. This set of MoE layer dependencies makes it so that neither all-to-all communication
+call can be overlapped with computation in the standard MoE architecture implementation. To resolve this,
+with FarSkip-Collective we modify the transformer architecture to remove these dependencies and therefore
+enable overlapping of the Dispatch and Combine communication calls with computation that is not dependent
+on the communication output. In particular, with FarSkip-Collective the entire attention computation and
+shared expert computations become non-dependent and can therefore be overlapped with the Dispatch and
+Combine calls. We review the standard MoE and FarSkip-Collective architectures below.
+
+                                                        6
+                                              Instella-MoE Technical Report
+
+Denote the output activation of a network after k layers by hk , and the ith sub-block (layer) of a standard
+Transformer by f i . The standard Transformer output hk is computed as
+                                    h k = f 1 ( h 0 ) + f 2 ( h 1 ) + · · · + f k ( h k −1 ).               (2)
+Here the f i alternate between MLP / MoE blocks and Attention blocks and include normalization as part of the
+computation. For large models, producing f i can involve blocking communication which stops hk from being
+used as an input to f k+1 until hk is communicated between the GPUs – leading to idle computation resources.
+We propose to use an available activation instead, denoted as ĥk , to be used as input to f k+1 and compute the
+next layer while the communication collective is producing hk . With this approach, hk+1 is updated with hk
+once it is ready; however, the communication of hk can be overlapped over the duration of the computation
+of f k+1 (ĥk ):
+                                     hk+1 = hk + f k+1 (ĥk )
+                                                                                                             (3)
+                                          = f 1 (h0 ) + f 2 (ĥ1 ) + · · · + f k+1 (ĥk )
+Like the standard transformer in Eq. (2), all computed activations appear in the final hidden states in Eq. (3).
+Comparing ĥk with hk , one can consider the partial or outdated activation ĥk as an activation produced by
+omitting summands of the full activation sum. To maintain model capabilities while improving hardware per-
+formance, FarSkip-Collective is designed to allow for full communication overlapping arising from Dispatch,
+Combine, and the Attention block while incurring the most minimal activation omission in ĥk as compared
+with hk . Concretely, to allow for Dispatch to overlap with the attention block, the input to the Dispatch call
+must not depend on the attention output, so we set
+
+                                           moe-ink := ĥk (moe) = hk−1 .
+This allows Dispatch and routing to initiate as soon as the previous layer’s Combine finishes producing the
+tokens, and has the property that propagation is delayed by at most one layer. For the attention input, only
+the routed experts need to be communicated after expert computation, and they are therefore the only terms
+omitted from the attention input
+
+                       attn-ink := ĥk (attn) = hk−2 + attn-outk−1 + shared-exp-outk−1 .
+This input to attention allows for overlapping the routed expert Combine with both shared expert computation
+and the first part of attention computation. Lastly, any Attention block communication is overlapped during
+routed-expert computation. Put together, without any pipelining, FarSkip-Collective increases the overlap
+window of Dispatch and Combine to be the full layer duration, with the exception of the router and routed-
+expert computations.
+For Instella-MoE, we run large-scale architectural ablations to evaluate the capabilities of Instella-MoE with
+the FarSkip-Collective architecture and observe comparable performance relative to standard MoE connectiv-
+ity. In particular, we train Instella-MoE (+FarSkip) for 200B pre-training tokens and ablate the architecture
+while fixing all training settings and seeds against Instella-MoE without FarSkip-Collective. In Table 13 we
+observe that the Instella-MoE (+FarSkip) variant achieves 50.38 average performance compared to 50.33
+average performance when ablating the FarSkip-Collective connectivity with the standard transformer. In
+Appendix A we describe the implementation techniques that enable communication-overlapped training and
+inference of Instella-MoE on AMD GPUs.
+
+
+2.2    Training Pipeline Overview
+Instella-MoE is trained from scratch through the multi-stage pipeline shown in Figure 3, which progressively
+builds capability from broad language understanding to long-context processing, instruction following, align-
+ment, and reasoning. Base-model training comprises 7.1T-token pre-training at 4K context length (Sec. 2.4),
+∼100B-token mid-training on STEM- and reasoning-focused mixtures combined by model souping (Sec. 2.5),
+and a two-stage extension of the context window from 4K to 64K that produces the Instella-MoE-16B-A3B-
+Base model (Sec. 2.6). Post-training initializes from that base model and applies supervised fine-tuning with
+feedback-driven data curation (Sec. 2.7), direct preference optimization with delta learning (Sec. 2.8), and
+instruction-following RL followed by multi-teacher on-policy distillation (Sec. 2.9), producing Instella-MoE-
+16B-A3B-Think. We release the checkpoint of every training stage (Table 2) together with the per-stage
+hyperparameters (Table 3) and data mixtures (Table 4).
+
+
+                                                               7
+                                                                    Instella-MoE Technical Report
+
+                             Base Model Training                                                                     Post-Training & Alignment
+ 1      Pretraining           2     Mid-training             3 Long-Context               4      Supervised              5      Preference          6 Reinforcement
+                                                                  Extension                      Fine-Tuning                      Tuning                  Learning
+
+     From-scratch training        Continued training on                                                                       DPO on contrastive        IF-specialized RL
+       on a large diverse           high-quality data         Long-context training             Enable instruction            preference data to           and MOPD to
+         corpus of 7T              mixtures to refine            from 4K to 64K                following and chain              improve model        strengthen instruction
+             tokens                  key capabilities            context length               of thought reasoning               performance           following capability
+
+     Instella-MoE-16B-A3B         Instella-MoE-16B-A3B        Instella-MoE-16B-A3B            Instella-MoE-16B-A3B           Instella-MoE-16B-A3B    Instella-MoE-16B-A3B
+            Pretrain                     Midtrain                      Base                            SFT                            DPO                     Think
+
+
+Figure 3: Instella-MoE training pipeline. Base-model training spans pre-training, mid-training, and long-
+context extension; post-training and alignment span SFT, preference tuning (DPO), and reinforcement learn-
+ing.
+
+Table 2: Released Instella-MoE checkpoints. We open-source weights from every major training stage to
+support reproducible model research.
+
+Checkpoint                                           Stage            Description
+      Instella-MoE-16B-A3B-Pretrain                  Pre-training     From-scratch MoE checkpoint after 7.1T-token pre-training.
+      Instella-MoE-16B-A3B-Midtrain                  Mid-training     STEM- and reasoning-sharpened checkpoint produced through model souping.
+      Instella-MoE-16B-A3B-Base                      Long-context     Final base model after 64K long-context extension.
+      Instella-MoE-16B-A3B-SFT                       SFT              Instruction-tuned checkpoint with chain-of-thought capability.
+      Instella-MoE-16B-A3B-DPO                       DPO              Preference-tuned checkpoint with delta learning.
+      Instella-MoE-16B-A3B-Think                     RL               Final Think checkpoint after IF-RL and MOPD.
+
+
+
+2.3          Training Infrastructure
+All stages up to and including DPO run in the open-source Primus framework (AMD AI Brain, 2025) on its
+Megatron-LM (Shoeybi et al., 2019) backend using ROCm on AMD Instinct MI300X and MI325X GPUs. These
+stages use expert parallelism (EP=8) over the 64 routed experts, tensor parallelism, FlashAttention (Dao,
+2024), and bfloat16 mixed precision; they also overlap gradient and parameter communication with compu-
+tation. Pre-training and mid-training additionally overlap the expert-parallel all-to-all collectives using the
+FarSkip-Collective implementation described in Appendix A.
+Reinforcement learning is performed with Miles (RadixArk, 2025; Zhu et al., 2025), an open-source PyTorch-
+native stack for large-scale RL post-training built on the slime ecosystem. Miles pairs a Megatron-LM learner
+with a pool of SGLang (Zheng et al., 2024) rollout engines under Ray-based multi-node orchestration and
+supports both asynchronous off-policy and synchronous on-policy rollout loops. Our two RL stages use these
+modes, respectively. We run Miles with Primus as the policy-training backend and SGLang as the rollout
+backend; Sec. 2.9 details the resulting actor–learner configuration.
+
+
+2.4          Pre-training
+We train Instella-MoE from scratch on 7.1 trillion tokens using a context length of 4,096 and a global batch
+size of 4,096. We use the AdamW optimizer with β 1 = 0.9, β 2 = 0.95, a weight decay of 0.1, and a WSD
+learning-rate scheduler with a peak learning rate of 4 × 10−4 , a minimum learning rate of 4 × 10−5 , and 2,000
+warmup iterations. Figure 4 shows the pre-training dynamics: after a short warmup, the learning rate stays
+at its 4 × 10−4 peak for the bulk of training before decaying in the final phase, while the cross-entropy loss
+drops sharply early on and then decreases steadily to roughly 1.7 by the end of the 7.1T-token run.
+The pre-training mixture emphasizes high-quality open corpora spanning web text, mathematics, code, and
+science. We utilize Nemotron-CC-v2 (Su et al., 2025; NVIDIA, 2025) for web data; Nemotron-CC-Math-
+v1 (Karimi Mahabadi et al., 2025), MegaMath (Zhou et al., 2025a), and FineMath (Lozhkov et al., 2024) for
+mathematics; RefineCode (Huang et al., 2025) and Nemotron-Pretraining-Code-v1 (NVIDIA, 2025) for code;
+Nemotron-Pretraining-SFT-v1 (NVIDIA, 2025) for curated pre-training SFT-style data; and TxT360 (Tang
+et al., 2024) for other domains. We tokenize all corpora with the DeepSeek-V3 tokenizer (DeepSeek-AI,
+2024a). During this stage, the MTP objective is active.
+
+
+
+                                                                                      8
+                                                 Instella-MoE Technical Report
+
+Table 3: Training hyperparameters by stage. All stages use expert parallelism (EP=8), bfloat16 mixed
+precision, and the Primus and Miles training stack unless otherwise noted.
+
+Stage           Tokens / Data     Seq. Len.     Global BS Peak LR LR Schedule                         Key Settings
+Pre-training          7.1T         4,096         4,096     4 × 10−4       WSD                  MTP, EOD masking, FarSkip
+Mid-training         ∼100B         4,096         1,024     2 × 10−4      Linear               3 mixture variants + souping
+Long-ctx Stage 1     ∼194B        65,536          128      2 × 10−4      Linear                YaRN (θ =8M), doc masking
+Long-ctx Stage 2     ∼20B         65,536          128      1 × 10−4      Linear                  STEM-targeted data mix
+SFT                ∼2.9M ex.      32,768          128      1 × 10−4      Linear      2 epochs, seq packing, feedback-driven curation
+DPO                150K pairs     16,384          256      8 × 10−8      Linear                     β=5.0, 0.75 epoch
+IF-RL            29.8K prompts 16,384 rollout     512      1 × 10−6     Constant           GRPO + DAPO + R3, 1,400 steps
+MOPD               On-policy   16,384 rollout     512      1 × 10−6     Constant                 Domain-routed teachers
+
+
+Table 4: Training data by stage. All pre-training and mid-training corpora are drawn from publicly docu-
+mented open datasets.
+
+Stage             Primary Data Sources                                                                           License
+Pre-training      Nemotron-CC-v2; Nemotron-Pretraining-SFT-v1; Nemotron-CC-Math-v1; Mega- Source-
+                  Math; FineMath; RefineCode; Nemotron-Pretraining-Code-v1; TxT360        dependent
+Mid-training      Dolma 3 Dolmino 100B (web, code, math, science, instruction, reasoning)                        ODC-BY-1.0
+Long-context      Dolma 3 Longmino 100B (Stage 1); Dolma 3 Dolmino 100B mix and full pool math- Source-
+                  /code/reasoning subsets; Instella-GSM8K-synthetic (Stage 2)                   dependent
+SFT               Dolci-Think-SFT-7B; Nemotron-Cascade-2              (math,     science);   Nemotron-SFT- Source-
+                  Competitive-Programming-v2                                                               dependent
+DPO               Dolci-Think-DPO-7B preference pairs                                                            Source-
+                                                                                                                 dependent
+RL                Dolci-Think-RL-7B (IF RLVR Mixture)                                                            Source-
+                                                                                                                 dependent
+
+
+
+2.5     Mid-training
+After pre-training, we perform mid-training on Dolma 3 Dolmino 100B (Olmo et al., 2025) to sharpen math,
+code, STEM, and reasoning capabilities. We train three mid-training variants (v1, v2, v3) that share the
+same Dolma 3 Dolmino 100B base mixture and differ only in a few STEM/reasoning subsets: v1 uses the
+original Dolmino 100B mix; v2 replaces the STEM-Heavy Crawl subset with its full version from the Dolma 3
+Dolmino pool; and v3 additionally pulls in the full-pool subsets for MegaMatt, General Reasoning Mix, Math
+Meta-Reasoning, and Code Meta-Reasoning, expanding the mixture from ∼100B to ∼104B tokens (Table 22).
+Each variant is trained with a peak learning rate of 2 × 10−4 , a global batch size of 1,024, and linear learning-
+rate decay. The three resulting checkpoints are combined via equal-weight model souping to produce Instella-
+MoE-16B-A3B-Midtrain, which outperforms each individual variant (Table 5). The MTP objective remains
+active during this stage.
+
+
+2.6     Long-Context Extension
+After mid-training, the context length of Instella-MoE-Midtrain is extended from 4K to 64K tokens through
+continued pre-training on AMD Instinct MI325X accelerators. The two-stage recipe first adapts the model
+to the full 64K context length using a diverse set of long-context data; Stage 2 then rebalances the training
+mixture to recover mathematics, code, and reasoning capabilities that can regress during Stage 1. The check-
+point produced at the end of Stage 2 is Instella-MoE-16B-A3B-Base (Tables 10 and 11), and subsequent
+post-training stages initialize from this model and inherit the extended context window.
+For long-context extension, we increase the RoPE base to θ = 8 × 106 and apply YaRN scaling (Peng et al.,
+2024) to maintain attention stability at 64K. Starting with this stage, we also disable the MTP head to reduce
+activation memory at long sequence lengths. Ablations show that retaining θ = 10,000 without YaRN yields
+substantially worse length utilization; consequently, YaRN is used throughout both extension stages. Training
+samples are constructed by packing multiple documents into fixed 64K sequences. To prevent spurious cross-
+
+
+                                                              9
+                                                        Instella-MoE Technical Report
+
+             3.00
+
+             2.75
+
+             2.50
+CE Loss
+
+
+             2.25
+
+             2.00
+
+             1.75
+
+             1.50
+
+                       4
+          LR (×10−4)
+
+
+
+
+                       3
+
+                       2
+
+                       1
+
+                       0
+                           0   1000           2000             3000               4000                5000            6000             7000
+                                                              Training Tokens (Billions)
+
+Figure 4: Pre-training dynamics of Instella-MoE-16B-A3B over 7.1T tokens. Top: training cross-entropy
+(CE) loss. Bottom: WSD learning-rate schedule with a peak of 4 × 10−4 .
+
+Table 5: Mid-training model souping. Comparison of the Instella-MoE-16B-A3B mid-training variants and
+their equal-weight model soup. HE+ denote HumanEval+.
+
+ Model                                ARC-E ARC-C BoolQ       SciQ    PIQA HSwag      WG      OBQA MMLU GSM8K         HE+ MBPP+ Average
+ Instella-MoE-16B-A3B-Pretrain        93.96   83.47   86.30   93.21   79.45   82.38   85.91   80.00   68.71   70.92   55.95   53.15   77.78
+ Instella-MoE-16B-A3B-Midtrain-v1     93.84   84.90   84.90   93.71   82.00   82.09   87.09   83.60   68.95   77.82   56.86   55.00   79.23
+ Instella-MoE-16B-A3B-Midtrain-v2     94.88   85.60   84.80   94.22   83.93   81.50   86.41   83.80   69.31   71.21   59.30   54.30   79.11
+ Instella-MoE-16B-A3B-Midtrain-v3     94.63   85.83   86.00   94.45   85.19   81.26   85.85   84.40   69.69   75.93   58.54   54.95   79.73
+ Instella-MoE-16B-A3B-Midtrain        95.11   87.26   86.50   94.55   86.03   82.27   87.42   86.20   70.90   77.05   59.91   57.60   80.90
+
+
+
+document dependencies, document masking is applied: attention is blocked across document boundaries and
+position indices restart at each new document.
+
+Stage 1: Long-document adaptation. Stage 1 resumes from the soup-merged mid-training checkpoint and
+trains on Dolma 3 Longmino 100B (Olmo et al., 2025), a mixture of OCR-derived science PDFs, long web
+pages, synthetic long-context aggregation tasks, and mid-training-quality subsets intended to limit catas-
+trophic forgetting of general skills. Training uses ∼194B tokens at a sequence length of 64K, with a peak
+learning rate of 2 × 10−4 and linear decay to zero. As shown in Table 11, the resulting checkpoint, Instella-
+MoE-16B-A3B-Long-Stage1, uses long inputs effectively: across the 8K–64K sweep, it scores 44.7, 44.9, 44.4,
+and 41.0 on HELMET and averages 83.9 on RULER, outperforming the OLMo-3-7B model. Short-context
+STEM ability, however, regresses: GSM8K falls from 77.1 after mid-training to 62.8, and HumanEval+ falls
+from 59.9 to 55.0 (Tables 10 and 5). Recovering this ability is the purpose of Stage 2.
+
+Stage 2: STEM recovery. Stage 2 initializes from the Stage 1 checkpoint and runs for an additional ∼20B
+tokens with a peak learning rate of 1 × 10−4 that decays linearly. Those tokens are sampled from a curated
+37.32B-token STEM mixture (Table 7) built from Dolma 3 Dolmino (Olmo et al., 2025) and Instella-GSM8K-
+synthetic (Liu et al., 2025a). The mixture includes instructional math, competition-style math, synthetic math
+reasoning, code corpora, code-reasoning traces, and short chain-of-thought rewrites. We pack samples into
+64K sequences with the same document-boundary masking as Stage 1.
+We evaluate four Stage 2 mixtures that vary the degree of STEM upsampling relative to general text. Gen-
+eral recovery retains a broad distribution and improves GSM8K only modestly (64.5), with limited gains
+on coding. Math recovery increases math emphasis and restores GSM8K to 80.5, but incompletely recovers
+code performance (HumanEval+ 57.6). STEM-intensive further upweights math and code (GSM8K 81.0,
+
+
+                                                                       10
+                                           Instella-MoE Technical Report
+
+Table 6: Long-context extension hyperparameters. Both stages use a sequence length of 64K with
+document-boundary masking and YaRN RoPE (θ = 8 × 106 ).
+
+                                                     Stage 1                     Stage 2
+                 Initialization            Mid-training (soup-merged)       Stage 1 checkpoint
+                 Training data               Dolma 3 Longmino 100B         37.32B STEM mixture
+                 Sequence length                        64K                         64K
+                 Global batch size                      128                         128
+                 Training steps                       23,071                       2,400
+                 Peak learning rate                  2 × 10−4                    1 × 10−4
+                 Learning rate schedule   Linear decay, 200-step warmup        Linear decay
+                 MTP head                            disabled                    disabled
+                 Expert parallelism                   8-way                       8-way
+
+
+Table 7: Stage 2 STEM mixture (37.32B tokens). Subsets are drawn from Dolma 3 Dolmino 100B, the full
+Dolma 3 Dolmino pool, or Instella-GSM8K-synthetic.
+
+                           Domain         Source                               Tokens
+                                          Instructional math (Dolmino)          10.7B
+                                          Competition math                      5.62B
+                                          Synthetic math (MegaMatt)             3.88B
+                           Mathematics
+                                          Short math reasoning (Mind)           898M
+                                          Short math reasoning (PoT)            241M
+                                          GSM8K-style synthetic data            329M
+                           Code           Instructional and competition code    10.0B
+                                          General reasoning traces              2.48B
+                                          Rewritten full-thought chains         850M
+                           Reasoning
+                                          Math meta-reasoning                   1.05B
+                                          Code meta-reasoning                   1.27B
+                           Total                                               37.32B
+
+
+
+HumanEval+ 64.5) with a trade-off in long-context length-sweep performance. STEM-balanced gives the
+best STEM recovery, restoring GSM8K to 81.5 and HumanEval+ to 65.7, at the cost of a modest long-context
+regression relative to Stage 1 (a decline in the HELMET average from 43.7 to 41.5 and in the RULER average
+from 83.9 to 79.4; Table 11). We therefore adopt the STEM-balanced checkpoint as Instella-MoE-16B-A3B-
+Base.
+
+Training Details. Long-context extension at 64K on a 16B-parameter MoE is memory- and communication-
+intensive. The 64 routed experts are sharded across eight GPUs with expert parallelism, the sequence di-
+mension is partitioned with context parallelism so each device holds a slice of the 64K activations, and full
+activation recomputation with bfloat16 mixed precision is used to fit a micro-batch size of one per step.
+Unlike the earlier 4K-context stages, the 64K-context training does not overlap forward and backward com-
+munication, and optimizer state is reinitialized for continued training at the new sequence length. Table 6
+summarizes the training hyperparameters.
+
+
+2.7    Supervised Fine-Tuning
+We initialize the SFT model from the long-context base model and train it in two phases. The phase-1 mixture
+combines the general Dolci-Think-SFT-7B dataset (Olmo et al., 2025) (∼2.27M records) with three targeted
+skill slices: 300K math samples from Nemotron-Cascade-2 (Yang et al., 2026), ∼161K Python competitive-
+programming samples from Nemotron-SFT-Competitive-Programming-v2 (NVIDIA, 2026), and ∼197K sci-
+ence samples from Nemotron-Cascade-2 (Table 24). We convert every source to a shared {"messages":
+[...]} format, drop system messages, and retain assistant reasoning traces. We also drop any conversa-
+tion longer than 32,768 tokens when tokenized with the DeepSeek-V3 chat template. Training uses sequence
+packing at a context length of 32K with a peak learning rate of 1 × 10−4 and runs for two epochs.
+
+                                                        11
+                                                       Instella-MoE Technical Report
+
+         (i) Diagnosis
+                                            correct → discarded                                incorrect
+                                                             answers                                       Structured error analysis
+             Seed set                   Student                                 Judge
+         held-out prompts            SFT checkpoint                          LLM-as-judge                  error: failure mode
+                                                                                                           skills: missing capabilities
+                                                                                                           would help: training data to retrieve
+                                            references
+
+         (ii) Query generation
+            Retrieval policy                                                         ∑ i wi = 1
+                           0.020 Graph algorithms: BFS/DFS/Dijkstra on state spaces
+                                                                                                                    Reflection model
+                           0.018 Strict input/output format compliance                                          aggregates error analyses
+                           0.005 Spatial connectivity on geometric grids
+               ..                one policy per targeted domain (code-domain policy shown)
+                .
+
+         (iii) Retrieval
+                                                                                                retrieved (1−α)       uniform fill (α)
+                    Embedded candidate pool
+                                                           top-k i nearest neighbors                                                         Math
+                                                              (cosine similarity)
+                                                                                                                                             Code
+                                                            k i = ⌊ Bdom wi (1−α)⌋
+                                                                                                                                             Other
+                                                                                                     gray: uniform same-domain fill, α=0.5
+
+
+              query qi           retrieved neighbor                                          Curated 512K mixture → final SFT phase
+
+
+
+Figure 5: Feedback-driven data curation for the final SFT phase. (i) The student answers questions from
+a held-out seed set, and a judge model scores each response against the reference answer; correct responses
+are dropped, and each failure is turned into a structured error analysis naming the failure mode, the missing
+skills, and the training data that would close the gap. (ii) A larger reflection model aggregates the analyses
+for a domain into a retrieval policy: a set of queries with weights summing to one. (iii) Each query retrieves
+its allocated k i examples from the per-domain budget Bdom through nearest-neighbor search in the shared
+embedding space of the candidate pool. Uniform same-domain sampling fills the remaining α share of each
+targeted-domain budget and the entire budget for the non-targeted other domain. The total budget B = 512K
+is split across domains in the proportions of the base mixture, as reflected by the differing bar lengths.
+
+
+
+
+Feedback-driven data curation. Once gains from the core mixture saturate, we run a final phase on 512K
+examples selected by an error-driven procedure rather than by uniform sampling. We partition the pool into
+three domains—mathematics, code, and other—and split a fixed selection budget across them. For the two
+targeted domains, mathematics and code, we select data using a three-stage pipeline (Figure 5). (i) Diagnosis:
+we run the student on a held-out seed set and use an LLM as a judge to score each response against a reference
+answer; for every incorrect response, the judge model then produces a structured error analysis that includes
+a description of what training data would help address the error. (ii) Query generation: a larger reflection
+model aggregates these error analyses into a set of weighted retrieval queries, with weights normalized to
+sum to one. (iii) Retrieval: we allocate each query its weighted share of the selection budget and retrieve
+that many nearest neighbors from the pool by embedding similarity. Compared to uniform sampling at the
+same budget, this improves average performance across our evaluation suite by 1.5 points (Table 8), with
+the largest gains on instruction following, competition math, and code generation. A parallel line of work,
+STAT (He et al., 2025), also targets a student’s weaknesses through teacher-diagnosed errors. It relies on a
+predefined skill taxonomy to drive selection. In our method, the teacher provides free-form error feedback,
+which we convert into retrieval queries over a large candidate pool. More details about the implementation
+are provided in Appendix B.
+
+
+
+
+                                                                        12
+                                                            Instella-MoE Technical Report
+
+                            100                                                                       1.0
+                                                           Load balancing on
+                                                           Load balancing off
+                             80                                                                       0.8
+
+
+
+      Tokens with changed
+        top-1 experts (%)
+
+
+
+
+                                                                                  overlap (Jaccard)
+                                                                                 Top-6 experts-set
+                             60                                                                       0.6
+
+
+
+                             40                                                                       0.4
+
+
+
+                             20                                                                       0.2
+                                                                                                                                       Load balancing on
+                                                                                                                                       Load balancing off
+                              0                                                                       0.0
+                                  1   5       10     15     20          25                                  1    5      10      15      20          25
+                                               MoE Layer                                                                 MoE Layer
+
+Figure 6: Expert routing drift during DPO. Two otherwise identical DPO runs, differing only in whether load
+balancing remains enabled, are compared against the SFT model across 26 MoE layers. Left: fraction of tokens
+whose top-1 expert differs from SFT. Right: Jaccard overlap between top-6 dispatched experts and those of
+SFT. Routing stays close to SFT when load balancing is disabled, and differs substantially when enabled.
+
+Table 8: Final-phase SFT data selection. Both runs anneal the same phase-1 model on 512K examples drawn
+from the same candidate pool and differ only in how those examples are selected. Feedback-driven curation
+improves the eleven-benchmark average by 1.5 points, with the largest gains on IFEval (+4.8), AIME25 (+3.6),
+and LCB (+3.2). HE+ and LCB denote HumanEval+ and LiveCodeBench. Per column, the best score is bold.
+
+Selection                                 AGIEval AIME24 AIME25       BBH        HE+                   GPQA IFEval     LCB    MBPP+ MATH MMLU               Avg
+Uniform sampling                          79.86    78.02   67.71     74.04 85.45 58.00                          76.71 45.53   61.59   94.77    79.70        72.85
+Feedback-driven curation                  81.33    77.50   71.35     74.34 86.77 59.38                          81.51 48.74   61.64   94.67    80.82        74.37
+
+
+
+2.8           Direct Preference Optimization
+Starting from the curated SFT checkpoint, we apply DPO (Rafailov et al., 2023) using the Dolci-Think-DPO-
+7B preference dataset (Olmo et al., 2025), which is built on the idea of delta learning (Geng et al., 2025):
+what drives preference tuning is the quality gap between the chosen and rejected responses rather than
+the absolute quality of either, so each pair contrasts a Qwen3-32B thinking trace (Yang et al., 2025) with
+a much weaker Qwen3-0.6B trace and remains informative even when continued imitation of the chosen
+traces alone would no longer provide a useful training signal. When run naively, DPO converges, yet the
+resulting model’s accuracy is lower than that of the SFT checkpoint on downstream benchmarks. We do
+not observe this behavior when applying the same recipe to a dense model. We also note that the DPO
+stage operates at a substantially lower learning rate than pre-training and SFT, while the MoE auxiliary load-
+balancing loss and router bias updates are configured for those higher-learning-rate regimes. Motivated by
+these observations, we disable both load-balancing mechanisms during DPO. As shown in Figure 6, when load
+balancing is enabled, the top-1 expert differs from that of SFT for 54% of tokens on average and the top-6
+expert-set overlap is 0.42, compared with 5% and 0.94, respectively, when load balancing is disabled. With
+these adjustments, DPO improves helpfulness and response quality while preserving reasoning.
+
+
+2.9           Reinforcement Learning
+To obtain our final Think checkpoint, we apply reinforcement learning (RL) to the DPO model using
+Miles (RadixArk, 2025; Zhu et al., 2025). Because the DPO model already performs strongly on math and
+general reasoning, we restrict the RL objective to instruction following (IF) and then use an on-policy distilla-
+tion stage to incorporate those gains into the DPO model without eroding its other capabilities. The two-stage
+recipe is illustrated in Figure 7: Stage 1 is IF-specialized RL with verifiable rewards (RLVR), which produces
+an IF expert, and Stage 2 is Multi-Teacher On-Policy Distillation (MOPD), which distills knowledge from that
+expert and the DPO model into the student, with the DPO model acting as a self-anchor.
+
+
+
+                                                                                13
+                                                             Instella-MoE Technical Report
+
+                                      Stage 1:
+  Instella-MoE-16B-A3B-DPO            Instruction-Following (IF)                        IF Expert
+                                      Specialized RL Training
+
+
+                             Stage 2:
+                             MOPD: Multi-Teacher
+                             On-Policy Distillation
+                                                                                       IF-RL Teacher
+                                                                   IF Prompts
+                                          On-Policy
+                                          Rollouts                                                     Token-Level
+                               Student                  Domain Router                                                Instella-MoE-16B-A3B-Think
+                                                                                                       Reverse KL
+
+                                                                 Other Prompts
+
+                                                                                       DPO Teacher
+
+                                         Policy update on the student’s own rollouts
+
+
+
+Figure 7: Instella-MoE-16B-A3B RL training pipeline. Stage 1 performs IF-specialized RL to obtain an IF
+expert. Stage 2 applies Multi-Teacher On-Policy Distillation (MOPD): a domain router routes the student’s IF
+rollouts to the IF-RL teacher and all other rollouts to the frozen DPO teacher, and the student is updated on
+its own on-policy rollouts using a token-level reverse-KL objective.
+
+
+2.9.1    RL Infrastructure
+Both stages use a disaggregated actor–learner design built on Miles (RadixArk, 2025; Zhu et al., 2025):
+rollouts are produced by a pool of SGLang (Zheng et al., 2024) inference engines, while the policy is optimized
+in Megatron-LM (Shoeybi et al., 2019). After every optimizer step, the updated weights are streamed back
+to the rollout engines. We run the IF-RL stage (Section 2.9.2) fully asynchronously, which allows generation
+to overlap with gradient computation in a single-step off-policy regime. For the MOPD stage (Section 2.9.3),
+we train synchronously and on-policy, since the teacher scoring makes each update depend on the current
+student. Each run uses three nodes with 24 GPUs, split into 8 GPUs for the learner (expert parallelism, EP=8,
+with a distributed optimizer) and 16 GPUs for two parallel SGLang rollout engines (each TP=8, EP=8, with
+data-parallel attention). The rollout engines generate responses of up to 16K tokens.
+
+MoE-aware train/inference consistency. A subtlety specific to the MoE architecture is that the SGLang
+rollout and the Megatron training forward pass can route tokens to different experts, so the training-time
+log-probabilities log π train need not match those under which the tokens were sampled. We address this at
+two levels. First, we enable Rollout Routing Replay (R3) (Ma et al., 2025), which fixes the expert-assignment
+decisions made during sampling by recording and replaying them inside the training forward pass. With this
+approach, log π train is evaluated along the exact expert path that generated each token. Second, we apply
+token-level truncated importance sampling (TIS) (Yao et al., 2025) to correct residual numerical mismatch
+between the inference and training engines, with per-token ratios clamped to a bounded range (Table 9).
+
+2.9.2    IF-specialized RL
+In the first stage, we train the DPO model for 1,400 rollout steps on the IF-RLVR subset of Dolci-Think-RL-
+7B (Olmo et al., 2025), whose prompts carry verifiable instruction-following constraints in the style of IFE-
+val (Zhou et al., 2023) and IFBench (Pyatkin et al., 2025). Each step samples 64 prompts × 8 responses = 512
+rollouts (global batch size 512), decoding at temperature 1.0 with a maximum response length of 16,384 to-
+kens. We additionally use partial rollouts (Zhou et al., 2025b): long-tail decodes that do not finish within a
+step are recycled into the next step, with the stale (off-policy) tokens masked out of the loss. This approach
+substantially improves throughput at these response lengths. For this stage, we use Adam (β 1 =0.9, β 2 =0.999)
+with a constant learning rate of 1 × 10−6 , weight decay 0, and gradient clipping of 1.0, and monitor IFEval
+and IFBench every 50 steps (evaluated with a temperature of 0.6 and top-p of 0.95). This yields an IF expert
+with markedly stronger instruction-following behavior than our DPO model.
+Our core objective is Group Relative Policy Optimization (GRPO) (Shao et al., 2024), augmented with a set
+of now-standard improvements drawn from DAPO (Yu et al., 2025) and Dr. GRPO (Liu et al., 2025c). For a
+
+
+                                                                                14
+                                                      Instella-MoE Technical Report
+
+prompt x, we sample a group of G responses {yi }iG=1 from the rollout policy and optimize
+
+                                           G | yi |
+                                1                                                                                
+                                          ∑    ∑ i,t
+                                                                                                           
+                 J (θ ) =                       w    min   r    A
+                                                             i,t i,t , clip r i,t , 1 − ε low , 1 + ε high   A i,t ,
+                            ∑iG=1 |yi |   i =1 t =1
+
+               πθ (yi,t | x, yi,<t )
+where ri,t =                           is the policy ratio, wi,t is the truncated importance-sampling weight that
+              πθold (yi,t | x, yi,<t )
+corrects the mismatch between the rollout and learner policies, and the advantage is computed group-relative
+with mean-centering only, Ai,t = R( x, yi ) − mean({ R( x, y j )}G    j=1 ), where R is the verifier reward described
+below. The specific modifications to vanilla GRPO, all of which we use, are:
+
+      • Zero-gradient signal filtering. Groups in which all G responses receive identical reward have zero
+        advantage and contribute no gradient; we discard them (Yu et al., 2025).
+      • Active sampling. To keep a constant, fully informative batch size despite this filtering, we oversample
+        prompts (128 per step) and continue sampling until the batch is filled with groups with nonzero
+        reward variance, exploiting the asynchronous rollout pool so the learner never waits.
+      • Token-level loss. The loss is normalized by the total number of tokens in the batch rather than being
+        normalized per sequence, removing the length bias that underweights long reasoning traces (Yu et al.,
+        2025).
+      • No KL penalty. We drop the KL-to-reference term (and reference model) entirely, which permits
+        larger policy movement without destabilizing training (Yu et al., 2025; Liu et al., 2025c).
+      • Clip-higher. We decouple the PPO clip bounds, using ε low = 0.2 and ε high = 0.272 to preserve
+        probability mass on exploratory low-probability tokens (Yu et al., 2025).
+      • No standard-deviation normalization. Advantages are mean-centered but not divided by the group
+        reward standard deviation, removing the difficulty bias whereby very easy or very hard prompts
+        receive inflated advantages (Liu et al., 2025c).
+      • We use Truncated importance sampling (TIS) and Rollout Routing Replay (R3) (Yao et al., 2025;
+        Ma et al., 2025) for train/inference consistency, as described above.
+
+Verifier-based reward design. Rewards are scaled to the [0, 10] range and are produced by deterministic
+verifiers rather than a learned reward model. This design avoids reward hacking on long reasoning traces.
+Instruction-following responses are graded by a sequence of constraint-checking functions. Following the IF-
+RLVR recipe of Pyatkin et al. (2025) (also adopted by OLMo 3 (Olmo et al., 2025)), we assign partial credit
+as the fraction of constraints satisfied rather than as an all-or-nothing score. This enriches the training signal
+and eases credit assignment on multi-constraint prompts. The IF constraint verifier drives Stage 1 training
+and is also used for evaluation (IFEval/IFBench); during evaluation, however, we adopt the strict criterion,
+awarding credit only when all of a prompt’s constraints are satisfied. MOPD replaces the scalar reward with a
+teacher-log-probability signal and therefore does not use these verifiers during training. Before any verifiable
+credit is assigned, we apply a think-format gate: a response earns a reward only if it contains a well-formed
+reasoning block (<think> . . . </think>); the reasoning trace is then stripped and only the final-answer span
+is scored, preventing malformed or non-reasoning outputs from receiving credit.
+
+2.9.3    Multi-Teacher On-Policy Distillation
+IF-specialized RL yields an IF expert that excels at instruction following but regresses on math and reasoning
+benchmarks (Table 14). We apply MOPD (Ma et al., 2026) to integrate the instruction-following capability of
+the IF expert into the DPO model while preserving the DPO model’s other capabilities. Specifically, we distill
+on the student’s own on-policy rollouts over a domain-tagged mixture of Dolci-Think-RL-7B prompts (an
+even split between IF and general prompts; 128 prompts × 4 samples = 512 responses per step; maximum
+response length 16K tokens), routing each rollout to a frozen teacher. Each teacher is served through an
+independent SGLang endpoint; the prompt’s domain determines which teacher scores the student’s sampled
+tokens. Instruction-following prompts are scored by the IF-RL teacher, while all remaining prompts (e.g.,
+math, code, and general) are scored by the frozen DPO model itself. The student is initialized from the DPO
+model, so on the non-IF domains the teacher is the student’s own initialization, which results in an advantage
+that is approximately zero early in training and acts as a self-anchoring regularizer that preserves math and
+
+
+                                                                   15
+                                                       Instella-MoE Technical Report
+
+              Table 9: Reinforcement learning hyperparameters for the two Think RL stages.
+
+                                                    Stage 1: IF-RL                              Stage 2: MOPD
+           Objective                        GRPO (verifiable IF reward)              On-policy distillation (reverse KL)
+           Initialization                          DPO checkpoint                             DPO checkpoint
+           Data                            Dolci-Think-RL IF-RLVR subset          Dolci-Think-RL IF/general mix (50% IF)
+           Prompts × samples                            64 × 8                                     128 × 4
+           Global batch size                             512                                         512
+           Max response length                          16,384                                     16,384
+           Sampling                            T =1.0 (top-p default)                       T =1.0, top-p = 1.0
+           Learning rate                         1 × 10−6 (constant)               1 × 10−6 (constant, 30-step warmup)
+           Adam ( β 1 , β 2 )                        (0.9, 0.999)                               (0.9, 0.95)
+           Clip (ε low , ε high )                    (0.2, 0.272)                                     —
+           Importance clip (TIS)                      [0.5, 1.5]                                  [0.5, 2.0]
+           KL / entropy                                  0/0                                        0/0
+           MoE routing                                R3 replay                                  R3 replay
+           Rollout mode                    asynchronous, partial rollouts                 synchronous, on-policy
+
+Table 10: Base model performance on standard pre-training benchmarks. HSwag, WG, OBQA, HE+,
+and MATH denote HellaSwag, WinoGrande, OpenBookQA, HumanEval+, and Minerva MATH, respectively.
+Long-Stage1 is the intermediate checkpoint after long-context Stage 1, before STEM recovery. Per column,
+the best score is bold and the second-best is underlined.
+
+Model                              ARC-E ARC-C BoolQ SciQ PIQA HSwag              WG     OBQA MMLU GSM8K HE+ MBPP+ MATH            Avg
+                                                             Open-Weight Models
+Llama-3.2-3B                        85.3     71.2    74.2   87.1   74.1   77.0    83.0   67.0   57.5   30.2   31.0   32.4    8.7   59.9
+Gemma-4-E2B                         53.2     41.7    78.9   39.6   53.4   47.5    61.2   74.8   59.2   24.0   22.0   31.0    9.4   45.8
+Gemma-4-E4B                         48.8     37.9    87.2   43.5   50.2   52.9    63.4   85.2   70.9   56.4   44.5   42.5   20.6   54.1
+Qwen3.5-2B-Base                     93.7     84.4    85.8   91.9   76.7   68.4    78.3   77.4   65.5   67.2   34.9   37.8   32.5   68.8
+Qwen3.5-4B-Base                     97.5     93.1    89.8   95.4   87.1   77.1    84.6   89.4   77.3   84.4   55.8   53.0   48.3   79.5
+DeepSeek-V2-Lite                    87.6     74.8    81.7   88.3   71.4   80.8    84.8   72.4   58.8   38.9   32.5   32.4   15.6   63.1
+Moonlight-16B-A3B                   95.3     85.4    85.9   94.2   81.8   82.5    85.6   82.2   71.3   85.6   52.1   45.7   43.0   76.2
+                                                              Fully Open Models
+OLMoE-1B-7B                         84.4     69.2    83.9   87.0   73.5   79.9    84.1   79.0   62.5   51.0   14.5   20.4   15.2   61.9
+SmolLM3-3B-Base                     90.9     79.8    83.8   90.1   73.9   77.8    84.4   77.4   62.6   69.7   37.8   49.2   39.6   70.5
+OLMo-3-7B                           93.6     84.8    63.9   92.8   80.2   77.7    85.7   69.6   56.4   74.6   48.0   43.8   40.2   70.1
+Instella-MoE-16B-A3B-Long-Stage1    93.6     83.9    84.1   93.3   82.7   80.1    86.0   82.2   68.9   62.8   55.0   52.7   39.1   74.2
+Instella-MoE-16B-A3B-Base           93.6     83.8    84.7   93.6   83.8   79.2    86.5   81.2   67.8   81.5   65.7   52.5   43.0   76.7
+
+
+
+
+general capability while the IF-domain signal drives learning. Concretely, we adopt an on-policy distillation
+objective in which the per-token advantage is the teacher–student log-probability gap:
+                                   At = log πteacher (yt | y<t , x ) − log πstudent (yt | y<t , x ).                               (4)
+The expectation of this gap under the student’s on-policy distribution corresponds to a token-level reverse-
+KL objective between the student and the domain-routed teacher. Teacher log-probabilities are obtained by
+scoring the student’s sampled tokens (no teacher generation), and the domain router selects πteacher per sam-
+ple from {πIF-RL , πDPO }. This objective is optimized within the same GRPO/importance-sampling machinery
+(importance ratios truncated to [0.5, 2.0], no KL term, and no entropy bonus). As shown in Table 14, MOPD re-
+covers most of the IF expert’s instruction-following gains while maintaining DPO-level performance on math,
+code, MMLU (Hendrycks et al., 2021a), and AGIEval (Zhong et al., 2024).
+
+
+3     Results
+
+3.1     Base Model
+We evaluate Instella-MoE-16B-A3B-Base on ARC-Challenge (ARC-C) (Clark et al., 2018), ARC-Easy (ARC-
+E) (Clark et al., 2018), BoolQ (Clark et al., 2019), HellaSwag (HSwag) (Zellers et al., 2019), PIQA (Bisk et al.,
+
+                                                                     16
+                                                  Instella-MoE Technical Report
+
+Table 11: Long-context evaluation on HELMET and RULER at context lengths up to 64K tokens. Long-
+Stage1 is the intermediate checkpoint after long-context Stage 1, before STEM recovery. Per column, the best
+score is bold and the second-best is underlined.
+
+                     Model                                             HELMET                              RULER
+                                                        8K       16K    32K    64K    Avg    8K     16K     32K    64K    Avg
+                                                           Open-Weight Models
+                     Llama-3.2-3B                       42.5    42.6    38.4   35.0   39.6    0.0    0.0    0.0     0.0    0.0
+                     Gemma-4-E2B                        44.7    42.7    41.2   40.6   42.3   87.4   85.0   82.0    78.0   83.1
+                     Gemma-4-E4B                        45.0    43.7    42.9   43.6   43.8   91.3   92.2   89.6    84.7   89.4
+                     Qwen3.5-2B-Base                    45.6    44.5    44.5   42.5   44.3   90.9   87.7   83.0    83.0   86.1
+                     Qwen3.5-4B-Base                    52.2    50.9    48.7   48.8   50.2   88.1   90.4   90.8    87.1   89.1
+                     DeepSeek-V2-Lite                   37.9    35.7    28.3   27.5   32.4   76.8   72.0   58.7    51.1   64.6
+                     Moonlight-16B-A3B                  44.4     1.0     1.0    1.5   12.0   89.5    0.0    0.1     0.0   22.4
+                                                               Fully Open Models
+                     OLMoE-1B-7B                         0.4      1.6    3.0    3.2    2.1    0.2    0.0    0.0    0.0    0.1
+                     SmolLM3-3B-Base                    40.9     39.2   36.3   34.2   37.6   84.8   82.1   76.4    71.0   78.6
+                     OLMo-3-7B                          47.1     45.0   41.8   38.4   43.1   90.6   84.2   78.1    67.8   80.2
+                     Instella-MoE-16B-A3B-Long-Stage1   44.7     44.9   44.4   41.0   43.7   89.3   86.2   83.6    76.4   83.9
+                     Instella-MoE-16B-A3B-Base          44.7     43.1   41.9   36.2   41.5   86.2   82.8   77.9    70.8   79.4
+
+
+
+
+2020), SciQ (Welbl et al., 2017), WinoGrande (WG) (Sakaguchi et al., 2020), OpenBookQA (OBQA) (Mi-
+haylov et al., 2018), MMLU (Hendrycks et al., 2021a), GSM8K (Cobbe et al., 2021), HumanEval+ (HE+)
+and MBPP+ (Liu et al., 2023), and Minerva MATH (Lewkowycz et al., 2022). Unless otherwise noted, we
+follow the evaluation protocols described in our Hugging Face model cards and use OLMES-style settings for
+base models (Gu et al., 2025).
+As shown in Table 10 and Figure 1 (left), Instella-MoE-16B-A3B-Base attains an average score of 76.7, the
+strongest among all fully open models—well ahead of SmolLM3-3B (Bakouch et al., 2025) (70.5), OLMo-3-
+7B (Olmo et al., 2025) (70.1), and OLMoE-1B-7B (Muennighoff et al., 2025) (61.9). It leads all evaluated
+models on WinoGrande (86.5) and delivers strong coding results (HumanEval+ 65.7), with balanced perfor-
+mance across knowledge, reasoning, math, and code. Notably, it achieves these results while activating only
+2.8B parameters per token, outperforming fully open dense models such as OLMo-3-7B that activate more
+than twice as many parameters.
+Instella-MoE is also highly competitive with leading open-weight models: it surpasses Moonlight-16B-
+A3B (Liu et al., 2025b) (76.2) on average while being fully open, and trails only Qwen3.5-4B-Base (Qwen
+Team, 2026a) (79.5), which activates more parameters per token.
+
+Long-Context Evaluation. We evaluate long-context capability on HELMET (Yen et al., 2025) and
+RULER (Hsieh et al., 2024) at context lengths up to 64K tokens. HELMET evaluates retrieval-augmented
+generation (Natural Questions (Kwiatkowski et al., 2019), TriviaQA (Joshi et al., 2017), HotpotQA (Yang
+et al., 2018)), needle-in-a-haystack recall, and long-document QA (InfiniteBench (Zhang et al., 2024), Nar-
+rativeQA (Kočiskỳ et al., 2018)).
+As shown in Table 11, Instella-MoE-16B-A3B-Base achieves a HELMET average of 41.5 and a RULER average
+of 79.4 at context lengths up to 64K tokens. On RULER, Instella-MoE is competitive with OLMo-3-7B (80.2)
+and edges out SmolLM3-3B (78.6), indicating that the two-stage long-context training recipe, which combines
+Longmino with domain-targeted data, transfers effectively to retrieval-style long-context tasks.
+The intermediate Long-Stage1 checkpoint scores higher on both long-context suites, with HELMET and
+RULER averages of 43.7 and 83.9, respectively, so the Stage 2 STEM mixture trades part of the long-context
+headroom for short-context capability. We consider this an appropriate trade-off for a general-purpose base
+model, since the same stage lifts GSM8K from 62.8 to 81.5 and HumanEval+ from 55.0 to 65.7 (Table 10).
+
+
+3.2    Post-Trained Model
+We evaluate our post-trained checkpoints on instruction-following, reasoning, and chat benchmarks, includ-
+ing AGIEval (Zhong et al., 2024), AIME24/25, BBH (Suzgun et al., 2023), GPQA (Rein et al., 2024), Hu-
+manEval+ and MBPP+ (Liu et al., 2023), IFEval (Zhou et al., 2023), LiveCodeBench (LCB) (Jain et al.,
+
+                                                                        17
+                                                       Instella-MoE Technical Report
+
+Table 12: Post-trained checkpoint results on standard benchmarks. HE+ and LCB denote HumanEval+
+and LiveCodeBench, respectively. Per column, the best score is bold and the second-best is underlined.
+
+Model                         AGIEval AIME24 AIME25           BBH   HE+     GPQA IFEval      LCB     MBPP+ MATH MMLU AlpacaEval 2             Avg
+                                                                Open-Weight Models
+Gemma-4-E2B (think)           74.99     48.33     32.08   72.80     62.32 46.21      86.88   46.74   63.10    86.65   76.49     40.28         61.41
+Gemma-4-E4B (think)           83.53     60.31     42.92   76.79     89.63 50.22      87.80   57.58   65.82    92.52   83.59     54.90         70.47
+Qwen3.5-2B                    74.25      6.87     11.46   70.47     48.35 50.22      37.52    8.19   30.21    48.09   76.10     29.35         40.92
+Qwen3.5-4B                    90.20     58.44     51.88   77.21     85.30 69.64      64.51   40.22   60.13    85.67   87.09     66.49         69.73
+DeepSeek-V2-Lite-Chat         54.29      0.21      0.31   39.86     44.76 28.12      46.77    6.15   41.48    24.35   58.53      8.90         29.48
+Moonlight-16B-A3B-Instruct    64.66      5.62      3.23   53.77     66.77 33.26      46.21   14.52   49.07    63.13   70.06     21.39         40.97
+                                                                Fully Open Models
+OLMoE-1B-7B-Instruct          44.06      0.83      0.00   33.27     20.98   26.56    67.10    2.89   34.58    19.05   47.56          9.70     25.55
+SmolLM3-3B                    68.40     47.81     38.75   65.70     78.84   39.51    70.43   29.78   60.05    90.19   74.18         33.39     58.09
+OLMo-3-7B-Think-SFT           78.26     75.21     64.27   74.80     88.17   44.42    81.89   42.99   63.47    94.67   76.91         46.66     69.31
+OLMo-3-7B-Think-DPO           81.62     75.31     66.46   72.09     90.00   44.87    77.26   45.93   64.47    95.48   79.09         45.19     69.81
+OLMo-3-7B-Think               81.50     75.00     69.17   69.67     89.88   45.54    90.39   51.94   64.84    95.24   79.07         51.39     71.97
+Instella-MoE-16B-A3B-SFT      81.33     77.50     71.35   74.34     86.77   59.38    81.51   48.74   61.64    94.67   80.82         40.92     71.58
+Instella-MoE-16B-A3B-DPO      81.51     77.40     73.23   74.77     86.52   62.72    77.08   53.39   61.98    94.92   81.74         46.80     72.67
+Instella-MoE-16B-A3B-Think    82.50     76.90     73.40   74.80     87.90   61.20    83.70   54.30   62.00    94.80   81.30         45.81     73.22
+
+
+Table 13: Architecture ablation. Effect of the Gated MLA output gate and FarSkip-Collective connectivity,
+measured after 200B tokens (Nemotron-CC, 48K steps). Vanilla is plain MLA with standard expert-parallel
+connectivity. Gated MLA drives the accuracy improvement, and adding FarSkip-Collective maintains average
+accuracy similar to that of Gated MLA while enabling the communication-overlap efficiency gains. HE+
+denotes HumanEval+. Per column, the best score is bold and the second-best is underlined; all results are
+from a single run.
+
+Model                 ARC-C ARC-E BoolQ HSwag MMLU OBQA               PIQA    SciQ     WG     BBH    GSM8K MATH GPQA          HE+    MBPP+     Avg
+Vanilla (MLA)         43.34   70.79   64.50   69.98   39.02    39.40 78.45 92.40 63.77 38.26          32.22   24.54 23.44 21.95       45.77   49.86
+Gated MLA             43.94   70.33   65.72   69.23   43.28    41.00 78.24 90.50 62.35 35.37          30.93   23.26 25.22 26.83       48.68   50.33
+Gated MLA + FarSkip   44.62   69.91   68.04   69.47   41.86    40.60 79.00 90.90 62.19 35.54          31.39   22.34 26.79 23.78       49.21   50.38
+
+
+
+
+2025), MATH (Hendrycks et al., 2021b), MMLU (Hendrycks et al., 2021a), and AlpacaEval 2 (Dubois et al.,
+2024).
+As shown in Table 12 and Figure 1 (right), SFT equips the base model with instruction-following and chain-of-
+thought capabilities using the Dolci-Think and Nemotron mixtures, achieving an average score of 71.6. Our
+MoE-specific router stabilization recipe enables DPO to further improve helpfulness and response quality,
+raising the average to 72.7 while preserving reasoning performance. Our final Think checkpoint reaches an
+average of 73.2, the strongest fully open post-trained result in our comparison at 2.8B active parameters.
+
+
+3.3     Ablation Studies
+3.3.1    Architecture Ablation
+To evaluate the contribution of the Gated MLA output gate and FarSkip-Collective connectivity, we run a con-
+trolled architectural ablation at a 200B-token budget on the Nemotron-CC (Su et al., 2025) dataset, using
+Vanilla MLA with standard expert-parallel connectivity as the baseline. We use LM-Eval-Harness (Gao et al.,
+2024) for evaluation. As shown in Table 13, Gated MLA improves the average from 49.86 to 50.33 (+0.47),
+with the clearest gains on code (HumanEval+ +4.9, MBPP+ +2.9), MMLU (+4.3), and GPQA (+1.8). In-
+corporating FarSkip-Collective connectivity achieves a similar average accuracy of 50.38 while delivering the
+communication-overlap efficiency gains reported in Figure 8.
+
+3.3.2    Reinforcement Learning Ablation
+We obtain our final Think checkpoint by applying a two-stage RL recipe to the DPO checkpoint (Section 2.9).
+Table 14 summarizes the ablation. IF-specialized RL alone improves IFEval from 77.1 to 84.1 but regresses
+
+
+                                                                       18
+                                           Instella-MoE Technical Report
+
+Table 14: RL ablation results. IF-RL improves instruction following but regresses on math and reasoning
+benchmarks; MOPD recovers most of the instruction-following gains while preserving DPO-level performance
+elsewhere. HE+ and LCB denote HumanEval+ and LiveCodeBench, respectively. Per column, the best score
+is bold and the second-best is underlined.
+
+      Stage   AGIEval AIME24 AIME25 BBH HE+ GPQA IFEval LCB MBPP+ MATH MMLU                            Avg
+      DPO      81.5      77.4     73.2    74.8 86.5     62.7     77.1      53.4   62.0   94.9   81.7   75.0
+      IF-RL    81.3      74.3     65.2    75.0 85.5     60.9     84.1      51.5   63.2   92.1   81.3   74.0
+      MOPD     82.5      76.9     73.4    74.8 87.9     61.2     83.7      54.3   62.0   94.8   81.3   75.7
+
+
+
+
+Figure 8: Instella-MoE-16B-A3B training and inference throughput. Left: pre-training throughput, nor-
+malized to a standard MoE expert-parallel training baseline (12.7% improvement). Right: inference time-to-
+first-token (TTFT) throughput under expert parallelism (39.2% improvement).
+
+
+on AIME24/25 and GPQA. Multi-Teacher On-Policy Distillation (MOPD) recovers most of the IF expert’s
+instruction-following gain (IFEval 83.7) while maintaining DPO-level performance on math, code, MMLU,
+and AGIEval, yielding the highest 11-benchmark ablation average of 75.7. This indicates that domain-routed
+on-policy distillation is an effective strategy for adding targeted RL capabilities to MoE models without catas-
+trophic forgetting in other domains.
+
+
+3.4    Training Efficiency
+Beyond benchmark accuracy, Instella-MoE is designed for efficient training and serving on AMD hardware.
+FarSkip-Collective overlap yields a 12.7% pre-training throughput improvement over the standard expert-
+parallel baseline architecture. At inference, SGLang serving with expert parallelism raises time-to-first-token
+(TTFT) throughput by 39.2% (Figure 8) by overlapping model communication with computation.These
+system-level optimizations complement the parameter efficiency of the MoE architecture by removing the
+significant communication overhead of MoEs and harnessing the efficiency of the sparse architecture with
+2.8B active parameters per token.
+
+
+4     Conclusion
+We present Instella-MoE-16B-A3B, a fully open Mixture-of-Experts language model trained entirely on openly
+available data, using open-source code and AMD Instinct GPU infrastructure. With 16 billion total parameters
+and 2.8 billion active parameters per token, Instella-MoE combines the efficiency of sparse MoE architectures
+with architectural and system-level innovations—Gated Multi-head Latent Attention and FarSkip-Collective
+connectivity—to achieve performance competitive with both fully open and open-weight baselines while keep-
+ing per-token compute close to that of a dense 3B-class model.
+
+
+                                                        19
+                                          Instella-MoE Technical Report
+
+The Instella-MoE release spans the complete model flow: pre-training, mid-training, long-context extension,
+supervised fine-tuning, direct preference optimization, and reinforcement learning. Instella-MoE-16B-A3B-
+Base achieves state-of-the-art performance among fully open models in our evaluation, with an average score
+of 76.7 across standard pre-training benchmarks, and our final Think checkpoint delivers the strongest over-
+all post-trained results in our comparison. Alongside model weights from every training stage, we release
+training configurations, data mixtures, evaluation protocols, and training code built on the Primus and Miles
+frameworks.
+Instella-MoE demonstrates that transparency and strong performance can coexist in modern sparse MoE sys-
+tems. By open-sourcing a complete pipeline for training an MoE model from scratch on AMD hardware, we
+aim to support reproducible research, community-driven innovation, and further advances in efficient open
+language modeling.
+
+
+Acknowledgements
+We are deeply grateful to the LLM360 team and the Miles team for their invaluable support throughout the
+development of our model. We dedicate this work to the memory of Zicheng Liu, whose vision and leadership
+continue to inspire our team.
+
+
+References
+Loubna Ben Allal, Anton Lozhkov, Elie Bakouch, Gabriel Martín Blázquez, Guilherme Penedo, Lewis Tun-
+  stall, Andrés Marafioti, Hynek Kydlíček, Agustín Piqueres Lajarín, Vaibhav Srivastav, Joshua Lochner, Caleb
+  Fahlgren, Xuan-Son Nguyen, Clémentine Fourrier, Ben Burtenshaw, Hugo Larcher, Haojun Zhao, Cyril Za-
+  kka, Mathieu Morlon, Colin Raffel, Leandro von Werra, and Thomas Wolf. SmolLM2: When Smol Goes
+  Big – Data-Centric Training of a Small Language Model. arXiv preprint arXiv:2502.02737, 2025. URL
+  https://arxiv.org/abs/2502.02737.
+
+Training at Scale (TAS) Team AMD AI Brain. Primus: A Lightweight, Unified Training Framework for Large
+  Models on AMD GPUs. https://github.com/AMD-AGI/Primus, 2025.
+
+Anthropic. Claude Fable 5 and Claude Mythos 5, 2026.                 URL https://www.anthropic.com/news/
+  claude-fable-5-mythos-5.
+
+Elie Bakouch, Loubna Ben Allal, Anton Lozhkov, Nouamane Tazi, Lewis Tunstall, Carlos Miguel Patiño, Ed-
+   ward Beeching, Aymeric Roucher, Aksel Joonas Reedi, Quentin Gallouédec, Kashif Rasul, Nathan Habib,
+   Clémentine Fourrier, Hynek Kydlicek, Guilherme Penedo, Hugo Larcher, Mathieu Morlon, Vaibhav Srivas-
+   tav, Joshua Lochner, Xuan-Son Nguyen, Colin Raffel, Leandro von Werra, and Thomas Wolf. SmolLM3:
+   smol, multilingual, long-context reasoner. https://huggingface.co/blog/smollm3, 2025.
+
+Loubna Ben Allal, Anton Lozhkov, and Elie Bakouch. SmolLM: Blazingly Fast and Remarkably Powerful, July
+  2024. URL https://huggingface.co/blog/smollm.
+
+Yonatan Bisk, Rowan Zellers, Ronan Le Bras, Jianfeng Gao, and Yejin Choi. PIQA: Reasoning about Physical
+  Commonsense in Natural Language. In AAAI, 2020.
+
+Christopher Clark, Kenton Lee, Ming-Wei Chang, Tom Kwiatkowski, Michael Collins, and Kristina Toutanova.
+  BoolQ: Exploring the Surprising Difficulty of Natural Yes/No Questions. In NAACL, 2019.
+
+Peter Clark, Isaac Cowhey, Oren Etzioni, Tushar Khot, Ashish Sabharwal, Carissa Schoenick, and Oyvind
+  Tafjord. Think you have Solved Question Answering? Try ARC, the AI2 Reasoning Challenge. arXiv preprint
+  arXiv:1803.05457, 2018. URL https://arxiv.org/abs/1803.05457.
+
+Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Heewoo Jun, Lukasz Kaiser, Matthias Plap-
+  pert, Jerry Tworek, Jacob Hilton, Reiichiro Nakano, Christopher Hesse, and John Schulman. Training
+  Verifiers to Solve Math Word Problems. arXiv preprint arXiv:2110.14168, 2021. URL https://arxiv.org/
+  abs/2110.14168.
+
+Tri Dao. FlashAttention-2: Faster Attention with Better Parallelism and Work Partitioning. In ICLR, 2024.
+
+                                                       20
+                                          Instella-MoE Technical Report
+
+DeepSeek-AI. DeepSeek-V3 Technical Report. arXiv preprint arXiv:2412.19437, 2024a. URL https://arxiv.
+  org/abs/2412.19437.
+
+DeepSeek-AI. DeepSeek-V2: A Strong, Economical, and Efficient Mixture-of-Experts Language Model. arXiv
+  preprint arXiv:2405.04434, 2024b. URL https://arxiv.org/abs/2405.04434.
+
+DeepSeek-AI. DeepSeek-V4: Towards Highly Efficient Million-Token Context Intelligence, 2026. URL https:
+  //huggingface.co/deepseek-ai/DeepSeek-V4-Pro.
+
+Yann Dubois, Balázs Galambosi, Percy Liang, and Tatsunori B. Hashimoto. Length-Controlled AlpacaEval: A
+  Simple Way to Debias Automatic Evaluators. In COLM, 2024.
+
+Yonatan Dukler, Guihong Li, Deval Shah, Jiang Liu, Vikram Appia, and Emad Barsoum. FarSkip-Collective:
+  Unhobbling Blocking Communication in Mixture of Experts Models. arXiv preprint arXiv:2511.11505, 2026.
+  URL https://arxiv.org/abs/2511.11505.
+
+Leo Gao, Jonathan Tow, Baber Abbasi, Stella Biderman, Sid Black, Anthony DiPofi, Charles Foster, Laurence
+  Golding, Jeffrey Hsu, Alain Le Noac’h, Haonan Li, Kyle McDonell, Niklas Muennighoff, Chris Ociepa, Jason
+  Phang, Laria Reynolds, Hailey Schoelkopf, Aviya Skowron, Lintang Sutawika, Eric Tang, Anish Thite, Ben
+  Wang, Kevin Wang, and Andy Zou. The language model evaluation harness, 07 2024. URL https://zenodo.
+  org/records/12608602.
+
+Gemini Team. Gemini 3.1 Pro Model Card, 2026. URL https://deepmind.google/models/model-cards/
+  gemini-3-1-pro/.
+
+Gemma Team. Gemma 4: Our Most Intelligent Open Models, 2026. URL https://deepmind.google/models/
+  gemma/gemma-4/.
+
+Scott Geng, Hamish Ivison, Chun-Liang Li, Maarten Sap, Jerry Li, Ranjay Krishna, and Pang Wei Koh. The
+  Delta Learning Hypothesis: Preference Tuning on Weak Data can Yield Strong Gains. arXiv preprint
+  arXiv:2507.06187, 2025. URL https://arxiv.org/abs/2507.06187.
+
+Fabian Gloeckle, Badr Youbi Idrissi, Baptiste Rozière, David Lopez-Paz, and Gabriel Synnaeve. Better & Faster
+  Large Language Models via Multi-token Prediction. arXiv preprint arXiv:2404.19737, 2024. URL https:
+  //arxiv.org/abs/2404.19737.
+
+Dirk Groeneveld, Iz Beltagy, Evan Walsh, Akshita Bhagia, Rodney Kinney, Oyvind Tafjord, Ananya Jha, Hamish
+  Ivison, Ian Magnusson, Yizhong Wang, Shane Arora, David Atkinson, Russell Authur, Khyathi Chandu,
+  Arman Cohan, Jennifer Dumas, Yanai Elazar, Yuling Gu, Jack Hessel, Tushar Khot, William Merrill, Jacob
+  Morrison, Niklas Muennighoff, Aakanksha Naik, Crystal Nam, Matthew Peters, Valentina Pyatkin, Abhilasha
+  Ravichander, Dustin Schwenk, Saurabh Shah, William Smith, Emma Strubell, Nishant Subramani, Mitchell
+  Wortsman, Pradeep Dasigi, Nathan Lambert, Kyle Richardson, Luke Zettlemoyer, Jesse Dodge, Kyle Lo, Luca
+  Soldaini, Noah Smith, and Hannaneh Hajishirzi. OLMo: Accelerating the Science of Language Models. In
+  ACL, 2024.
+
+Yuling Gu, Oyvind Tafjord, Bailey Kuehl, Dany Haddad, Jesse Dodge, and Hannaneh Hajishirzi. OLMES: A
+  Standard for Language Model Evaluations. In NAACL Findings, 2025.
+
+Yinghui He, Abhishek Panigrahi, Yong Lin, and Sanjeev Arora. Skill-Targeted Adaptive Training. arXiv preprint
+  arXiv:2510.10023, 2025. URL https://arxiv.org/abs/2510.10023.
+
+Dan Hendrycks, Collin Burns, Steven Basart, Andy Zou, Mantas Mazeika, Dawn Song, and Jacob Steinhardt.
+  Measuring Massive Multitask Language Understanding. In ICLR, 2021a.
+
+Dan Hendrycks, Collin Burns, Saurav Kadavath, Akul Arora, Steven Basart, Eric Tang, Dawn Song, and Jacob
+  Steinhardt. Measuring Mathematical Problem Solving With the MATH Dataset. In NeurIPS, 2021b.
+
+Cheng-Ping Hsieh, Simeng Sun, Samuel Kriman, Shantanu Acharya, Dima Rekesh, Fei Jia, Yang Zhang, and
+  Boris Ginsburg. RULER: What’s the Real Context Size of Your Long-Context Language Models? In COLM,
+  2024.
+
+
+                                                       21
+                                          Instella-MoE Technical Report
+
+Siming Huang, Tianhao Cheng, Jason Klein Liu, Weidi Xu, Jiaran Hao, Liuyihan Song, Yang Xu, Jian Yang,
+  Jiaheng Liu, Chenchen Zhang, Linzheng Chai, Ruifeng Yuan, Xianzhen Luo, Qiufeng Wang, YuanTao Fan,
+  Qingfu Zhu, Zhaoxiang Zhang, Yang Gao, Jie Fu, Qian Liu, Houyi Li, Ge Zhang, Yuan Qi, Xu Yinghui, Wei
+  Chu, and Zili Wang. OpenCoder: The Open Cookbook for Top-Tier Code Large Language Models. In ACL,
+  2025.
+Naman Jain, King Han, Alex Gu, Wen-Ding Li, Fanjia Yan, Tianjun Zhang, Sida Wang, Armando Solar-Lezama,
+  Koushik Sen, and Ion Stoica. LiveCodeBench: Holistic and Contamination Free Evaluation of Large Lan-
+  guage Models for Code. In ICLR, 2025.
+Fan Jiang, Yu Zhao, Chenyang Lyu, Tianqi Shi, Yichao Du, Feihu Jiang, Longyue Wang, and Weihua Luo.
+  Marco-MoE: Open Multilingual Mixture-of-Expert Language Models with Efficient Upcycling. arXiv preprint
+  arXiv:2604.25578, 2026. URL https://arxiv.org/abs/2604.25578.
+Mandar Joshi, Eunsol Choi, Daniel S Weld, and Luke Zettlemoyer. Triviaqa: A large scale distantly supervised
+ challenge dataset for reading comprehension. In ACL, 2017.
+Rabeeh Karimi Mahabadi, Sanjeev Satheesh, Shrimai Prabhumoye, Mostofa Patwary, Mohammad Shoeybi,
+  and Bryan Catanzaro. Nemotron-CC-Math: A 133 Billion-Token-Scale High Quality Math Pretraining
+  Dataset. arXiv preprint arXiv:2508.15096, 2025. URL https://arxiv.org/abs/2508.15096.
+Tomáš Kočiskỳ, Jonathan Schwarz, Phil Blunsom, Chris Dyer, Karl Moritz Hermann, Gábor Melis, and Ed-
+  ward Grefenstette. The narrativeqa reading comprehension challenge. Transactions of the Association for
+  Computational Linguistics, 6:317–328, 2018.
+Tom Kwiatkowski, Jennimaria Palomaki, Olivia Redfield, Michael Collins, Ankur Parikh, Chris Alberti, Danielle
+  Epstein, Illia Polosukhin, Jacob Devlin, Kenton Lee, et al. Natural questions: a benchmark for question
+  answering research. Transactions of the Association for Computational Linguistics, 7:453–466, 2019.
+Aitor Lewkowycz, Anders Andreassen, David Dohan, Ethan Dyer, Henryk Michalewski, Vinay Ramasesh, Am-
+  brose Slone, Cem Anil, Imanol Schlag, Theo Gutman-Solo, et al. Solving quantitative reasoning problems
+  with language models. In NeurIPS, 2022.
+Jiang Liu, Jialian Wu, Xiaodong Yu, Yusheng Su, Prakamya Mishra, Gowtham Ramesh, Sudhanshu Ranjan,
+   Chaitanya Manem, Ximeng Sun, Ze Wang, Pratik Prabhanjan Brahma, Zicheng Liu, and Emad Barsoum.
+   Instella: Fully Open Language Models with Stellar Performance. arXiv preprint arXiv:2511.10628, 2025a.
+   URL https://arxiv.org/abs/2511.10628.
+Jiawei Liu, Chunqiu Steven Xia, Yuyao Wang, and Lingming Zhang. Is Your Code Generated by ChatGPT
+   Really Correct? Rigorous Evaluation of Large Language Models for Code Generation. In NeurIPS, 2023.
+Jingyuan Liu, Jianlin Su, Xingcheng Yao, Zhejun Jiang, Guokun Lai, Yulun Du, Yidao Qin, Weixin Xu, Enzhe
+  Lu, Junjie Yan, Yanru Chen, Huabin Zheng, Yibo Liu, Shaowei Liu, Bohong Yin, Weiran He, Han Zhu,
+  Yuzhi Wang, Jianzhou Wang, Mengnan Dong, Zheng Zhang, Yongsheng Kang, Hao Zhang, Xinran Xu,
+  Yutao Zhang, Yuxin Wu, Xinyu Zhou, and Zhilin Yang. Muon is Scalable for LLM Training. arXiv preprint
+  arXiv:2502.16982, 2025b. URL https://arxiv.org/abs/2502.16982.
+Zichen Liu, Changyu Chen, Wenjun Li, Penghui Qi, Tianyu Pang, Chao Du, Wee Sun Lee, and Min Lin.
+  Understanding r1-zero-like training: A critical perspective. arXiv preprint arXiv:2503.20783, 2025c. URL
+  https://arxiv.org/abs/2503.20783.
+Anton Lozhkov, Loubna Ben Allal, Elie Bakouch, Leandro von Werra, and Thomas Wolf. FineMath: the Finest
+  Collection of Mathematical Content, 2024. URL https://huggingface.co/datasets/HuggingFaceTB/
+  finemath.
+Wenhan Ma, Hailin Zhang, Liang Zhao, Yifan Song, Yudong Wang, Zhifang Sui, and Fuli Luo. Stabilizing
+ MoE Reinforcement Learning by Aligning Training and Inference Routers. arXiv preprint arXiv:2510.11370,
+ 2025. URL https://arxiv.org/abs/2510.11370.
+Wenhan Ma, Jianyu Wei, Liang Zhao, Hailin Zhang, Bangjun Xiao, Lei Li, Qibin Yang, Bofei Gao, Yudong
+ Wang, Rang Li, et al. Mopd: Multi-teacher on-policy distillation for capability integration in llm post-
+ training. arXiv preprint arXiv:2606.30406, 2026. URL https://arxiv.org/abs/2606.30406.
+
+
+                                                       22
+                                        Instella-MoE Technical Report
+
+Meta AI. The Llama 4 Herd: The Beginning of a New Era of Natively Multimodal AI Innovation, 2025. URL
+ https://ai.meta.com/blog/llama-4-multimodal-intelligence/.
+Meta Superintelligence Labs. Introducing Muse Spark: Scaling Towards Personal Superintelligence, 2026.
+ URL https://ai.meta.com/blog/introducing-muse-spark-msl/.
+Todor Mihaylov, Peter Clark, Tushar Khot, and Ashish Sabharwal. Can a Suit of Armor Conduct Electricity?
+  A New Dataset for Open Book Question Answering. In EMNLP, 2018.
+Mistral AI. Introducing Mistral 3, 2025. URL https://mistral.ai/news/mistral-3/.
+Moonshot AI. Kimi K3: Open Frontier Intelligence. arXiv preprint arXiv:2607.24653, 2026. URL https:
+ //arxiv.org/abs/2607.24653.
+Niklas Muennighoff, Luca Soldaini, Dirk Groeneveld, Kyle Lo, Jacob Morrison, Sewon Min, Weijia Shi,
+  Evan Pete Walsh, Oyvind Tafjord, Nathan Lambert, Yuling Gu, Shane Arora, Akshita Bhagia, Dustin
+  Schwenk, David Wadden, Alexander Wettig, Binyuan Hui, Tim Dettmers, Douwe Kiela, Ali Farhadi, Noah A.
+  Smith, Pang Wei Koh, Amanpreet Singh, and Hannaneh Hajishirzi. OLMoE: Open Mixture-of-Experts Lan-
+  guage Models. In ICLR, 2025.
+NVIDIA. NVIDIA Nemotron Nano 2: An Accurate and Efficient Hybrid Mamba-Transformer Reasoning Model.
+ arXiv preprint arXiv:2508.14444, 2025. URL https://arxiv.org/abs/2508.14444.
+NVIDIA. Nemotron-SFT-Competitive-Programming-v2, 2026.                  URL https://huggingface.co/datasets/
+ nvidia/Nemotron-SFT-Competitive-Programming-v2.
+Team OLMo, Pete Walsh, Luca Soldaini, Dirk Groeneveld, Kyle Lo, Shane Arora, Akshita Bhagia, Yul-
+  ing Gu, Shengyi Huang, Matt Jordan, Nathan Lambert, Dustin Schwenk, Oyvind Tafjord, Taira Ander-
+  son, David Atkinson, Faeze Brahman, Christopher Clark, Pradeep Dasigi, Nouha Dziri, Michal Guerquin,
+  Hamish Ivison, Pang Wei Koh, Jiacheng Liu, Saumya Malik, William Merrill, Lester James V. Miranda,
+  Jacob Morrison, Tyler Murray, Crystal Nam, Valentina Pyatkin, Aman Rangapur, Michael Schmitz, Sam
+  Skjonsberg, David Wadden, Christopher Wilhelm, Michael Wilson, Luke Zettlemoyer, Ali Farhadi, Noah A.
+  Smith, and Hannaneh Hajishirzi. 2 OLMo 2 Furious. arXiv preprint arXiv:2501.00656, 2024. URL
+  https://arxiv.org/abs/2501.00656.
+Team Olmo, Allyson Ettinger, Amanda Bertsch, Bailey Kuehl, David Graham, David Heineman, Dirk Groen-
+  eveld, Faeze Brahman, Finbarr Timbers, Hamish Ivison, et al. Olmo 3. arXiv preprint arXiv:2512.13961,
+  2025. URL https://arxiv.org/abs/2512.13961.
+OpenAI. GPT-5.6 System Card, 2026. URL https://deploymentsafety.openai.com/gpt-5-6.
+Bowen Peng, Jeffrey Quesnelle, Honglu Fan, and Enrico Shippole. YaRN: Efficient Context Window Extension
+  of Large Language Models. In ICLR, 2024.
+Valentina Pyatkin, Saumya Malik, Victoria Graf, Hamish Ivison, Shengyi Huang, Pradeep Dasigi, Nathan
+  Lambert, and Hannaneh Hajishirzi. Generalizing verifiable instruction following. NeurIPS, 2025.
+Zihan Qiu, Zekun Wang, Bo Zheng, Zeyu Huang, Kaiyue Wen, Songlin Yang, Rui Men, Le Yu, Fei Huang,
+  Suozhi Huang, Dayiheng Liu, Jingren Zhou, and Junyang Lin. Gated Attention for Large Language Models:
+  Non-linearity, Sparsity, and Attention-Sink-Free. arXiv preprint arXiv:2505.06708, 2025. URL https://
+  arxiv.org/abs/2505.06708.
+Qwen Team. Qwen3.5: Towards Native Multimodal Agents, February 2026a. URL https://qwen.ai/blog?
+ id=qwen3.5.
+Qwen Team. Qwen3.8-Max: A New Bar for Coding and Cowork, 2026b. URL https://www.alibabacloud.
+ com/blog/qwen3-8-max-a-new-bar-for-coding-and-cowork_603421.
+Team RadixArk. Miles: A PyTorch-Native Stack for Large-Scale LLM RL Post-Training. https://github.com/
+  radixark/miles, 2025.
+Rafael Rafailov, Archit Sharma, Eric Mitchell, Christopher D Manning, Stefano Ermon, and Chelsea Finn.
+  Direct Preference Optimization: Your Language Model is Secretly a Reward Model. In NeurIPS, 2023.
+
+
+                                                     23
+                                         Instella-MoE Technical Report
+
+David Rein, Betty Li Hou, Asa Cooper Stickland, Jackson Petty, Richard Yuanzhe Pang, Julien Dirani, Julian
+  Michael, and Samuel R. Bowman. GPQA: A Graduate-Level Google-Proof Q&A Benchmark. In COLM, 2024.
+Keisuke Sakaguchi, Ronan Le Bras, Chandra Bhagavatula, and Yejin Choi. WinoGrande: An Adversarial
+  Winograd Schema Challenge at Scale. In AAAI, 2020.
+Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang,
+  Y. K. Li, Y. Wu, and Daya Guo. DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open
+  Language Models. arXiv preprint arXiv:2402.03300, 2024. URL https://arxiv.org/abs/2402.03300.
+Noam Shazeer, Azalia Mirhoseini, Krzysztof Maziarz, Andy Davis, Quoc Le, Geoffrey Hinton, and Jeff
+  Dean. Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer. arXiv preprint
+  arXiv:1701.06538, 2017. URL https://arxiv.org/abs/1701.06538.
+Mohammad Shoeybi, Mostofa Patwary, Raul Puri, Patrick LeGresley, Jared Casper, and Bryan Catanzaro.
+ Megatron-lm: Training multi-billion parameter language models using model parallelism. arXiv preprint
+ arXiv:1909.08053, 2019. URL https://arxiv.org/abs/1909.08053.
+Dan Su, Kezhi Kong, Ying Lin, Joseph Jennings, Brandon Norick, Markus Kliegl, Mostofa Patwary, Mohammad
+  Shoeybi, and Bryan Catanzaro. Nemotron-CC: Transforming Common Crawl into a Refined Long-Horizon
+  Pretraining Dataset. In ACL, 2025.
+Ximeng Sun, Aditya Singh, Gowtham Ramesh, Jiang Liu, Ze Wang, Sudhanshu Ranjan, Pratik Prabhan-
+  jan Brahma, Prakamya Mishra, Jialian Wu, Xiaodong Yu, Yusheng Su, Emad Barsoum, and Zicheng Liu.
+  Instella-VL-1B: First AMD Vision Language Model, March 2025. URL https://huggingface.co/amd/
+  Instella-VL-1B.
+Mirac Suzgun, Nathan Scales, Nathanael Schärli, Sebastian Gehrmann, Yi Tay, Hyung Won Chung, Aakanksha
+ Chowdhery, Quoc V. Le, Ed H. Chi, Denny Zhou, and Jason Wei. Challenging BIG-Bench Tasks and Whether
+ Chain-of-Thought Can Solve Them. In ACL Findings, 2023.
+Liping Tang, Nikhil Ranjan, Omkar Pangarkar, Xuezhi Liang, Zhen Wang, Li An, Bhaskar Rao, Linghao Jin,
+  Huijuan Wang, Zhoujun Cheng, Suqi Sun, Cun Mu, Victor Miller, Xuezhe Ma, Yue Peng, Zhengzhong Liu,
+  and Eric P. Xing. TxT360: A Top-Quality LLM Pre-training Dataset Requires the Perfect Blend, 2024. URL
+  https://huggingface.co/spaces/LLM360/TxT360.
+Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N Gomez, Łukasz Kaiser,
+  and Illia Polosukhin. Attention is all you need. In NeurIPS, 2017.
+Ze Wang, Hao Chen, Benran Hu, Jiang Liu, Ximeng Sun, Jialian Wu, Yusheng Su, Xiaodong Yu, Emad Bar-
+  soum, and Zicheng Liu. Instella-T2I: Pushing the Limits of 1D Discrete Latent Space Image Generation.
+  arXiv preprint arXiv:2506.21022, 2025. URL https://arxiv.org/abs/2506.21022.
+Johannes Welbl, Nelson F. Liu, and Matt Gardner. Crowdsourcing Multiple Choice Science Questions. In
+  WNUT, 2017.
+An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao, Chengen
+  Huang, Chenxu Lv, et al. Qwen3 Technical Report. arXiv preprint arXiv:2505.09388, 2025. URL https:
+  //arxiv.org/abs/2505.09388.
+Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William W Cohen, Ruslan Salakhutdinov, and Christo-
+  pher D Manning. HotpotQA: A dataset for diverse, explainable multi-hop question answering. In EMNLP,
+  2018.
+Zhuolin Yang, Zihan Liu, Yang Chen, Wenliang Dai, Boxin Wang, Sheng-Chieh Lin, Chankyu Lee, Yangyi Chen,
+  Dongfu Jiang, Jie He, Renjie Pi, Grace Lam, Nayeon Lee, Alexander Bukharin, Mohammad Shoeybi, Bryan
+  Catanzaro, and Wei Ping. Nemotron-Cascade 2: Post-Training LLMs with Cascade RL and Multi-Domain
+  On-Policy Distillation. arXiv preprint arXiv:2603.19220, 2026. URL https://arxiv.org/abs/2603.19220.
+Feng Yao, Liyuan Liu, Dinghuai Zhang, Chengyu Dong, Jingbo Shang, and Jianfeng Gao. Your Efficient
+  RL Framework Secretly Brings You Off-Policy RL Training, aug 2025. URL https://fengyao.notion.site/
+  off-policy-rl.
+
+
+                                                      24
+                                         Instella-MoE Technical Report
+
+Howard Yen, Tianyu Gao, Minmin Hou, Ke Ding, Daniel Fleischer, Peter Izsak, Moshe Wasserblat, and Danqi
+  Chen. Helmet: How to evaluate long-context language models effectively and thoroughly. In ICLR, 2025.
+Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gaohong
+  Liu, Lingjun Liu, Xin Liu, Haibin Lin, Zhiqi Lin, Bole Ma, Guangming Sheng, Yuxuan Tong, Chi Zhang,
+  Mofan Zhang, Wang Zhang, Hang Zhu, Jinhua Zhu, Jiaze Chen, Jiangjie Chen, Chengyi Wang, Hongli Yu,
+  Yuxuan Song, Xiangpeng Wei, Hao Zhou, Jingjing Liu, Wei-Ying Ma, Ya-Qin Zhang, Lin Yan, Mu Qiao,
+  Yonghui Wu, and Mingxuan Wang. DAPO: An Open-Source LLM Reinforcement Learning System at Scale.
+  arXiv preprint arXiv:2503.14476, 2025. URL https://arxiv.org/abs/2503.14476.
+Z.ai Team. GLM-5.3: Frontier Coding with Emergent Cyber Capabilities, 2026. URL https://z.ai/blog/
+  glm-5.3.
+Rowan Zellers, Ari Holtzman, Yonatan Bisk, Ali Farhadi, and Yejin Choi. HellaSwag: Can a Machine Really
+  Finish Your Sentence? In ACL, 2019.
+Xinrong Zhang, Yingfa Chen, Shengding Hu, Zihang Xu, Junhao Chen, Moo Hao, Xu Han, Zhen Thai, Shuo
+  Wang, Zhiyuan Liu, et al. ∞ Bench: Extending long context evaluation beyond 100k tokens. In ACL, 2024.
+Lianmin Zheng, Liangsheng Yin, Zhiqiang Xie, Chuyue Sun, Jeff Huang, Cody H Yu, Shiyi Cao, Christos
+  Kozyrakis, Ion Stoica, Joseph E Gonzalez, et al. Sglang: Efficient execution of structured language model
+  programs. In NeurIPS, 2024.
+Wanjun Zhong, Ruixiang Cui, Yiduo Guo, Yaobo Liang, Shuai Lu, Yanlin Wang, Amin Saied, Weizhu Chen,
+ and Nan Duan. Agieval: A human-centric benchmark for evaluating foundation models. In NAACL Findings,
+ 2024.
+Fan Zhou, Zengzhi Wang, Nikhil Ranjan, Zhoujun Cheng, Liping Tang, Guowei He, Zhengzhong Liu, and
+  Eric P. Xing. MegaMath: Pushing the Limits of Open Math Corpora. In COLM, 2025a.
+Jeffrey Zhou, Tianjian Lu, Swaroop Mishra, Siddhartha Brahma, Sujoy Basu, Yi Luan, Denny Zhou, and
+  Le Hou. Instruction-Following Evaluation for Large Language Models. arXiv preprint arXiv:2311.07911,
+  2023. URL https://arxiv.org/abs/2311.07911.
+Yuzhen Zhou, Jiajun Li, Yusheng Su, Gowtham Ramesh, Zilin Zhu, Xiang Long, Chenyang Zhao, Jin Pan,
+  Xiaodong Yu, Ze Wang, Kangrui Du, Jialian Wu, Ximeng Sun, Jiang Liu, Qiaolin Yu, Hao Chen, Zicheng
+  Liu, and Emad Barsoum. APRIL: Active Partial Rollouts in Reinforcement Learning to Tame Long-tail
+  Generation. arXiv preprint arXiv:2509.18521, 2025b. URL https://arxiv.org/abs/2509.18521.
+Zilin Zhu, Chengxing Xie, Xin Lv, and slime Contributors. slime: An LLM post-training framework for RL
+  Scaling. https://github.com/THUDM/slime, 2025. GitHub repository. Corresponding author: Xin Lv.
+
+
+
+
+                                                      25
+                                                Instella-MoE Technical Report
+
+    Standard Connectivity             (Comm.)                          FarSkip-Collective Connectivity
+
+    GPU 1      Activation   Block N              Block N+1             GPU 1      Activation        Block N   Block N+1
+
+    GPU 2      Activation   Block N              Block N+1             GPU 2      Activation        Block N   Block N+1
+
+    GPU 3      Activation   Block N              Block N+1             GPU 3      Activation        Block N   Block N+1
+
+
+
+
+                                                                                                              (Comm.)
+
+Figure 9: FarSkip-Collective connectivity (Dukler et al., 2026). FarSkip-Collective modifies the connectivity
+between sub-blocks to avoid waiting for communication collectives. Computation continues with available
+activations, partial (e.g., Block N output) or outdated (e.g., Activation).
+
+
+A      Overlapped Implementation of Instella-MoE
+Instella-MoE employs FarSkip-Collective connectivity, which overlaps communication with computation by
+passing outdated and partial activations into MoE and attention layers (Figure 9), reducing communication
+bubbles while maintaining model accuracy. To explicitly achieve communication overlap during Instella-MoE
+training with FarSkip-Collective, we develop a custom model implementation that modularly enforces hard-
+ware overlap while avoiding custom kernels for portability. We go over our implementation techniques below.
+On GPU hardware, communication-computation overlap ensures computation continues throughout the work-
+load while communication is running simultaneously. This improves utilization and relies on sharing CUs
+between communication and computation kernels during runtime. The standard approach to implementing
+overlap is relying on the asynchronous launching behavior of kernels via torch.distributed’s async_op=True
+flag that will yield back after queuing the kernel. This is coupled with .wait() barriers that are used for safe
+access of the communicated tensors. We use this approach during the forward pass as we explicitly order the
+model operations to maximize overlap. Nonetheless, during the backward pass, using torch.autograd makes
+explicit operator ordering and .wait() calls inaccessible. To resolve this we use the approach proposed by
+Dukler et al. (2026) (see Appendix C therein), developing race-safe asynchronous backward communication
+operations and combining them with sequence number re-prioritization using the Sequence Number API.1
+Benchmarking our overlapped implementation during pre-training against the standard connectivity variant,
+we achieve a 12.7% training speed-up (Figure 8).
+For inference, we implement communication-overlapped expert-parallel generation with support for both
+tensor-parallel attention and data-parallel attention to support Instella-MoE’s Gated-MLA-based attention. In
+addition to overlapping, by aggregating communication we are able to sum and communicate combined ten-
+sors, which allows us to further reduce the total communication volume. Using our implementation we raise
+time-to-first-token (TTFT) throughput by 39.2% by overlapping communication when serving Instella-MoE
+using 8×MI325X GPUs (Figure 8). The exact overlapped implementation code is included and documented
+in our release github.com/AMD-AGI/Instella-MoE.
+
+
+B      SFT Data Curation Details
+We provide additional details on the feedback-driven final-stage data curation introduced in the main text. We
+first present representative teacher error analyses and the retrieval queries derived from them, then describe
+how these queries are converted into selected training examples, and finally specify the underlying data splits
+and selection budget.
+Error analyses and policies: each seed problem that the student answers incorrectly is passed to the judge
+model, which returns a structured error analysis whose fields record the failure mode, the skills the stu-
+dent lacks, and a description of the training data that would address the gap. Tables 15 and 16 report two
+such analyses, one for a mathematics problem and one for a coding problem, with the student’s response
+    1 https://github.com/pytorch/pytorch/blob/main/aten/src/ATen/SequenceNumber.h
+
+
+
+                                                             26
+                                              Instella-MoE Technical Report
+
+summarized rather than reproduced verbatim. Within each domain, the reflection model aggregates these
+per-problem analyses into a policy: a set of retrieval queries whose weights are normalized to one and collec-
+tively define the target distribution for selection. Table 17 shows five queries sampled at random from each
+targeted-domain policy, with those queries sorted by weight.
+
+Table 15: Teacher error analysis (mathematics). Structured analysis produced by the judge model for
+a representative reasoning failure. The analysis is presented here under the consolidated fields domain,
+complexity, error, skills, would help, and summary; the problem statement is shown only for context.
+
+ Problem (reference answer 503). The probability that a set of three distinct vertices chosen at random from among
+                                                                  93
+ the vertices of a regular n-gon determine an obtuse triangle is 125 . Find the sum of all possible values of n.
+ Domain        math → combinatorics and geometry → Determining the probability that three randomly
+               chosen vertices of a regular n-gon form an obtuse triangle by analyzing arc lengths and using
+               symmetry, then solving for n given a specific probability value
+ Complexity    Multi-step: requires understanding geometric properties of cyclic polygons, distinguishing
+               between acute, right, and obtuse triangles based on arc measures, deriving general formulas for
+               the number of obtuse triangles in terms of n for both even and odd cases, setting up and solving
+               rational equations, and verifying solutions against constraints.
+ Error         Incorrect approach and incomplete reasoning: focused on a specific small case (hexagon)
+               instead of generalizing, made counting errors, misapplied angle formulas, failed to derive the
+               correct general formula, and did not solve for n
+ Skills        The student lacks the ability to generalize from a specific example to a general formula, does
+               not understand the relationship between central arcs and inscribed angles in a circle, fails to
+               recognize that only one angle in a triangle can be obtuse and that it corresponds to the largest
+               arc opposite it, and does not know how to count triangles lying on a semicircle or subtract right
+               triangles appropriately. Additionally, the student does not know how to set up and solve
+               equations involving binomial coefficients and rational expressions to find integer solutions.
+ Would help    Problems involving probability of triangle types in regular polygons with step-by-step solutions
+               that derive general formulas using symmetry and arc-length arguments, especially those that
+               distinguish between even and odd n, explain the connection between inscribed angles and arcs,
+               and show how to count configurations on semicircles. Examples should include worked
+               derivations of the number of obtuse triangles as a function of n, followed by solving equations
+               like 3(n − 3)/(4(n − 2)) = 93/125.
+ Summary       The student incorrectly focused on a specific case (n = 6) and attempted to manually count
+               obtuse triangles by examining arcs, but failed to generalize the method to arbitrary n. They
+               made errors in counting pairs and misapplied geometric principles, such as incorrectly relating
+               arc length to angle measure. The reasoning never led to a general formula for the number of
+               obtuse triangles, nor did it result in solving the equation for n. The correct approach requires
+               deriving separate formulas for odd and even n based on semicircle containment and right
+               triangle counts, then solving the resulting rational equations. The student’s work is incomplete,
+               inconsistent, and does not reach the correct values of n or their sum.
+
+
+From queries to selected examples: each targeted-domain policy is a list of retrieval queries with non-
+negative weights that sum to one. Selection uses a two-level allocation of the 512K budget B. First, B is
+split across domains in the same proportions as the base mixture, giving a per-domain budget Bdom . Within a
+targeted domain, a query with weight wi retrieves ⌊ Bdom wi (1 − α)⌋ nearest neighbors from the pool by cosine
+similarity in a shared embedding space. Because the weights sum to one, the retrieved examples account for
+approximately a (1 − α) share of the domain budget after integer rounding; the remaining budget is filled
+with random same-domain examples. This random component preserves coverage and prevents the mixture
+from collapsing onto the retrieved neighborhoods. We use α = 0.5. The non-targeted other domain has no
+policy, so its entire budget is filled by random sampling within that domain.
+Data splits and budget: the curation operates over four disjoint sets that mirror the stages of the pipeline.
+Diagnosis and query generation run on a held-out seed set of problems paired with reference answers: for
+mathematics we use AIME problems through 2022, and for coding we use problems drawn from the Nemotron
+pool. To measure the effect of curation without leakage, a separate scoring set is reserved for evaluation and
+never enters selection. Retrieval then draws from the full instruction-tuning training pool. We remove any
+content that overlaps with either the seed set or the scoring set so that neither diagnostic nor evaluation prob-
+lems can be reselected, and we drop any example longer than 32K tokens before embedding. The examples
+
+                                                           27
+                                               Instella-MoE Technical Report
+
+Table 16: Teacher error analysis (coding). Structured analysis produced by the judge model for a repre-
+sentative reasoning failure, presented under the same consolidated fields as Table 15; the problem statement
+is shown only for context.
+
+ Problem. A dog starts at x = 0 and runs right at unit speed past n bowls at x = 1, . . . , n; bowl i becomes edible only
+ at time ti . On reaching a hot bowl the dog may wait until ti (delaying every later bowl) or skip it and continue.
+ Maximize the number of bowls eaten within T seconds.
+ Domain         algorithmic problem solving → dynamic programming with greedy optimization and binary
+                search → strategic decision-making in a time-constrained sequential process where the choice
+                to skip a valid option may enable a better overall outcome, requiring a non-greedy, globally
+                optimal strategy rather than a local greedy one
+ Complexity     multi-step with backtracking and optimization: requires recognizing that a greedy approach of
+                eating every valid bowl immediately is suboptimal, understanding the trade-off between waiting
+                at a bowl and skipping it to reach more bowls later, and implementing a binary search with
+                heap-based feasibility checking to efficiently evaluate the maximum number of bowls that can
+                be eaten under constraints
+ Error          incorrect greedy assumption and failure to model strategic skipping decisions
+ Skills         the student lacks the ability to recognize that optimal solutions in sequential decision problems
+                with time constraints may require skipping seemingly beneficial options to achieve a better
+                long-term outcome. They also lack familiarity with advanced techniques such as binary search
+                over answers combined with heap-based maintenance of critical values (like t j − j) to simulate
+                optimal skipping strategies. Additionally, they fail to understand how the timing of arrival and
+                cooling interacts with the decision to wait or skip.
+ Would help     problems involving optimal scheduling with trade-offs between immediate action and future
+                opportunities, especially those requiring binary search on answer combined with heap or
+                priority queue data structures to maintain state for feasibility checks. Examples should include
+                scenarios where skipping a valid option enables a better overall result, such as ‘minimum time to
+                complete tasks with dependencies and cooldowns’ or ‘maximize number of jobs with deadlines
+                and processing times’. Worked solutions should explicitly compare greedy vs. optimal strategies
+                and demonstrate why greedy fails in certain cases.
+ Summary        The student incorrectly assumes that eating every bowl for which max(i + 1, ti ) < T is optimal,
+                failing to recognize that skipping an early valid bowl might allow the dog to eat more bowls
+                later by avoiding delays. This greedy approach ignores the strategic trade-off between waiting
+                at a bowl (which delays the dog) and skipping it (which may enable reaching more bowls within
+                the time limit). The correct solution uses binary search on the number of bowls and a heap to
+                track the k − 1 smallest values of (t j − j) in the prefix, which helps determine whether skipping
+                certain bowls leads to a better overall outcome. The student’s reasoning is limited to local
+                validity checks and does not account for the global impact of skipping decisions, leading to a
+                fundamentally flawed strategy.
+
+
+returned by retrieval, together with the random same-domain fill described above, form the curated set: the
+final 512K mixture used for the last SFT phase, which contains the same number of samples per domain as
+the base mixture.
+Curation prompts: for reproducibility, we reproduce the prompts used by the pipeline verbatim. The judge
+model runs the correctness-verification prompt (Table 18) and, on incorrect responses, one of two error-
+analysis prompts—a general one (Table 19) and a coding-specific one (Table 20). The reflection model runs
+the policy prompt (Table 21) that turns the aggregated error analyses into weighted retrieval queries.
+
+
+C    Training Data Details
+We provide additional details on the data mixtures used across the training stages. All corpora are drawn
+from publicly available open-source datasets.
+Pre-training. The 7.1T-token pre-training corpus comprises web data, mathematics data, code data, cu-
+rated SFT-style data, and data from other domains: Nemotron-CC-v2 (Su et al., 2025; NVIDIA, 2025)
+(web); Nemotron-CC-Math-v1 (Karimi Mahabadi et al., 2025), MegaMath (Zhou et al., 2025a), and Fine-
+Math (Lozhkov et al., 2024) (mathematics); RefineCode (Huang et al., 2025) and Nemotron-Pretraining-
+
+
+                                                            28
+                                           Instella-MoE Technical Report
+
+  Table 17: Sample retrieval queries. Five queries drawn at random from each targeted-domain policy.
+
+    Domain   Weight   Query
+    Math      0.017   Coordinate geometry problems involving polygons with area equality constraints, fixed
+                      side alignments on triangle edges, or intersection conditions, requiring use of shoelace
+                      formula, vector dot products, and solving systems of equations derived from geometric
+                      constraints
+              0.009   Complex number geometry problems involving regular polygons inscribed in circles,
+                      roots of unity, rotational symmetries, and magnitude calculations of vector sums,
+                      requiring trigonometric identities and algebraic manipulation of complex expressions
+              0.009   Prime factorization analysis and divisor counting, including odd and even divisor
+                      separation and unordered factorization counting
+              0.007   Digit constraint problems including 9’s complement methods, counting numbers with
+                      specific digit properties, avoiding zero digits, and optimization over digit assignments
+              0.005   Diophantine equation problems involving counting positive integer solutions to linear
+                      equations with bounds, constraints on digit sums, and modular restrictions
+    Code      0.020   Graph algorithms focusing on BFS for shortest paths in state spaces, DFS for connectivity
+                      and component analysis, and Dijkstra’s algorithm for weighted shortest paths. Include
+                      problems with mathematical state spaces involving rational numbers, grid-based
+                      movement, and tree structures. Emphasize proper implementation of visited sets, queue
+                      management, and path reconstruction.
+              0.018   Strict input/output format compliance problems emphasizing precise input handling
+                      (preserving whitespace and avoiding premature .strip()), exact output string
+                      templates, JSON structure validation, and adherence to specific message formats.
+                      Include tasks where output formatting is as critical as algorithmic correctness, such as
+                      exact word counts, specific capitalization rules, and structured data output.
+              0.005   Spatial graph connectivity problems defined on geometric grids where adjacency
+                      depends on Manhattan distance, same-row or same-column proximity, or visibility lines.
+                      Include problems requiring sorting of coordinates by x or y values and connecting only
+                      spatially adjacent points, avoiding abstract bipartite graph misrepresentations.
+              0.003   Prolog and logic programming: predicate chaining, transformation pipelines
+                      (named_to_op_expr, prefix token conversion), compound term handling, and constraint
+                      logic programming without direct recursion.
+              0.003   Web application development using frameworks like Streamlit including API integration,
+                      HTTP requests, JSON response parsing, and interactive UI components. Include data
+                      persistence, state management across sessions, and responsive layout implementation.
+
+
+Table 18: Judge prompt. System prompt used by the LLM-as-judge to verify a student response against the
+reference answer.
+
+
+  You are a strict answer verifier. You will see a question, a reference (gold) solution, and a
+  student’s solution. Determine whether the student arrived at the correct final answer or output.
+
+  The task may be math, coding, science, instruction following, creative writing, or anything else.
+  Judge correctness based on the task type:
+  - Math/science: equivalent final answers count as correct (0.5 = 1/2, etc.)
+  - Code: output must be functionally equivalent (ignore whitespace, variable names)
+  - Instruction following: the student must satisfy the stated requirements
+  - Open-ended: use the reference as a guide; accept reasonable equivalents
+
+  Respond with EXACTLY one JSON object on a single line:
+  {"correct": true} or {"correct": false, "reason": "<brief explanation>"}
+
+
+
+
+                                                        29
+                                          Instella-MoE Technical Report
+
+Table 19: Error-analysis prompt (general). System prompt used by the judge model to produce a structured
+error analysis for an incorrect response.
+
+
+  You are analyzing why a student AI model produced a wrong answer. The task could be math, coding,
+  science, instruction following, creative writing, or anything else. Given the question, reference
+  solution, and the student’s incorrect output, provide detailed structured feedback. Be verbose and
+  descriptive in every field — write in natural language, not just labels.
+
+  Respond with EXACTLY one JSON object:
+  {
+  "domain": "<broad area: math, code, science, instruction_following, creative, general, etc.>",
+  "sub_domain": "<specific sub-field within the domain, e.g. ’combinatorics and counting’, ’dynamic
+  programming’, ’thermodynamics’, ’output format compliance’>",
+  "concept": "<describe the specific concept or skill being tested in plain English, e.g. ’applying
+  the inclusion-exclusion principle to count overlapping sets’, ’handling recursive base cases in tree
+  traversal’, ’following multi-part formatting instructions precisely’>",
+  "reasoning_complexity": "<describe what level of reasoning this task requires and why, e.g.
+  ’multi-step: requires setting up equations from word problem, solving the system, then verifying
+  constraints’, ’single-step: direct formula application’, ’multi-step with backtracking: requires
+  trying cases and eliminating invalid ones’>",
+  "error_type": "<describe what went wrong in a short phrase, e.g. ’confused area formula with
+  circumference formula’, ’off-by-one in loop boundary and wrong conditional ordering’, ’ignored
+  explicit bullet point and verb-first requirements’>",
+  "skills_lacking": "<describe in detail what knowledge or abilities the student is missing, e.g. ’the
+  student needs a firmer grasp of when to apply πr2 vs 2πr, and more generally how to distinguish
+  between area and perimeter formulas across shapes’>",
+  "what_would_help": "<describe what kind of training data would help the student get better at this,
+  written as a description suitable for retrieving similar examples from a large pool, e.g. ’geometry
+  problems that require choosing between area, perimeter, and volume formulas for circles, rectangles,
+  and spheres, with explicit worked solutions showing formula selection reasoning’>",
+  "summary": "<2-4 sentence detailed explanation of what went wrong, why the student’s approach
+  failed, and what the correct approach would have been>"
+  }
+
+
+
+Code-v1 (NVIDIA, 2025) (code); Nemotron-Pretraining-SFT-v1 (NVIDIA, 2025) (curated pre-training SFT-
+style data); and the TxT360 (Tang et al., 2024) subsets (other domains, including arxiv, dm_maths, europarl,
+freelaw, hackernews, pg19, phil_papers, pubmed, s2orc, stackexchange, ubuntu_irc, uspto, and wikipedia).
+Mid-training variants. The three mid-training variants share the Dolma 3 Dolmino 100B (Olmo et al., 2025)
+base mixture and differ only in a few STEM/reasoning subsets, as summarized in Table 22. All other subsets
+are identical across the variants.
+Long-context Stage 2. The Stage 2 mixture is a 37.32B-token curated blend of math, code, and reasoning
+data drawn from the Dolma 3 Dolmino 100B mix, the full Dolma 3 Dolmino pool (Olmo et al., 2025), and
+Instella-GSM8K-synthetic (Liu et al., 2025a). Table 23 reports the mixture at the level of individual source
+datasets, whereas Table 7 in the main text groups the same 37.32B tokens by domain.
+SFT Phase 1. The phase-1 SFT mixture combines a general instruction-following dataset with three tar-
+geted skill slices spanning mathematics, code, and science (Table 24). In Phase 2, the model is annealed on
+the feedback-driven curated 512K-example mixture described in Appendix B, which is selected from a can-
+didate pool comprising Dolci-Think-SFT-7B (Olmo et al., 2025), Nemotron-SFT-Competitive-Programming-
+v2 (NVIDIA, 2026), and Nemotron-Cascade-2 (Yang et al., 2026).
+Post-training preference and RL data. DPO uses the contrastive preference pairs from Dolci-Think-DPO-
+7B (Olmo et al., 2025). RL uses Dolci-Think-RL-7B: the IF-RL stage trains the instruction-following expert on
+the IF RLVR Mixture (the IF_multi_constraints slice), and the MOPD stage mixes the IF RLVR Mixture with
+the general prompts at an IF fraction of 0.5, with each prompt domain-tagged so the domain router sends it
+to either the IF-RL teacher or the frozen DPO anchor teacher.
+
+
+
+
+                                                       30
+                                         Instella-MoE Technical Report
+
+Table 20: Error-analysis prompt (coding). Coding-specific variant of the error-analysis prompt, used by the
+judge model for problems in the code domain.
+
+
+  You are analyzing why a student AI model produced a wrong answer on a CODING task. All tasks in this
+  set require writing code to solve — including scripts, automation, API usage, data processing, file
+  manipulation, web development, and system administration tasks. Even if a task looks like
+  "instruction following", the solution requires functional code.
+
+  Given the question, reference solution, and the student’s incorrect output, provide detailed
+  structured feedback focused on the coding skills needed. Be verbose and descriptive in every field —
+  write in natural language, not labels.
+
+  Respond with EXACTLY one JSON object:
+  {
+  "domain": "code",
+  "sub_domain": "<specific coding sub-field, e.g. ’string processing’, ’file I/O and scripting’, ’API
+  integration’, ’data parsing and transformation’, ’web scraping’, ’command-line tool usage’,
+  ’database queries’, ’text encoding and Unicode handling’>",
+  "concept": "<describe the specific coding concept or skill being tested, e.g. ’reading CSV files and
+  computing column statistics with pandas’, ’writing a bash script to recursively process files with
+  pandoc’, ’implementing UTF-16 endianness detection by analyzing byte order marks’>",
+  "reasoning_complexity": "<describe what level of coding reasoning this task requires, e.g.
+  ’multi-step: requires parsing input format, building data structure, applying transformation,
+  formatting output’, ’single-step: direct library call with correct parameters’>",
+  "error_type": "<describe what went wrong in coding terms, e.g. ’wrong library function used for file
+  traversal’, ’failed to handle edge case in string encoding’, ’produced pseudocode instead of
+  executable code’, ’incorrect regex pattern for parsing’>",
+  "skills_lacking": "<describe what coding knowledge or abilities the student is missing, e.g. ’the
+  student needs practice with Python’s os.walk for recursive directory traversal and subprocess for
+  calling external tools’>",
+  "what_would_help": "<describe what kind of coding training data would help, e.g. ’Python scripts
+  that automate file format conversion using subprocess and os.path, with complete working examples
+  showing error handling and edge cases’>",
+  "summary": "<2-4 sentence explanation of what went wrong in coding terms — what the code should have
+  done, what the student produced instead, and what coding approach would have been correct>"
+  }
+
+
+
+
+                                                      31
+                                          Instella-MoE Technical Report
+
+Table 21: Reflection (policy) prompt. System prompt used by the reflection model to turn aggregated error
+analyses into a weighted retrieval policy.
+
+
+  You are optimizing a data selection policy for training a student AI model.
+
+  The policy is a list of (prompt, weight) pairs:
+  - Each "prompt" describes what kind of training data to select from a large pool via embedding
+  similarity search.
+  - The "weight" controls what fraction of the training budget goes to that prompt.
+  - Weights must sum to <= 1.0. The remainder is filled with randomly selected data.
+
+  Based on the error analytics provided, propose a data selection policy. You should:
+  - ADD prompts to cover the error patterns observed
+  - ADJUST weights to reflect how frequently each pattern appears
+
+  Guidelines:
+  - Focus on what recurs across errors. A prompt can target a recurring domain (e.g. "contract law
+  case analysis"), a recurring skill (e.g. "multi-step unit conversions"), or both if the cluster is
+  tight enough (e.g. "thermodynamics with unit conversions between energy systems").
+  - Each prompt should cover MULTIPLE related errors, not a single problem.
+  - Aim for ∼25 prompts. Together they should cover all the major error clusters, not just the most
+  frequent ones.
+  - Look at the error examples to identify PATTERNS, not individual failures.
+  - Give higher weights to patterns that appear more frequently in the errors.
+  - Each prompt should describe training data in terms of TOPIC (e.g. "number theory", "graph
+  algorithms"), SKILLS (e.g. "modular arithmetic, CRT"), and COMPLEXITY (e.g. "multi-step reasoning
+  with case analysis"). Avoid vague or meta-skill prompts like "write correct code", "ensure proper
+  formatting", or "verify final answers".
+
+  Explain your reasoning, then provide the policy as a JSON array:
+  [
+  {"prompt": "description of desired training data", "weight": 0.XX},
+  ...
+  ]
+
+
+Table 22: Mid-training data-mixture variants. Token counts for the STEM/reasoning subsets that differ
+across the three mid-training variants; all remaining Dolma 3 Dolmino 100B subsets are unchanged. Full pool
+lists the size of each subset in the full Dolma 3 Dolmino pool for reference.
+
+         Type               Source                            v1              v2          v3    Full pool
+         Math (synth)       MegaMatt                     1.73B          1.73B           3.88B      3.88B
+         Web pages          STEM-Heavy Crawl             4.99B          5.21B           5.21B      5.21B
+         Thinking (synth)   General Reasoning Mix        1.87B          1.87B           2.48B      2.48B
+                            Math Meta-Reasoning          381M           381M            1.05B      1.05B
+                            Code Meta-Reasoning          459M           459M            1.27B      1.27B
+                            All other subsets        unchanged      unchanged       unchanged         —
+         Total mix                                       99.95B           100.17B     104.41B         —
+
+
+
+
+                                                       32
+                                          Instella-MoE Technical Report
+
+Table 23: Long-context Stage 2 data mixture. Token counts per subset for the curated 37.32B-token
+math/code/reasoning mixture. Source indicates whether the subset is drawn from the Dolma 3 Dolmino
+100B mix, the full Dolma 3 Dolmino pool, or Instella-GSM8K-synthetic.
+
+                       Type        Dataset                      Source            Tokens
+                                   dolmino-math                 100B mix             10.7B
+                                   cranemath                    100B mix             5.62B
+                                   megamatt                     Full pool            3.88B
+                       Math
+                                   tinymath-mind                100B mix             898M
+                                   tinymath-pot                 100B mix             241M
+                                   instella-gsm8k-synthetic     Instella-GSM8K       329M
+                       Code        cranecode                    100B mix             10.0B
+                                   general_reasoning_mix        Full pool            2.48B
+                                   omr-rewrite-fullthoughts     100B mix             850M
+                       Thinking
+                                   math-meta-reasoning          Full pool            1.05B
+                                   code-meta-reasoning          Full pool            1.27B
+                       Total mix                                                  37.32B
+
+
+Table 24: SFT Phase 1 data mixture. Record counts and the capability contributed by each source.
+Mathematics records are reservoir-sampled from Nemotron-Cascade-2 with reasoning prefixes stripped; all
+competitive-programming records that survive the 32K-token filter are retained; and science records are sam-
+pled from Nemotron-Cascade-2.
+
+         Domain    Source                                   Records   Contribution
+         General   Dolci-Think-SFT-7B                       ∼2.27M    General instruction-following base
+         Math      Nemotron-Cascade-2 (math)                  300K    Math; reservoir-sampled with the
+                                                                      reasoning prefix stripped
+         Code      Nemotron-SFT-Competitive-                 ∼161K    Coding; all records surviving the
+                   Programming-v2 (Python)                            32K-token filter
+         Science   Nemotron-Cascade-2 (science)              ∼197K    Science reasoning and question an-
+                                                                      swering
+
+
+
+
+                                                       33
+

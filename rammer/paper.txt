@@ -1,0 +1,1543 @@
+      Rammer: Enabling Holistic Deep Learning
+        Compiler Optimizations with rTasks
+    Lingxiao Ma, Peking University and Microsoft Research; Zhiqiang Xie,
+ShanghaiTech University and Microsoft Research; Zhi Yang, Peking University;
+Jilong Xue, Youshan Miao, Wei Cui, Wenxiang Hu, Fan Yang, Lintao Zhang,
+                   and Lidong Zhou, Microsoft Research
+           https://www.usenix.org/conference/osdi20/presentation/ma
+
+
+
+
+      This paper is included in the Proceedings of the
+      14th USENIX Symposium on Operating Systems
+               Design and Implementation
+                           November 4–6, 2020
+                              978-1-939133-19-9
+
+
+
+                                     Open access to the Proceedings of the
+                                     14th USENIX Symposium on Operating
+                                      Systems Design and Implementation
+                                            is sponsored by USENIX
+ R AMMER: Enabling Holistic Deep Learning Compiler Optimizations with rTasks
+
+                  Lingxiao Ma∗ † Zhiqiang Xie∗‡ Zhi Yang† Jilong Xue                                Youshan Miao
+                  Wei Cui     Wenxiang Hu     Fan Yang  Lintao Zhang                                Lidong Zhou
+
+                           † Peking     University     ‡ ShanghaiTech   University        Microsoft    Research
+
+
+
+                                 Abstract                                perform DNN computation. Efficient DNN computation on
+Performing Deep Neural Network (DNN) computation on                      these devices is an important topic that has attracted much
+hardware accelerators efficiently is challenging. Existing               research attention in recent years [23, 28, 32, 40, 52]. One of
+DNN frameworks and compilers often treat the DNN op-                     the key factors that affect the efficiency of DNN computa-
+erators in a data flow graph (DFG) as opaque library func-               tion is scheduling, i.e. deciding the order to perform various
+tions and schedule them onto accelerators to be executed                 pieces of computation on the target hardware. The impor-
+individually. They rely on another layer of scheduler, often             tance of scheduling in general is well known and has been
+implemented in hardware, to exploit the parallelism available            thoroughly studied [20, 39]. However, there is little work
+in the operators. Such a two-layered approach incurs signif-             discussing scheduling for DNN computation on hardware
+icant scheduling overhead and often cannot fully utilize the             devices specifically.
+available hardware resources. In this paper, we propose R AM -              The computational pattern of a deep neural network is usu-
+MER , a DNN compiler design that optimizes the execution                 ally modeled as a data flow graph (DFG), where each node
+of DNN workloads on massively parallel accelerators. R AM -              corresponds to an operator, which represents a unit of com-
+MER generates an efficient static spatio-temporal schedule               putation such as matrix multiplication, while an edge depicts
+for a DNN at compile time to minimize scheduling overhead.               the dependency between operators. This representation natu-
+It maximizes hardware utilization by holistically exploiting             rally contains two levels of parallelism. The first level is the
+parallelism through inter- and intra- operator co-scheduling.            inter-operator parallelism, where operators that do not have
+R AMMER achieves this by proposing several novel, hardware               dependencies in the DFG may run in parallel. The second
+neutral, and clean abstractions for the computation tasks and            level is the intra-operator parallelism, where an operator such
+the hardware accelerators. These abstractions expose a much              as matrix multiplication has inherent internal data parallelism
+richer scheduling space to R AMMER, which employs several                and can leverage hardware accelerators that can perform par-
+heuristics to explore this space and finds efficient schedules.          allel computation, such as a GPU.
+We implement R AMMER for multiple hardware backends                         To exploit the two levels of parallelism, current practice
+such as NVIDIA GPUs, AMD GPUs, and Graphcore IPU.                        adopts a two-layered scheduling approach. An inter-operator
+Experiments show R AMMER significantly outperforms state-                DFG layer scheduler takes the data flow graph and emits oper-
+of-the-art compilers such as TensorFlow XLA and TVM by                   ators that are ready to be executed based on the dependencies.
+up to 20.1×. It also outperforms TensorRT, a vendor opti-                In addition, an intra-operator scheduler takes an operator and
+mized proprietary DNN inference library from NVIDIA, by                  maps it to the parallel execution units in the accelerator. This
+up to 3.1×.                                                              layering design has a fundamental impact on the system archi-
+                                                                         tectures of the existing DNN tool sets. For example, the DFG
+                                                                         layer scheduler is typically implemented in deep learning
+1     Introduction                                                       frameworks such as TensorFlow [18] or ONNX Runtime [14].
+                                                                         The operator layer scheduler, on the other hand, is often hid-
+Deep neural network (DNN) is now a widely adopted ap-
+                                                                         den behind the operator libraries such as cuDNN [12] and
+proach for image classification, natural language process-
+                                                                         MKL-DNN [9], and sometimes implemented directly in hard-
+ing, and many other AI tasks. Due to its importance, many
+                                                                         ware, as is the case for GPUs.
+computational devices, such as CPU, GPU, FPGA, and spe-
+                                                                            While widely adopted by existing frameworks and acceler-
+cially designed DNN accelerators have been leveraged to
+                                                                         ators, such a two-layer scheduling approach incurs fundamen-
+    ∗ Both   authors contributed equally.                                tal performance limitations. The approach works well only
+
+
+
+USENIX Association                                   14th USENIX Symposium on Operating Systems Design and Implementation           881
+when the overhead of emitting operators is largely negligible       is available at the compile time, and the operators usually
+compared to the execution time of operators, and when there         exhibit deterministic performance characteristics. Therefore,
+is sufficient intra-operator parallelism to saturate all process-   the runtime performance can be obtained through compile
+ing units in an accelerator. This unfortunately is often not        time profiling [45]. This not only avoids unnecessary runtime
+the case in practice. DNN accelerators keep on increasing           overheads, but also allows a more costly scheduling policy to
+performance at a much faster pace than CPUs, thus making            fully exploit the inter- and intra- operator parallelism together.
+the operator emitting overhead more and more pronounced.               R AMMER is compatible with optimizations developed in
+This is exacerbated for DNN inference workloads when the            existing DNN compilers. R AMMER can import a data-flow
+batch size is small, which limits the intra-operator parallelism.   graph from other frameworks like TensorFlow. Such a DFG
+Moreover, the two-layer scheduling approach overlooks the           can be optimized with techniques employed by a traditional
+subtle interplay between the upper and lower layers: to op-         graph optimizer such as [18]. An rOperator can also be opti-
+timize the overall performance, a system could reduce the           mized by an existing kernel tuner [23]. Our experience shows
+degree of intra-operator parallelism in order to increase the       that, on top of existing optimizations, R AMMER can provide
+level of inter-operator parallelism (§ 2).                          significant additional performance improvement, especially
+   To mitigate these limitations, we present R AMMER, a deep        for DNN inference workloads.
+learning compiler that takes a holistic approach to manage the         R AMMER is hardware neutral. The abstractions proposed,
+parallelism available in the DNN computation for scheduling.        such as rTask, rOperator and vEU are applicable to any mas-
+It unifies the inter- and intra-operator scheduling through a       sively parallel computational devices with homogeneous exe-
+novel abstraction called rTask. rTask enables the scheduler to      cution units. This includes almost all the computational de-
+break the operator boundary and allows fine-grained schedul-        vices proposed for DNN workloads. In this paper, in addi-
+ing of computation onto devices. Instead of the existing design     tion to describe in detail how R AMMER is implemented on
+that breaks scheduling into two pieces managed by software          NVIDIA GPUs, we will also discuss our experience retarget-
+and hardware separately, R AMMER is a unified software-only         ing R AMMER for several alternative computing devices.
+solution, which makes it less dependent on underlying hard-            We have implemented R AMMER with 52k lines of C++
+ware and thus can be adopted by diverse DNN accelerators.           code and open-sourced the code1 . Our evaluation on 6 DNN
+In R AMMER, we make the following design decisions.                 models shows that R AMMER significantly outperforms state-
+   First, to exploit the intra-operator parallelism through a       of-the-art compilers like XLA and TVM on both NVIDIA and
+software compiler, R AMMER redefines a DNN operator as              AMD GPUs, with up to 20.1× speedup. R AMMER even out-
+an rTask-operator or rOperator. An rOperator consists of            performs TensorRT [13], a vendor optimized DNN inference
+multiple independent, homogeneous rTasks, each is a mini-           library from NVIDIA, with up to 3.1× gain.
+mum schedulable unit runs on a single execution unit of an             Our experience on R AMMER strongly suggests that the cur-
+accelerator (e.g., a streaming multiprocessor SM in a GPU).         rent industry-prevalent practice of vendor supplying highly
+Thus, rTask as the fine-grained intra-operator information is       optimized DNN operator implementations in a library form
+exposed to the R AMMER scheduler. R AMMER treats a DNN              (such as cuDNN and MKL-DNN) is sub-optimal. This prac-
+as a data flow graph of rOperator nodes, hence it can still see     tice will incur significant efficiency cost for DNN workloads.
+the coarse-grained inter-operator (DFG) dependencies.               The situation will become even worse in the coming years as
+   Unfortunately, certain modern accelerators such as GPU do        modern accelerators keep on increasing the available hard-
+not expose interfaces for intra-operator (i.e., rTask) schedul-     ware parallelism while new DNN architectures strive to save
+ing. To address this challenge, as a second design decision         computation by replacing larger operators with many smaller
+R AMMER abstracts a hardware accelerator as a virtualized           ones [49,54]. We recommend vendors to supply optimized im-
+parallel device (vDevice), which contains multiple virtualized      plementations in other forms, such as our proposed rOperator
+execution units (vEU). The vDevice allows several rTasks,           and vEU abstractions, in order to enable holistic optimization
+even from different operators, to run on a specified vEU in         that can fully utilize hardware resources.
+a desired order. Moreover, a vEU can run a barrier rTask
+that waits for the completion of a specified set of rTasks,
+thus ensuring the correct execution of rTasks from dependent        2    Motivation
+operators. The vDevice maps a vEU to one of the physical
+execution units in an accelerator to perform the actual com-        In this section, we highlight some results to illustrate the
+putation of rTasks.                                                 limitation of the two-layer design of existing deep learning
+   Finally, fine-grained scheduling could incur significant run-    frameworks. Without loss of generality, we experiment with
+time overheads, even more so than the operator scheduling           TensorFlow [18], a state-of-the-art DNN framework, on an
+overhead discussed previously. To address this issue, R AM -        NVIDIA GPU, using the same settings as in §5.
+MER moves the scheduling decision from runtime to compile
+time. This is driven by the observation that most DNN’s DFG             1 https://github.com/microsoft/nnfusion
+
+
+
+
+882   14th USENIX Symposium on Operating Systems Design and Implementation                                     USENIX Association
+                      100
+GPU utilization (%)
+
+                                                       83%
+                       80                                                                                Execution time                                           Execution time
+                               62%          57%     62%
+                       60                                                                                      1        1    Operator 1
+                       40                                                                                                                                         Operator 0                      Operator 1
+                                                                 30%                                       Launch op1                          Operator 0
+                            19%                               17%
+                       20              12%                             10% 4%                               0     0           0     0           0      0           0      0     0     0     1             1
+                                                                                2% 6%
+                        0                                                                                                    Launch op0                                    Launch op0 and op1
+                                                                                                                                              Execution units                                    Execution units
+                             BS
+                             BS 1
+
+
+                                           BS
+                                           BS 1
+
+
+                                                    BS
+                                                    BS 1
+
+
+                                                              BS
+                                                              BS 1
+
+
+                                                                       BS
+                                                                       BS 1
+
+
+                                                                                 BS
+                                                                                 BS 1
+                               =
+                               =1
+
+
+                                             =
+                                             =1
+
+
+                                                      =
+                                                      =1
+
+
+                                                                =
+                                                                =1
+
+
+                                                                         =
+                                                                         =1
+
+
+                                                                                   =
+                                                                                   =1
+                                                                                                               EU       EU   EU          EU     EU     EU          EU     EU     EU         EU     EU     EU
+                                  6
+
+
+
+
+                                                6
+
+
+
+
+                                                         6
+
+
+
+
+                                                                   6
+
+
+
+
+                                                                            6
+
+
+
+
+                                                                                      6
+                            ResNeXt    NASNet       AlexNet DeepSpeech2 LSTM    Seq2Seq                                            (a)                                                (b)
+
+
+   Figure 1: The average GPU utilization on different DNN                                    Figure 3: An illustration of (a) the inefficiency scheduling in
+   model with different batch size (BS). The utilization only                                existing approach; and (b) an optimized scheduling plan.
+   accounts for kernel execution, excluding other stages like
+   operator emitting.                                                                                          60
+
+
+
+
+                                                                                          Operator time (us)
+                                                                                                               50                                                         Averaged Time
+                      200                                                 35%                                  40                                                         Standard Error
+                             Kernel time                                                                       30
+                      150                                              59%
+                              Overhead                                                                         20
+Time (ms)
+
+
+
+
+                      100
+                                                                                                               10
+                                                                                65%54%                          0
+                       50   49%16%                            56%35%
+                                                                                                                    0        200         400         600    800    1000        1200    1400        1600       1800
+                                       64%33%
+                                                    38%55%                                                                               Operator ID (sorted by average latency)
+                        0
+                             BS
+                             BS 1
+
+
+                                           BS
+                                           BS 1
+
+
+                                                     BS
+                                                     BS 1
+
+
+                                                              BS
+                                                              BS 1
+
+
+                                                                       BS
+                                                                       BS 1
+
+
+                                                                                 BS
+                                                                                 BS 1
+                               =
+                               =1
+
+
+                                             =
+                                             =1
+
+
+                                                       =
+                                                       =1
+
+
+                                                                =
+                                                                =1
+
+
+                                                                         =
+                                                                         =1
+
+
+                                                                                   =
+                                                                                   =1
+
+
+                                                                                             Figure 4: The profiled kernel time of all the operators in
+                                  6
+
+
+
+
+                                                6
+
+
+
+
+                                                          6
+
+
+
+
+                                                                   6
+
+
+
+
+                                                                            6
+
+
+
+
+                                                                                      6
+
+
+                            ResNeXt    NASNet       AlexNet DeepSpeech2 LSTM    Seq2Seq
+                                                                                             ResNeXt model. Each data point ran 1,000 times
+   Figure 2: The average kernel time and end-to-end execution
+   time on different DNN model with different batch size (BS).
+                                                                                           models. Increasing the batch size to 16 slightly improves the
+                                                                                           situation, while the overhead is still not negligible (between
+   Hardware-managed intra-operator scheduling leads to                                     16% and 55%). Modern DNN compilers, including the one in
+   low GPU utilization. The two-layer design delegates the                                 TensorFlow, employs a technique called kernel fusion [17,23],
+   intra-operator scheduling to the hardware scheduler in an ac-                           which merges several DNN operators into a single one when
+   celerator like GPU. Figure 1 shows that such an approach                                allowed. However, our results in §5 show that this technique
+   could lead to low GPU utilization across different DNN mod-                             cannot reduce the overhead significantly.
+   els. When the batch size is 1, the GPU utilization could be
+   as low as 2% for Seq2Seq model. Even when the batch size                                 Interplay between inter- and intra-operator scheduling.
+   is increased to 16, the average GPU utilization across the 6                             Separating scheduling into two layers ignores the subtle in-
+   models is merely 40% 2 . To improve the scheduling efficiency,                           terplay between inter-operator and intra-operator scheduling,
+   modern GPUs support the multi-streaming mechanism that                                   which may lead to suboptimal performance. For example, Fig-
+   allows independent operators to run concurrently. However,                               ure 3(a) shows two independent operators being scheduled
+   our measurement in §5 shows that multi-streaming often hurts                             to a GPU. For operator 0, to maximize its performance, the
+   rather than improves the overall performance.                                            system may choose the fastest implementation with a high
+                                                                                            degree of parallelism. Thus operator 0 could greedily span all
+   High inter-operator scheduling overheads. The two-                                       the parallel execution units (EUs) of an accelerator ( in this
+   layer approach also incurs a higher inter-operator scheduling                            case the streaming multiprocessors of the GPU), while each
+   overheads. Here, we regard the time not spent doing actual                               EU may not be fully utilized. Since operator 0 occupies all
+   computation in the GPU as the overhead for inter-operator                                the EUs, operator 1 has to wait for available resource. A better
+   scheduling. This overhead includes various operations to sup-                            scheduler could reduce the degree of parallelism of operator 0
+   port operator emitting, including kernel launching, context                              to increase the level of inter-operator parallelism, by mapping
+   initialization, communication between host and GPU, and so                               operator 1 alongside operator 0, as illustrated by Figure 3(b).
+   on. The percentage shown above each bar in Figure 2 depicts                              We will discuss more details of this issue in §3.3 and §5.
+   how much time the DNN model is not spent in the actual
+   GPU computation. From the figure it is clear that the over-                               Opportunities. Given the fundamental limitations of the
+   head of inter-operator scheduling is quite significant. When                              two-layer design observed above, it is desirable to manage the
+   batch size is 1, the average overhead is 55% across the 6 DNN                             scheduling of inter and intra-operator together. However, a
+       2 Note that the LSTM’s GPU utilization is slightly higher when batch                  naive implementation of this approach may incur even higher
+   size is 1 compared to that when batch size is 16, because TensorFlow uses                 overheads than the already significant inter-operator schedul-
+   different kernel implementations of GEMM for different batch sizes.                       ing overheads. Fortunately, most DNN’s DFG is available at
+
+
+
+   USENIX Association                                                  14th USENIX Symposium on Operating Systems Design and Implementation                                                                   883
+                 relu                                                       1   interface Operator { void compute (); };
+    add                      matmul                                         2   interface rOperator {
+             conv                                                           3      void compute_rtask (size_t rtask_id );
+                                                                            4      size_t get_total_rtask_num ();
+                    DFG of operators                  DFG of rOperators     5   };
+
+         DFG Scheduler                  rTask-aware DFG compiler
+                                                                          Figure 6: The execution interfaces of traditional operator and
+                        Operator                      rProgram            rOperator. More details in §4.
+                             operator                            rTasks
+                                                                          multiple rPrograms, each contains a piece of computation
+     Operator scheduler                 Virtualized parallel device       to be carried out on the hardware. Instead of emitting one
+    dynamic dispatch                                   static map         operator at a time for an accelerator, R AMMER emits an rPro-
+    EU      EU          EU      EU        EU     EU         EU   EU       gram at a time. The details of the rTask-aware DFG compiler
+                                                                          will be discussed in §3.3. To carry out the execution plan,
+                 (a)                                  (b)                 R AMMER abstracts a hardware accelerator as a virtualized
+                                                                          parallel device (vDevice), which includes multiple virtualized
+Figure 5: System overview of DNN computation in (a) exist-                execution units (vEUs). The vDevice provides the scheduling
+ing DNN frameworks, and (b) R AMMER, where each node                      and synchronization capabilities at the rTask level so that
+in a DFG is an rOperator that explicitly exposes the intra-               the rProgram can be mapped to the corresponding vEUs at
+operator parallelism through rTask; Rather than dynamically               compile time. The vEUs, together with the vDevice will be
+scheduling each rOperator, R AMMER compiles the DFG into                  mapped to the hardware at runtime. We introduce virtualized
+a static execution plan called rProgram (composed of rTasks)              device in §3.2.
+and maps it to hardware by a software device abstraction
+called vDevice.
+                                                                          3.1 rOperator
+the compile time, and the operators often exhibit deterministic           An rOperator is defined as a group of independent, homoge-
+performance, therefore, their execution times can be obtained             neous rTasks (short for R AMMER task), where an rTask is
+through compile time profiling [45]. For example, Figure 4                the minimum computation unit in an operator to be executed
+shows the averaged GPU kernel time and the variance of all                on a processing element of the accelerator device. The con-
+the operators in the ResNeXt [49] model. The kernel run-time              cept of rTask naturally aligns with the parallel architecture of
+weighted average of standard deviations among all operators               DNN accelerators, e.g., the SIMD architecture of GPU. To
+is only 7%. This allows us to move the scheduling from run-               maximize efficiency, the computation on such an accelera-
+time to compile-time, by generating an offline schedule plan              tor needs to be divided into multiple parallel (homogeneous)
+to reduce runtime overhead.                                               tasks. Each of these parallel tasks can be represented by an
+                                                                          rTask, thereby exposing the intra-operator parallelism not
+                                                                          only to the underlying hardware, but to the R AMMER compiler.
+3     R AMMER’s Design                                                    Given that an rTask is logically identical to a parallel task,
+                                                                          R AMMER relies on external tools to partition an rOperator
+The observations in §2 motivate R AMMER, a DNN compiler                   into rTasks (e.g., TVM [23]). In another word, R AMMER uses
+framework that manages both inter and intra-operator schedul-             external heuristics to decide a reasonable granularity of rTask.
+ing. Figure 5 shows the key differences between an existing                  As a concrete example, a matrix multiplication operator can
+deep learning framework and R AMMER. First, the input to                  be divided into multiple homogeneous rTasks, each computes
+R AMMER is a data-flow graph where a node is an rOperator,                a tile of the output matrix, while the tiling strategy is assumed
+rather than a traditional operator. An rOperator explicitly ex-           to be given. If a complicated DNN operator can hardly be
+poses rTask, a fine-grained computation unit that could run on            divided into independent homogeneous rTasks (e.g., Separa-
+a parallel execution unit in an accelerator. We discuss details           bleConv2D [7]), it can be represented as multiple dependent
+of rTask in §3.1. Second, instead of separating the two-layer             rOperators, each can be partitioned into rTasks.
+scheduling between software and hardware, R AMMER intro-                     An rTask is indexed by a logical rtask_id. The rTasks in
+duces rTask-aware DFG compiler to manage the inter and                    an rOperator are numbered continuously. To execute an rTask,
+intra-operator scheduling in one place. The rTask-aware DFG               the parallel execution unit could call the compute_rtask()
+compiler will generate a static execution plan for runtime                interface (line 3 Figure 6). To generate an rProgram,
+execution. Often, it is not efficient or not possible to pack             R AMMER needs to know the total number of rTasks
+the entire DNN computation in a single accelerator device                 in an operator. This is available through the interface
+invocation. Therefore, the execution plan is breaking into                get_total_rtask_num(). In contrast, a traditional opera-
+
+
+
+884       14th USENIX Symposium on Operating Systems Design and Implementation                                      USENIX Association
+tor has only one interface compute()(line 1 Figure 6). The          Algorithm 1: Wavefront Scheduling Policy
+implementation of an rOperator is called rKernel, which real-           Data: G: DFG of rOperator, D: vDevice
+izes the concrete rTask computation logics and decides the              Result: Plans: rPrograms
+total number of rTasks. One rOperator might have multiple          1    Function Schedule(G, D):
+                                                                    2     Pcurr = {};
+versions of rKernels based on different tiling strategies, e.g.,
+                                                                    3     for W = Wavefront(G) do
+trading off between resource efficiency and overall execution       4         P1 = ScheduleWave(W , Pcurr , D);
+time.                                                               5         P2 = ScheduleWave(W , {}, D);
+   The rOperator abstraction allows R AMMER to expose both          6         if time(P1 ) ≤ time(Pcurr ) + time(P2 ) then
+                                                                    7             Pcurr = P1 ;
+inter- and intra-operator parallelisms. This opens up a new         8         else
+space to optimize DNN computation holistically.                     9             Plans.push_back(Pcurr );
+                                                                   10             Pcurr = P2 ;
+                                                                   11     return Plans;
+3.2    Virtualized Parallel Device                                 12   Function ScheduleWave(W, P, D):
+                                                                   13     SelectRKernels(W , P);
+Modern accelerators do not provide interfaces to map an            14     for op ∈ W do
+rTask to a desired execution unit directly. For example, a GPU     15         for r ∈ op.rTasks do
+only allows to execute one operator (in the form of a kernel)      16             vEU = SelectvEU(op, P, D);
+                                                                   17             P.Wait(r, Predecessor(op).rTasks);
+at a time. To address this challenge, R AMMER abstracts a
+                                                                   18             P.Append(r, vEU);
+hardware accelerator as a software-managed virtual device          19     return P;
+called virtualized parallel device (vDevice). A vDevice further
+presents multiple parallel virtual execution units (vEUs), each
+of them can execute rTasks independently.
+                                                                   an operator to the specified vEU in a sequential order. Here
+   With vDevice, R AMMER organizes the computation
+                                                                   task_uid is a global identifier for an rTask, which is essen-
+of rTask-aware DFG as an rProgram on a vDevice.
+                                                                   tially the operator id combined with the rtask_id within
+An rProgram is represented as two dimensional array of rTask
+                                                                   the operator. The second API, namely Wait(wtask_uid,
+prog[vEU_id][order], where vEU_id denotes the vEU the
+                                                                   list<task_uid>), allows an rTask specified by wtask_uid
+rTask is assigned to, and order denotes the execution order
+                                                                   to wait for rTasks in list<task_uid>. The Wait interface
+of the rTask in this vEU. For example, prog[0][0] denotes
+                                                                   will implicitly Append a barrier-rTask (discussed in §3.2)
+the first rTask to be executed in vEU 0. To ensure the correct
+                                                                   right before the rTask wtask_uid. As an optimization, when
+execution of dependent rTasks in a plan, R AMMER introduces
+                                                                   waiting for multiple consecutive rTasks r1 , r2 , ..., rn sequen-
+barrier-rTask. A barrier-rTask takes the argument of a list
+                                                                   tially appended to the same vEU, the rTask only need to
+of pairs <vEU_id, order>. The barrier-rTask will wait until
+                                                                   include the last one, i.e., rn , in the waiting list.
+the completion of all rTasks indexed by each pair. The barrier-
+rTask provides a fine-grained synchronization mechanism to
+enable rTask schedule plan execution.                              Compile-time profiling. R AMMER profiler provides the
+   For the execution of DNN computation, a vDevice needs           following three types of information: 1) individual rTask
+to be mapped to a physical accelerator at runtime. We will         execution time on a vEU; 2) resource usage of an rTask such
+discuss how R AMMER implements the mapping of vDevice              as the local memory or registers used and 3) the overall exe-
+to different hardware accelerators in §4.                          cution time of an rProgram. This profiling information can
+                                                                   guide a policy to generate an efficient scheduling plan.
+3.3 rTask-aware DFG Compiler
+                                                                   Scheduling policy. Algorithm 1 illustrates how to use the
+The rTask abstraction and the fine-grained rTask execution ca-     above scheduling interfaces and the profiler to implement a
+pability exposed by the vDevice open up a large optimization       scheduling policy to exploit both inter- and intra-operator par-
+space. R AMMER aims to generate a high-quality schedule in         allelisms. This policy takes an rTask-aware DFG and sched-
+this space, represented as a sequence of rPrograms. To this        ules operators in waves [37]. The operators in a wave are the
+end, the rTask-aware DFG compiler separates the scheduling         fringe nodes of a breadth-first-search on the DFG. The policy
+mechanism from its policy. On the mechanism side, it pro-          will include a wave’s operators in the current rProgram if the
+vides two capabilities: (1) Two scheduling interfaces for a        profiling results (denoted by time()) suggest it will reduce
+policy to generate an execution plan. (2) A profiler to supply     the total execution time. Otherwise, the policy will create a
+profiling information requested by a scheduling policy.            separate rProgram (line 2-10).
+                                                                      First of all, we assume that each rOperator has one or more
+Scheduling interfaces. R AMMER’s rTask-aware DFG                   implementations called rKernels, each rKernel is a way to
+compiler introduces two scheduling interfaces, Append and          break the operator into rTasks with different resource and run-
+Wait. Append(task_uid, vEU_id) assigns an rTask from               time trade-offs. Among the rKernels of a particular rOperator,
+
+
+
+USENIX Association                           14th USENIX Symposium on Operating Systems Design and Implementation              885
+                                                                           1     __device__ void matmul_rTask (float *A , float *B ,
+    DNN             DFG of        DFG                      Generated       2         float *C , size_t rtask_id ) {
+                                                rProgram
+    model          rOperator    compiler                   device code     3       size_t tile_x = rtask_id / (M /32);
+                                                                           4       size_t tile_y = rtask_id % (N /32);
+                    rKernels               Rammer          Accelerator     5       size_t i = threadIdx .x /32 + tile_x *32;
+                                                                           6       size_t j = threadIdx .x %32 + tile_y *32;
+    rOperator     Hand-tuned   Auto kernel
+                                                                           7       C[i ][ j] = 0;
+    convertor       kernels    generators                                  8       for (size_t k = 0; k < K; k ++)
+                                                                           9         C[i ][ j] += A[i ][ k] * B[k ][ j ];
+                                                                          10     }
+                                                                          11
+                Figure 7: Overall workflow of R AMMER.                    12     class MatmulROperator {
+                                                                          13      __device__ void compute_rtask (size_t rtask_id ){
+                                                                          14        matmul_rTask ( input0 , input1 , output0 , rtask_id );}
+                                                                          15      size_t get_total_rtask_num (){return M /32* N /32);}
+there is the fastest one with the smallest runtime, and there             16     };
+is the most efficient one with the smallest product of runtime
+and the total number of rTasks.
+   For each wave, the policy selects the implementations of              Figure 8: A CUDA implementation of a naive matrix multi-
+the operators through SelectRKernels() (line 13), with the               plication with the rOperator abstraction.
+following heuristics: If combine all the rTasks in the wave
+with the fastest operator implementations still cannot occupy            ferent sources, e.g., auto-kernel generators [23], hand-tuned
+all the parallel execution units in the accelerator, the policy          kernels, or converted from existing operators in other frame-
+will just select them. Otherwise, the policy will find the most          works. R AMMER compiler will then partition the DFG into
+efficient rKernels and then perform a profiling. The policy              sub-graphs (e.g., based on the policy in Algorithm 1) and
+will choose these rKernels if the profiling results show better          compile each of them as an rProgram. As an output, each
+execution time, otherwise it will stick with the fastest rKernels.       rProgram is further generated as a device code (e.g., GPU
+This heuristic considers the interplay between the inter- and            kernels) that runs on the accelerator. Figure 7 summarizes the
+intra-operator scheduling by evaluating the rOperators (and              overall workflow of R AMMER.
+their rTasks) in a wave, instead of individually. After the
+                                                                            In the rest of this section, we describe the details about
+rKernel selection, the policy calls SelectvEU() to decide
+                                                                         R AMMER’s implementation for CUDA GPU. We focus on
+which vEU an rTask should be scheduled to (line 16). Given
+                                                                         NVIDIA GPUs and the CUDA eco-system because they are
+the current rProgram P, SelectvEU() chooses the vEU that
+                                                                         the most widely used accelerators for DNN. To demonstrate
+can execute the rTask at the earliest, based on the profiled
+                                                                         that the vDevice abstraction enables R AMMER compiler to
+execution time of each rTask in P. Finally, the policy calls
+                                                                         support different accelerators with an uniform interface, we
+Wait() to ensure rTask level dependency (derived from the
+                                                                         will also briefly describe our experience with other DNN
+DFG) and Append() to assign the rTask to the selected vEU
+                                                                         accelerators, including AMD GPUs and Graphcore IPU, at
+(line 17-18). The policy in Algorithm 1 demonstrates how
+                                                                         the end of this section.
+R AMMER separates the scheduling mechanism from schedul-
+ing policy. As shown in §5, this simple policy can already
+outperform the state-of-the-art, sometimes significantly. We             4.1      R AMMER on NVIDIA CUDA GPUs
+envision the proposed scheduling mechanism could enable fu-
+ture research on more advanced scheduling policies to further            An NVIDIA GPU usually consists of tens to hundreds of
+explore the optimization space.                                          streaming multiprocessors (SM), each containing tens of cores.
+                                                                         Computation on SM follows the Single Instruction Multiple
+                                                                         Thread (SIMT) model. In this paper we assume the readers
+4      Implementation                                                    are familiar with the basic concepts of CUDA [4], the pro-
+                                                                         gramming paradigm introduced by NVIDIA to program their
+We implement R AMMER with 52k lines of C++ code, in-                     GPUs. A single CUDA program (often referred to as a CUDA
+cluding 3k lines of code for the core compiler and schedul-              kernel) groups multiple threads into blocks, each thread-block
+ing function. The input of R AMMER is a DNN model in                     is assigned to run on an SM, where the scheduling is per-
+either TensorFlow [18] frozen graph, TorchScript [16] or                 formed by GPU hardware. R AMMER naturally maps each
+ONNX [14] format. R AMMER first converts the input model                 vEU to an SM and implements an rTask as a thread-block.
+into a DFG of rOperators. Since the input model is often not
+optimized, like other compilers, we also implemented com-                4.1.1     rOperator in CUDA
+mon graph optimizations such as constant folding, common
+sub-expression elimination, pattern-based kernel fusion, etc.            Figure 8 shows a naive CUDA implementation of an
+For each rOperator from an optimized DFG, R AMMER loads                  rOperator that multiplies a M × K matrix A by a K × N matrix
+one or multiple versions of rKernel implementations from dif-            B. For simplicity, we assume M and N are evenly divisible
+
+
+
+886      14th USENIX Symposium on Operating Systems Design and Implementation                                        USENIX Association
+by 32. In the code, each rTask computes a 32 × 32 tile of the       1     // config: <<<(vEU_size,1,1), (vEU#,1,1)>>>
+output matrix C. Line 1-10 in Figure 8 shows the computa-           2     __global__ void vdevice_run () {
+                                                                    3       if ( Get_vEU_Id () == 0) { // vEU 0
+tion of one thread in one rTask. The thread uses rtask_id,          4         MatmulrTaskOp . compute_rtask (0);
+a R AMMER assigned id to identify the tile to be computed           5         MatmulrTaskOp . compute_rtask (1);
+                                                                    6         // wait the rTask on vEU 1 with order=3
+by this rTask (line 3-4), and uses threadIdx, a CUDA built-         7         BarrierTask ({ <1 , 3 >}). compute_rtask ();
+in thread index to identify the data element to be computed         8         Conv2DrTaskOp . compute_rtask (0);
+(line 5-6) by this thread. The identified element is then com-      9       }
+                                                                   10       else if ( Get_vEU_Id () == 1) { // vEU 1
+puted in line 7-9. Line 13 shows the interface exposed by this     11         for ( auto i : 4)
+rOperator, which will be called by a vEU’s parallel thread.        12            RelurTaskOp . compute_task (i );
+                                                                   13         // wait the rTask on vEU 0 with order=1
+The total rTasks needed in this operator is determined by the      14         BarrierTask ({ <0 , 1 >}). compute_rtask ();
+matrix dimension M and N, and can be obtained through the          15         Conv2DrTaskOp . compute_rtask (1);
+get_total_rtask_num interface (line 16). The key differ-           16       }
+                                                                   17     }
+ence between code in Figure 8 and a traditional CUDA code
+is that an rTask uses rtask_id, a logical index controlled by
+R AMMER, instead of blockIdx, a built-in thread-block index        Figure 9: The CUDA code for a vDevice with two vEUs.
+controlled by the GPU’s hardware scheduler. This enables
+R AMMER to map an rTask to a desired vEU by executing
+compute_rtask() with a proper rtask_id. Note that the             each vEU (implemented by a PTB) to a desired SM through
+code shown in Figure 8 is for illustrative purpose. The eval-     the GPU scheduler [48]. To improve hardware utilization, an
+uation shown in §5 uses a more complicated tiled version          SM can run multiple vEUs (PTBs) concurrently. Since CUDA
+of matrix multiplication rOperator, which further improves        uses a SIMT model, all vEU are homogeneous, the number
+the performance through carefully exploiting GPU memory           of vEUs an SM can support depends on the most demanding
+hierarchy, e.g., shared memory and registers [36, 41].            rTask across all the vEUs, i.e., the rTask that requires the
+                                                                  most thread number, register number, shared memory size,
+                                                                  etc. In practice, we set the number of vEUs on each SM
+4.1.2   vDevice and vEU on CUDA GPU                               according to the maximum active PTB number provided by
+                                                                  the CUDA compiler nvcc [5]. With the vDevice abstraction,
+On a CUDA GPU, the intra-operator scheduling is usually
+                                                                  the optimizations in R AMMER become hardware agnostic.
+managed by the GPU’s built-in scheduler. To bypass the
+built-in scheduler, R AMMER leverages a persistent thread-
+block (PTB) [29] to implement a vEU in a vDevice. PTB is          4.1.3    Executing rTask on vEU in CUDA
+a thread-block containing a group of continuously running
+threads, where R AMMER is able to “pin” the PTB to the de-        Executing heterogeneous rTasks. In a CUDA kernel, the
+sired SM. Given an rProgram, each thread in the PTB (and          number of threads in a thread block is fixed in the entire
+hence the vEU) executes the compute_rtask() according             execution lifecycle. This force R AMMER to require that all
+to the sequence specified by the rProgram. To execute the         the rTasks on a vEU to run on with the same number of
+compute_rtask() from multiple rTasks continuously in a            persistent threads. In practice, different rOperators may use
+PTB, a function qualifier __device__ is required by CUDA          different number of threads to balance parallelism and per-
+for comptue_rtask() and any sub functions executed therein        thread resource usage. To address this problem, R AMMER sets
+(e.g., line 1 and 13 in Figure 8).                                the number of threads of a vEU to be the maximum number
+                                                                  of threads used by an rTask in the vEU. For an rTask with less
+   Figure 9 illustrates the CUDA code for a vDevice with
+                                                                  threads, R AMMER inserts early-exit logic in the extra threads
+two vEUs, i.e., a CUDA kernel function with two PTBs. This
+                                                                  to skip the unnecessary (and invalid) execution. However,
+vDevice executes an rProgram compiled from a DFG with
+                                                                  early-exit may lead to dead-lock: a global barrier might never
+three rOperators: a Matmul, a Relu, and a Conv. Specified
+                                                                  return because early-exit logic may skip the barrier. To avoid
+by the execution plan, the vDevice executes two rTasks of
+                                                                  this issue, R AMMER can leverage the CUDA cooperative
+the Matmul operator on vEU 0, and in parallel it also runs
+                                                                  group primitives [3], which explicitly controls the scope of
+four rTasks of the Relu operator on vEU 1. Then a global
+                                                                  threads during a synchronization.
+barrier is inserted to the two vEUs, each runs a barrier-rTask:
+vEU 0 waits for the 4th rTask on vEU 1, and vEU 1 waits for
+the 2nd rTask on vEU 0. Finally, the vDevice executes two         Implementing barrier-rTask. To implement an efficient
+rTasks of the Conv operator on the two vEUs respectively. On      barrier-rTask, R AMMER introduces a step array, where each
+each vEU, R AMMER runs the rTasks sequentially in a code          element is an integer tracking the number of finished rTasks
+branch, executed only if the current vEU Id matches the one       in each vEU. When finished, an rTask will use its first thread
+generated by the rProgram.                                        to increase the corresponding element in the step array by
+   Before a lengthy DNN computation, R AMMER dispatches           1. When waiting for a list of rTasks on N vEUs, a barrier-
+
+
+
+USENIX Association                          14th USENIX Symposium on Operating Systems Design and Implementation             887
+rTask uses its first N threads to poll on the corresponding                   t                           Active thread
+                                                                                                          Early-exit thread
+elements in the step array until the steps are larger than the
+orders of those rTasks. After that, the barrier-rTask calls          0 1 2                            rTask1: thread_shape=[2 x 3]
+                                                                     3 4 5          0 1 2 3 4 5
+__syncthreads to ensure all threads in this vEU are ready                                             remap threads as [1 x 6] block
+to run the next rTask.                                                  0 1                           rTask0: thread_shape =[2 x 2]
+                                                                                    0 1 2 3 4 5
+                                                                        2 3                           remap threads as [1 x 4] block
+                                                                                    0 1 2 3 4 5       vEU: [1 x 6] persistent block
+4.1.4    Transforming Legacy CUDA Operators
+
+Many operators for DNN are already available as CUDA ker-            Figure 10: Executing two heterogeneous rTasks on a vEU.
+nel code. To reduce development efforts, R AMMER introduces
+a source-to-source converter to transform a legacy CUDA op-         4.2.1   R AMMER on AMD GPUs
+erator into an rOperator. The key insight of the converter
+lies on the facts that to exploit the intra-operator parallelism,   AMD GPUs are similar to NVIDIA GPUs, which also consist
+legacy CUDA operators are also implemented as thread-               of many parallel execution units called compute units (CU).
+blocks, although they use blockIdx and let CUDA GPU hard-           AMD GPU has a HIP programming model [8], which is simi-
+ware control the intra-operator scheduling directly. rOperator      lar to CUDA. AMD provides a hipify tool that can convert a
+can just compute the desired blockIdx from rtask_id with-           CUDA kernel to a HIP kernel. hipify can help convert most
+out changing computation logic in the legacy kernel.                CUDA rOperators to the HIP version. Some CUDA kernel
+   One challenge in this transformation is that the thread-         configurations, such as the number of threads per thread-block
+blocks in existing operator could be laid out in 1, 2, or 3-        and size of local memory, are not optimized for AMD GPUs
+dimensional shape, while in a vEU threads are laid out in a         due to the minor architecture differences. We re-implemented
+1-dimensional shape. This means our vEU needs to support            41 rKernels for AMD GPUs for better performance. hipify
+rTask with different threads shapes. For example, Figure 10         can also convert the CUDA implementation of vDevice (i.e.,
+illustrates a vEU executing two rTasks with the thread shapes       PTBs) to the HIP version. The only exception is that AMD
+of [2 × 2] and [2 × 3] respectively. Our solution is to stick to    GPUs do not support cooperative group primitives. To address
+a 1-D persistent thread shape for a vEU, and apply a thread         this issue, we introduce a new API in rOperator to provide
+index remapping to compute the desired threadIdx in the             the number of (block-wise) synchronizations S (i.e. calls to
+legacy kernel with the vEU’s 1-D threadIdx. Notice that, as         __syncthreads). For early-exit threads, instead of exit imme-
+discussed before, the number of threads of a vEU is the maxi-       diately, R AMMER will insert code to call the __syncthreads
+mum number of threads of all rTask in the vEU, so that such         primitive S times.
+a remapping is always possible. For example, in Figure 10 we
+configure the vEU with [1 × 6] persistent threads. When exe-        4.2.2   R AMMER on Graphcore IPU
+cuting rTask 0 with a legacy [2 × 2] thread shape, R AMMER
+remaps the [2 × 2] shape to the vEU’s [1 × 6] thread.               The Graphcore IPU (Intelligence Processing Unit) [10] is a
+   In summary, to convert a legacy DNN operator to an               state-of-the-art DNN accelerator with an architecture quite
+rOperator, one needs to remap thread and block index, imple-        different from GPUs. IPU is a massively parallel MIMD pro-
+ment the early-exit logic, and use CUDA cooperative group           cessor with a bulk-synchronous-parallel (BSP) communica-
+primitive to support local barrier on the active (i.e. not early-   tion model. Each IPU contains 1,216 parallel processing units
+exited) threads. R AMMER implements these changes by in-            called tiles; a tile consists of a hyper-threaded computing core
+serting a compiler-generated code segment at the entry point        plus 256 KB of local memory. DNN computation on an IPU
+of the legacy operator kernel code. With these modifications,       is explicitly programmed as a data-flow graph, where each
+R AMMER can preserve the legacy operator implementation,            vertex implements the code executed on a tile and each edge
+and reuse it as an rTask operator. In R AMMER, we have trans-       depicts the data transfers between vertices. The IPU compiler
+formed and implemented total 150 rKernels for 70 rOperators.        is responsible for mapping each vertex to a tile.
+                                                                       R AMMER’s rTask abstraction can also map to IPU’s MIMD
+                                                                    model: a vEU can map to a tile and a vertex can be treated as
+4.2     R AMMER on Other Accelerators                               an rTask. Thus, an rOperator on IPU can be implemented as a
+                                                                    set of vertices. More importantly, IPU compiler allows to con-
+The design of R AMMER is not limited to CUDA and NVIDIA             trol the vertex-tile mapping at compile-time. This provides the
+GPUs. In fact, our rTask, rOperator and vEU abstractions are        core functionality required in vDevice abstraction. Restricted
+applicable to any massively parallel computational devices          by the hardware BSP model, IPU does not provide a fine-
+with homogeneous execution units, including most of the             grained synchronization mechanism. We therefore implement
+devices that used for DNN computation. In this section, we          barrier-rTask with a global barrier, which may reduce schedul-
+discuss how to port R AMMER to support other devices.               ing space for R AMMER. Even with this limitation, R AMMER
+
+
+
+888     14th USENIX Symposium on Operating Systems Design and Implementation                                 USENIX Association
+    Model               Dataset        Model Type       Note
+    ResNeXt            CIFAR-10     Computer Vision     layers: 29, cardinality: 16, bottleneck width: 64d (16×64d, paper parameter)
+    NASNet             CIFAR-10     Computer Vision     repeated cells: 6, filters: 768 (6@768, paper parameter)
+    AlexNet            ImageNet     Computer Vision     (paper parameter)
+    DeepSpeech2       LibriSpeech       Speech          input length: 300; CNN layer: 2; RNN: type: uni-LSTM, layer: 7, hidden size: 256
+    LSTM (-TC)         synthetic    Language Model      input length: 100, hidden size: 256, layer: 10
+    Seq2Seq (-NMT)     synthetic    Language Model      Encoder: input length: 100, type: uni-LSTM, hidden size: 128, layer: 8
+                                                        Decoder: output length: 30, type: uni-LSTM, hidden size: 128, layer: 4
+
+                                           Table 1: Deep learning models and datasets.
+
+
+still can schedule rTasks of different operators at the same          Benchmarks and datasets. Our evaluation is performed
+computing step to increase utilization. To evaluate R AMMER,          using a set of representative DNN models that covers typi-
+we implemented total 15 rOperators and 18 rKernels.                   cal deep neural architectures such as CNN and RNN; and
+                                                                      different application domains including image, NLP and
+4.2.3   R AMMER on x86 CPUs                                           speech. Among them, ResNeXt [49] is an improved version
+                                                                      of ResNet [30]; NASNet [54] is a state-of-the-art CNN model
+We also implemented R AMMER on multi-core x86 CPUs.                   obtained by the neural architecture search; AlexNet [35]
+However, we see little performance benefit of adopting the            represents a classic CNN model with a simple architecture.
+R AMMER abstractions on x86-based platforms. On x86, the              LSTM-TC [31] is an RNN model for text classification; Deep-
+operator runtime is high due to the relatively low performance        Speech2 [19] is a representative speech recognition model;
+of x86 cores for numerical computations, and the small num-           and Seq2Seq [46] is for neural machine translation. All the
+ber of cores can be fully occupied by almost any DNN opera-           implementations of these benchmarks, including the rKernels
+tors. Moreover, scheduling overhead is not significant because        used in each model, are available in our artifact evaluation
+kernel launch is just a regular function call. Therefore, R AM -      repository3 .
+MER cannot provide additional benefit compared with the                  We focus our evaluation on model inference. There is no
+traditional two-layered scheduling approach.                          fundamental reason limiting R AMMER from model training,
+                                                                      except that supporting training requires us to develop more
+5     Evaluation                                                      operators. We evaluate these models on a set of datasets in-
+                                                                      cluding CIFAR-10 [2], ImageNet [26], LibriSpeech [11] and
+In this section, we present the detailed evaluation results to        synthetic datasets. Table 1 lists the models, hyper-parameters,
+demonstrate the effectiveness of R AMMER with comparison              and the corresponding datasets used. All performance num-
+with other state-of-the-art frameworks.                               bers in our experiments are averages over 1,000 runs; in all
+                                                                      cases we observed very little variations.
+
+5.1     Experimental Setup
+                                                                      5.2     Evaluation on CUDA GPUs
+Machine environment. We evaluated R AMMER on three
+servers with different accelerators equipped. The CUDA GPU            This section answers the following questions: 1) How does
+evaluations use an Azure NC24s_v3 VM equipped with Intel              R AMMER perform comparing with the state-of-the-art DNN
+Xeon E5-2690v4 CPUs and 4 NVIDIA Tesla V100 (16GB)                    frameworks or compilers? 2) How well does R AMMER utilize
+GPUs, with Ubuntu 16.04, CUDA 10.0 and cuDNN 7.6.5. The               the GPU’s parallel resource? 3) How much does R AMMER
+AMD ROCm GPU evaluations use a server equipped with In-               reduce the runtime scheduling overhead? 4) How much per-
+tel Xeon CPU E5-2640 v4 CPU and 2 AMD Radeon Instinct                 formance gain comes from R AMMER’s scheduling leveraging
+MI50 (16GB) GPUs, installed with Ubuntu 18.04 and ROCm                both the intra and inter operator parallelism? 5) How effective
+3.1.1 [1]. The IPU evaluations use an Azure ND40s_v3 pre-             is the fine-grained synchronization in improving the overall
+view VM equipped with Intel Xeon Platinum 8168 CPUs and               performance?
+16 IPUs with Poplar-sdk 1.0.
+   We compare R AMMER with other DNN frameworks                       5.2.1   End-to-end Performance
+and compilers, including TensorFlow (v1.15.2) representing
+the state-of-the-art DNN framework, TVM (v0.7) [23] and               We first demonstrate the end-to-end efficiency of R AMMER
+TensorFlow-XLA representing the state-of-the-art DNN com-             by comparing with TensorFlow (TF), TensorFlow-XLA (TF-
+pilers, and TensorRT (v7.0) (with TensorFlow integration ver-            3 https://github.com/microsoft/nnfusion/tree/osdi20_
+
+sion), a vendor-specific inference library for NVIDIA GPUs.           artifact/artifacts
+
+
+
+
+USENIX Association                           14th USENIX Symposium on Operating Systems Design and Implementation                    889
+                  TF             TF-XLA            TF-TRT               TVM                 RammerBase                   Rammer
+            100                     40               2.5                 50                       160                        80
+             80                                        2                 40
+Time (ms)
+
+
+
+                                    30                                                            120                        60
+             60                     20               1.5                 30                                                  40
+             40                                        1                 20                        80
+             20                     10               0.5                 10                        40                        20
+              0                      0                 0                  0                         0                         0
+                       ResNeXt            NASNet            AlexNet                   DeepSpeech2                LSTM               Seq2Seq
+
+                            Figure 11: End-to-end model inference time with batch size of 1 on NVIDIA V100 GPU.
+
+                                                                                              TF             TF-TRT       RammerBase
+XLA), TVM and TensorRT (TF-TRT). To show the benefit                                      TF-XLA               TVM           Rammer
+                                                                                    100                            200
+of the abstractions introduced in R AMMER, we create a base-
+
+
+
+
+                                                                        Time (ms)
+                                                                                     75                            150
+line version of R AMMER (called R AMMER BASE), which only                            50                            100
+implements the optimizations similar to those in existing com-                       25                             50
+pilers and still uses a two-layered scheduling approach. Thus,                        0                              0
+R AMMER BASE can be treated as just another regular DNN                                    BS1       BS4     BS16        BS1      BS4   BS16
+                                                                                                   ResNeXt                     LSTM
+compiler implemented in the same codebase of R AMMER.
+Figure 11 shows the execution time of the benchmarks with               Figure 12: End-to-end model inference time with different
+batch size of 1.                                                        batch sizes (BS).
+   First, R AMMER significantly outperforms TF by 14.29×
+on average, and up to 33.94× for the LSTM-TC model. The
+performance improvement of R AMMER against TF is mainly                 to produce results after compiling for over 50 hours. Thus, we
+because TF suffers from heavy runtime scheduling overhead               reimplemented these three models with the TensorRT native
+at DFG level, especially when the individual operator’s ex-             APIs. Our evaluation shows that R AMMER can outperform
+ecution time is relatively short, as is the case in small batch         the vendor optimized TensorRT on all the benchmarks, with
+inference. TF-XLA, as a DNN compiler, can improve TF’s                  an averaged 2.18× and up to 3.09× lower latency. Finally,
+performance through DFG level optimizations (e.g., opera-               compared to R AMMER BASE, R AMMER can further improve
+tor fusion) and operator-level code specializations (e.g. cus-          the end-to-end performance by 2.59× and up to 6.29×.
+tomized kernel generation). However, it still cannot fully avoid
+scheduling overhead, which leads to an average of 11.25×
+(up to 20.12×) performance gap compared to R AMMER. We                  Performance with different batch sizes. We also evaluate
+observed that TF-XLA incurs even higher overhead for some               R AMMER’s performance with larger batch sizes. Figure 12
+CNN models such as ResNeXt and NASNet compared with                     shows the performance comparison on two representative
+TF. TVM, as another state-of-the-art DNN compiler, mainly               CNN and RNN models, i.e., ResNeXt and LSTM-TC, with
+leverages a kernel tuning technique to generate a special-              batch sizes of 4 and 16. We limit our benchmarks in this test
+ized kernel for each operator. In our evaluation, TVM tunes             due to the cost of developing optimized rOperator kernels for
+1,000 steps and chooses the fastest kernel for each operator.           R AMMER: we have to hunt for efficient open-sourced operator
+With such specialized optimization, TVM can improve the                 kernel implementations or perform tuning by hand or through
+performance significantly compared with TF and TF-XLA.                  automatic tuning tools, which is time consuming. As it shows,
+Still, R AMMER can outperform TVM by 3.48× on average                   using larger batch sizes can reduce scheduling overhead in ex-
+and up to 6.46×. Even though TVM can make individual                    isting frameworks due to the increased per-operator execution
+operator run faster through tuning, it still lacks the capabil-         time. Even so, R AMMER can still outperform all the systems
+ity to leverage the fine-grained parallelism as R AMMER. An             except for TensorRT on the ResNeXt model with batch size of
+exception is that, for AlexNet, R AMMER can only achieve                16. For this case, TensorRT uses some operators whose source
+comparable performance with TVM. This is mainly because                 codes are not publicly available, and our implementations do
+AlexNet, being one of the earliest modern DNN models, can               not yet match their performance. In fact, implementing op-
+be easily optimized due to its simple sequential model ar-              erators to match the performance of close-sourced kernels is
+chitecture and relatively fewer, but larger operators. Finally,         one of the major challenges for R AMMER. Compared to the
+TensorRT is a specialized DNN inference library with highly             other open source frameworks and compilers, R AMMER has
+optimized operators provided by NVIDIA. We use its offi-                a significant gain. For example, when using batch size of 16,
+cial TensorFlow-integration version (TF-TRT) to compile and             R AMMER can outperform TF by 2.25×, and TVM by 1.25×
+run our models, as its stand-alone version fails to directly            on ResNeXt. For the LSTM-TC model, R AMMER can get
+compile these benchmarks. However, for RNN models like                  20.08× and 9.0× performance gains compared with TF and
+DeepSpeech2, LSTM-TC and Seq2Seq-NMT, TF-TRT failed                     TVM respectively.
+
+
+
+890          14th USENIX Symposium on Operating Systems Design and Implementation                                         USENIX Association
+                                     TF                 TF-TRT        RammerBase                          400   Kernel time
+                                TF-XLA                    TVM            Rammer                                  Overhead
+                                                                                                          350
+
+
+
+
+                                                                                              Time (ms)
+                                 500                             30                                       200
+                                                                 25
+                            Time (ms)
+
+                                 400
+                                 300                             20                                       150
+                                 200                             15
+                                                                 10                                       100
+                                 100                              5                                        50
+                                                                                                                                                             59 59 58
+                                   0                              0                                             23 23 23      6 6   6             21 21 21              25 25 25
+                                                                                                                                        1 1   1
+                                                 ResNeXt                 NASNet                             0
+
+
+
+
+                                                                                                                1-
+                                                                                                                2- M
+                                                                                                                4- M
+
+                                                                                                                              1-
+                                                                                                                              2- M
+                                                                                                                              4- M
+
+                                                                                                                                        1-
+                                                                                                                                        2- M
+                                                                                                                                        4- M
+
+                                                                                                                                                  1-
+                                                                                                                                                  2- M
+                                                                                                                                                  4- M
+
+                                                                                                                                                             1-
+                                                                                                                                                             2- M
+                                                                                                                                                             4- M
+
+                                                                                                                                                                        1-
+                                                                                                                                                                        2- M
+                                                                                                                                                                        4- M
+                                                                                                                   ST
+                                                                                                                   ST
+                                                                                                                   ST
+
+                                                                                                                                 ST
+                                                                                                                                 ST
+                                                                                                                                 ST
+
+                                                                                                                                           ST
+                                                                                                                                           ST
+                                                                                                                                           ST
+
+                                                                                                                                                     ST
+                                                                                                                                                     ST
+                                                                                                                                                     ST
+
+                                                                                                                                                                ST
+                                                                                                                                                                ST
+                                                                                                                                                                ST
+
+                                                                                                                                                                           ST
+                                                                                                                                                                           ST
+                                                                                                                                                                           ST
+                                                                                                                      M
+
+
+
+
+                                                                                                                                    M
+
+
+
+
+                                                                                                                                              M
+
+
+
+
+                                                                                                                                                        M
+
+
+
+
+                                                                                                                                                                   M
+
+
+
+
+                                                                                                                                                                              M
+Figure 13: End-to-end model inference time with the batch                                                       ResNeXt       NASNet    AlexNet DeepSpeech2 LSTM        Seq2Seq
+
+size of 1 on the ImageNet dataset (image size: 224×224).
+                                                                                               Figure 15: TF performance with different stream(STM) num-
+                                                                                               ber. (Note: The number atop a bar indicates kernel time.)
+                                                                                  TF
+GPU Utilization (%)
+
+
+
+
+                      100                                                     TF-TRT
+                       80                                                  RammerBase
+                       60                                                     Rammer
+                       40                                                                      tors to execute alongside each other to achieve better GPU
+                       20                                                                      utilization. We evaluate the utilization improvement by R AM -
+                        0
+                                  ResNeXt      NASNet   AlexNet DeepSpeech2 LSTM    Seq2Seq    MER through comparing it with both TF, TF-TRT and R AM -
+                                                                                               MER BASE . Figure 14 shows the average utilization for the
+                                        Figure 14: Comparison of GPU utilization.              6 DNN models (with batch size of 1) through their execu-
+                                                                                               tion time. The average GPU utilization only accounts for
+                                                                                               kernel execution, excluding other stages like operator emit-
+Performance with larger input sizes. In our default set-                                       ting. Specifically, we use the metric SM-efficiency provided
+tings, ResNeXt and NASNet are evaluated on images of                                           by NVIDIA profiler nvprof [6] to measure the utilization,
+32×32 size in the CIFAR-10 dataset. To show R AMMER’s                                          which calculates the percentage of time when at least one
+performance on larger images, we also evaluate these two                                       warp is active on a multiprocessor. Compared to TF and TF-
+models on the ImageNet dataset with the same model hyper-                                      TRT, R AMMER can improve GPU utilization by 4.32× and
+parameters in their original papers [49, 54]. Specifically,                                    2.45× on average respectively across different models. This
+ResNeXt on ImageNet uses 101 layers with cardinality of                                        improvement comes from both the lower runtime scheduling
+64 and bottleneck width of 4d; and for NASNet, the num-                                        overhead and the capability to co-schedule operators in R AM -
+ber of repeated cells is 4 and the number of filters is 1056.                                  MER . Through comparing R AMMER with highly optimized
+Figure 13 shows the end-to-end model inference time. From                                      R AMMER BASE, which uses the same set of kernels, our evalu-
+the results, we observe that using larger input size has little                                ation shows that R AMMER’s scheduling by itself can improve
+impacts on R AMMER’s performance gain. For example, us-                                        the utilization by 1.61× on average, and up to 2.39× for the
+ing ImageNet, R AMMER can still outperform TF by 18.91×,                                       LSTM-TC model.
+TVM by 4.96×, and even TF-TRT by 2.06× on ResNeXt.                                                As mentioned in §2, modern GPUs support the multi-
+For the NASNet model, R AMMER can also get 6.99×, 1.33×                                        streaming mechanism to increase utilization through con-
+and 2.34× performance gains compared with TF, TVM and                                          currently scheduling independent kernels. We evaluate the
+TF-TRT respectively. The significant performance improve-                                      efficiency of multi-streaming by increasing the stream num-
+ment is mainly because that the model structure for larger                                     bers in TF. Figure 15 shows both the end-to-end execution
+dataset usually have more inter-operator parallelism that can                                  time and the kernel time when using stream number of 1, 2,
+be better leveraged by R AMMER’s optimization. For example,                                    and 4 for each model. We observe that using more streams can
+the cardinality for ResNeXt is increased from 16 to 64 when                                    harm the end-to-end performance, a phenomenon observed
+replacing the dataset from CIFAR-10 to ImageNet.                                               by others [45]. For example, using 4 streams increases the
+   Note that in the above evaluations, R AMMER BASE can                                        end-to-end time by 2.72× on average compared with using
+already get a comparable or even better performance than                                       a single stream. Moreover, the kernel time in each model
+compilers like TF-XLA and TVM. Thus, we will use R AM -                                        only sees very small reduction after enabling multi-streaming,
+MER BASE as the baseline of the state-of-the-art compiler and                                  which implies most kernels are still sequentially executed,
+TF-TRT as the state-of-the-art DNN inference library to eval-                                  thus providing little improvement on the GPU utilization.
+uate the benefits of R AMMER in the rest of the evaluations.                                   The major reason is because multi-streaming introduces even
+R AMMER BASE can also help remove the side effects caused                                      higher operator scheduling overhead, as shown in Figure 15.
+by different implementations in the performance comparison.
+                                                                                               5.2.3            Scheduling Overhead
+5.2.2                             GPU Utilization
+                                                                                               The techniques proposed by R AMMER can effectively reduce
+R AMMER’s scheduling enables rTasks from different opera-                                      scheduling overhead. To verify this, we evaluate the run-time
+
+
+
+USENIX Association                                                        14th USENIX Symposium on Operating Systems Design and Implementation                                891
+                                                                   59%
+            160                                                                                                         STEM-Conv         BN & Relu      Pool
+            140     Kernel time                                                                                         rTask: 64         rTask: 128     rTask: 128
+Time (ms)
+
+
+
+            120
+            100      Overhead
+
+
+
+
+                                                                               65%
+                                                                                                                        Time: 109 us      Time: 7.9 us   Time: 6.3 us
+             80                                                                           Conv           BN & Relu
+
+
+
+
+                                                             56%
+                  49%
+
+
+
+             60
+
+
+
+
+                                                                         24%
+                                                                                          rTask: 64      rTask: 128
+                                     64%
+             40
+
+
+
+
+                                                                                    36%
+                         7%
+
+
+
+
+                                                                   TRT 26%
+
+
+
+
+                                                                               TRT 48%
+                                                     RB 20%
+                         6%
+
+
+
+
+                                                     TRT 32%
+                               TRT 29%
+
+
+
+
+                                                         10%
+                               RB 21%
+
+
+
+
+                                                                                   25%
+                                                                       8%
+                        3%
+
+
+
+
+                                   14%
+
+                                           38%
+                                           48%
+                                            2%
+                                                                                          Time: 4.9 us   Time: 7.9 us
+
+
+
+
+                                            2%
+             20                                                                                                         Pool           STEM-Conv         BN & Relu
+              0                                                                                                         rTask: 128     rTask: 64         rTask: 128
+                  TRT
+
+
+
+
+                                           TRT
+                                                                                                                        Time: 6.3 us   Time: 109 us      Time: 7.9 us
+                  RB
+
+
+
+
+                                           RB
+
+
+
+
+                                                                   RB
+
+
+
+
+                                                                               RB
+                  TF
+
+
+
+
+                               TF
+
+
+
+
+                                           TF
+
+
+
+
+                                                     TF
+
+
+
+
+                                                                   TF
+
+
+
+
+                                                                               TF
+                  R
+
+
+
+
+                               R
+
+
+
+
+                                           R
+
+
+
+
+                                                     R
+
+
+
+
+                                                                   R
+
+
+
+
+                                                                               R
+                  ResNeXt      NASNet       AlexNet DeepSpeech2 LSTM           Seq2Seq                                   Wave 1          Wave 2           Wave 3
+
+
+Figure 16: GPU scheduling overhead on different models.                                      Figure 18: An irregular DFG generated by NASBench
+(The number atop a bar indicates the overhead in percent-
+age.) TF: TensorFlow, TRT: TF-TRT, RB: R AMMER BASE,
+                                                                                          nels only for each individual operator, and the kernels selected
+R: R AMMER
+                                                                                          by R AMMER’s scheduling policy. Figure 17 shows the per-
+                                                                                          formance of R AMMER and R AMMER BASE with these two
+                  RammerBase-fast                RammerBase-select                        kernel sets on two representative CNN and RNN models, i.e.,
+                     Rammer-fast                      Rammer-select                       ResNeXt and LSTM-TC. First, no matter which set of ker-
+                                                   80
+             30                                                                           nels is used, R AMMER can always improve the performance
+ Time (ms)
+
+
+
+
+                                                   60
+             20                                    40
+                                                                                          significantly. For example, if R AMMER uses the same fastest
+             10                                    20
+                                                                                          kernels (i.e., the R AMMER-fast) as used in R AMMER BASE
+              0                                     0
+                                                                                          (i.e., R AMMER BASE-fast), it can improve the performance
+                         BS1               BS4            BS1                  BS4        by 2.89× on average. If more rKernels are available for a
+                              ResNeXt                                LSTM                 given rOperator and R AMMER can select kernels based on
+                                                                                          its policy (i.e., the R AMMER-select), it can further improve
+Figure 17: Performance with different kernel sets and batch                               the end-to-end performance by 1.44× on average, and up
+sizes(BS).                                                                                to 2.28× compared with R AMMER-fast, even though the se-
+                                                                                          lected kernels may be not the fastest in isolation. In fact, if we
+                                                                                          use these kernels in R AMMER BASE (i.e., the R AMMER BASE-
+scheduling overhead by comparing R AMMER with both TF,                                    select), its performance will drop by 1.84× on average.
+TF-TRT and R AMMER BASE. Figure 16 shows the total ker-                                      We further perform detailed analysis of the kernels used in
+nel time and the scheduling overhead (i.e., the time not spent                            LSTM-TC model with batch size of 4. For example, for the
+on actual computation) for each model. Specifically, com-                                 Matmul operator, the fastest kernel uses 1,024 rTasks to get
+pared with TF, R AMMER BASE can reduce the scheduling                                     the optimal execution time of 4.28 microseconds; while the se-
+time from an average of 32.29 milliseconds to only 2.27 mil-                              lected kernel by R AMMER only consists of 16 rTasks and gets
+liseconds (overhead percentage from 55.41% to 18.43%) over                                a slower execution time of 7.46 microseconds when launched
+all models. Even compared with TF-TRT, R AMMER BASE                                       alone. However, R AMMER chooses this kernel to trade a
+can reduce the average scheduling overhead from 31.38% to                                 slower individual kernel (by reducing intra-operator paral-
+18.43%. R AMMER BASE achieves this reduction by optimiz-                                  lelism) for a better overall performance (through increasing
+ing the scheduling execution code path and leveraging opera-                              the inter-operator parallelism), thanks to the holistic schedul-
+tor fusion to reduce kernel launches. The significant reduction                           ing capability of R AMMER.
+demonstrates the heavy overhead of operator scheduling in
+existing DNN frameworks. Compared with R AMMER BASE,
+                                                                                          5.2.5     Fine-grained Synchronization
+R AMMER can further reduce the average overhead from 2.27
+milliseconds to 0.37 milliseconds, a 6.14× reduction. This                                As a synchronization mechanism, barrier-rTask provides
+significant reduction is due to static compile-time operator                              some extra optimization spaces for the DFGs with irregu-
+scheduling, i.e. packing operators into rProgram so that sev-                             lar structure, which is common in the models generated by
+eral operators can be executed by a single GPU kernel launch.                             neural architecture search (NAS) [54]. To highlight such extra
+                                                                                          benefit, we leverage NASBench [50], a state-of-the-art NAS
+5.2.4              Interplay of Intra and Inter Operator Scheduling                       benchmark, to randomly generate 5,000 modules, where each
+                                                                                          module is a small DFG that consists of up to 9 operators
+R AMMER enables scheduling policies to optimize the inter-                                and 7 edges. We first compare the end-to-end performance of
+play of intra and inter operator scheduling, instead of just                              R AMMER and R AMMER BASE on all these modules, which
+focusing on making individual operators fast. This is im-                                 shows R AMMER can improve the performance by 1.28× on
+plemented through selecting appropriate rKernel for each                                  average, and up to 3.40× than R AMMER BASE. Among all
+rOperator, as introduced in §3.3. We evaluate the effect of                               these modules, our measurement shows that 28.3% of them
+such scheduling by using two sets of kernels: the fastest ker-                            has obvious irregular structures, e.g., heterogeneous operators
+
+
+
+892               14th USENIX Symposium on Operating Systems Design and Implementation                                                       USENIX Association
+                  TF                 TVM              RammerBase                  RammerBaseK                         Rammer
+            200               25                 10                120                    600                         150
+            160                                   8                                       500
+Time (ms)
+
+
+
+                              20                                   100
+            120               15                  6                 80                    400                         100
+             80                                   4                 60                    300
+                              10                                    40                    200                          50
+             40                5                  2                 20                    100
+              0                0                  0                  0                      0                            0
+                   ResNeXt          NASNet             AlexNet                DeepSpeech2                   LSTM                Seq2Seq
+
+                         Figure 19: End-to-end model inference time with batch size of 1 on AMD MI50 GPU.
+
+
+in a wave decided by our policy (Algorithm 1). For these                             5.5                           RammerBase
+
+
+
+
+                                                                         Time (ms)
+modules, we compare the end-to-end performance of using                                5
+                                                                                                                      Rammer
+                                                                                     4.5
+our barrier-rTask implementation and a global barrier. The
+                                                                                       4
+results show that using the barrier-rTask can provide extra                          0.5
+performance speedup of 1.11× on average and up to 1.89×.                               0
+Figure 18 illustrates one of such modules, where the execu-                                   DeepSpeech2   LSTM          Seq2Seq
+tion time and rTask number in each operator are also listed.
+For such a DFG, our barrier-rTask provides a possibility to        Figure 20: End-to-end model inference time with batch size
+overlap the execution of operators from different waves (e.g.,     of 1 on Graphcore IPU.
+the two STEM-Conv operators from wave 1 and 2) through
+removing the global barriers between waves and inserting                                500                             TF
+fine-grained rTask-level synchronizations.                                  Time (ms)   400                             TF-XLA
+                                                                                        300                             RammerBase
+                                                                                                                        Rammer
+                                                                                        200
+5.3           Evaluation on Other Accelerators                                          100
+                                                                                          0
+5.3.1         End-to-end Performance on ROCm GPUs
+We evaluate the efficiency of R AMMER on AMD ROCm                  Figure 21: End-to-end model training time of LSTM-TC with
+GPUs by comparing it with TF, TVM, and R AMMER BASE.               batch size of 256 on NVIDIA V100 GPU. Note that TVM and
+TF-XLA is not included because it cannot be successfully           TF-TRT do not support training, hence the data is missing.
+enabled on AMD GPUs in our experiments, and TensorRT
+is not included because it is proprietary and is exclusive for
+NVIDIA. Figure 19 shows the end-to-end performance of              RNN benchmarks, again, because it takes effort implement-
+the 6 benchmarks with batch size of 1. Compared with TF,           ing efficient rOperators to support other models. Currently,
+R AMMER can outperform it by 13.95× on average, and up to          R AMMER only supports a single IPU device. We leave the
+41.14× for the LSTM-TC model. Compared to TVM, R AM -              multi-IPU support of R AMMER to future work. For the three
+MER can improve the performance by 5.36× on average, and           RNN models, due to the limited memory available on IPU
+up to 7.57×. Note that we fail to make the TVM auto tuning         (256 KB on each tile), we configure the layers of these mod-
+feature works on ROCm GPUs, so TVM just uses its default           els to 4 in order to fit in a single IPU. Figure 20 shows the
+kernels in this experiment. Compared with R AMMER BASE,            end-to-end performance of R AMMER on these models with
+we can see that the proposed scheduling of R AMMER’s can           batch size of 1. It shows that R AMMER’s preliminary imple-
+bring average of 2.19× and up to 4.12× speedup. Finally,           mentation can bring up to 5.37× performance improvement
+R AMMER BASEK in the figures is exactly the same as R AM -         compared with R AMMER BASE, which demonstrates the ap-
+MER BASE, except that it uses kernels from R AMMER. Notice         plicability and effectiveness of the abstractions of R AMMER
+that R AMMER might not always choose the fastest kernel            on new accelerator architectures.
+implementations for the rOperators. Though there are little
+performance change for most models, for the ResNeXt model
+                                                                   6      Discussion
+there is a 3.02× performance drop. This demonstrates the im-
+portance of the interplay of scheduling and kernel selection.
+                                                                   Having shown the advantages, we discuss some R AMMER’s
+                                                                   limitations and future work in this section.
+5.3.2         End-to-end Performance on Graphcore IPU
+We also conduct a preliminary evaluation of R AMMER on a           Performance gain on large batch sizes. R AMMER’s ben-
+Graphcore IPU. In this experiment, we choose only the three        efits are more significant when the intra-operator parallelism
+
+
+
+USENIX Association                            14th USENIX Symposium on Operating Systems Design and Implementation                    893
+is insufficient to saturate hardware. This is the case when        predictability of DNN to perform online optimization for
+the input batch size is small, often found in online DNN in-       DNN training, while R AMMER leverages the same property
+ference. Moreover, our preliminary experiment shows that           to reduce the individual rTask scheduling overhead. There
+this is also the case for some model training workloads with       are also many inference systems proposed to optimize the
+large batch sizes (e.g., 256), such as the LSTM-TC model.          overall throughout under the guaranteed query latency, e.g.,
+Figure 21 shows the training performance of LSTM-TC with           Nexus [44], PRETZEL [38], Clipper [25], TF-serving [42],
+batch size of 256. As it shows, with holistic optimizations on     etc. R AMMER instead focuses on optimizing a single model
+both intra- and inter-operator parallelism, R AMMER improves       and is orthogonal to these works.
+the performance by 2.28× than our baseline implementation             Some other work from the GPU community has proposed
+R AMMER BASE and 2.36× than TF-XLA. We will leave a                software-based schedulers within a GPU to schedule general
+more detailed analysis and further optimizations on model          workload. For example, Juggler [22] proposes a framework
+training with large batch sizes as our future work.                to dynamically execute a job represented as a DAG of tasks.
+                                                                   Wu et al. [48] proposes a software approach to control the job
+Dynamic graph. Currently, R AMMER only supports static             locality on SMs. However, driven by the property of DNN
+graph. For DFGs with dynamic control flow [51], R AMMER            workload, R AMMER proposes a new computation represen-
+can compile each of the static sub-graphs, e.g., a branch of       tation with rTask and rOperator; and adopts a compile-time
+conditionals or a body of loops, into individual rPrograms.        scheduling approach to avoid runtime overhead systemically.
+We leave this implementation to our future work.
+
+Inter-job scheduling. R AMMER focuses on optimizing a
+single deep learning job and is orthogonal to inter-job schedul-   8   Conclusion
+ing, e.g., through scheduling multiple models in a batch or
+precisely controlling each job’s hardware resource with vDe-       DNN computation suffers from unnecessary overheads due to
+vice. Nevertheless, it is an interesting topic to explore the      the fundamental limitations of existing deep learning frame-
+possibility to co-schedule rTasks not only from different op-      works, which adopt a two-layer scheduling design that man-
+erators, but from different jobs within an accelerator.            ages the inter-operator scheduling in the framework and del-
+                                                                   egates intra-operator scheduling to the hardware accelerator.
+                                                                   R AMMER addresses this issue with a holistic compiler so-
+7     Related Work                                                 lution that (1) provides an rTask-operator abstraction that
+                                                                   exposes the fine-grained intra-operator parallelism. (2) vir-
+DNN compiler optimization can be generally divided into two
+                                                                   tualizes the modern accelerator with parallel execution units
+classes based on its two-layered representations. DFG-level
+                                                                   to expose the hardware’s fine-grained scheduling capabil-
+optimizations, such as operator fusion, are exploited in many
+                                                                   ity. (3) leverages the predictability of DNN computation to
+DNN frameworks and compilers, e.g., TensorFlow [18], Py-
+                                                                   transform run-time scheduling into a problem of generating
+Torch [15], TVM [23], XLA [17], etc. TASO [34] proposes an
+                                                                   compile-time rTask execution plans. Our evaluations show
+automatic graph substitutions approach to optimize the DFG.
+                                                                   that R AMMER can achieve significant improvements com-
+On the operator-level, recent work has leveraged different ap-
+                                                                   pared to native deep learning frameworks, compilation frame-
+proaches to tune and generate efficient hardware-specific op-
+                                                                   works and even vendor-specific inference engine on GPUs.
+erator code, e.g., AutoTVM [24], Tensor comprehension [47],
+                                                                   This positions R AMMER as a new enhancement to the existing
+FlexTensor [53], Tiramisu [21], Halide [43], etc. R AMMER
+                                                                   ecosystem of DNN compiler infrastructure.
+is compatible with all these optimizations through taking an
+optimized DFG as input and generating efficient rKernels
+with those kernel generators.
+   DNN inference and its optimization have attracted a
+lot of recent attention. DeepCPU [52], BatchMaker [27],
+                                                                   Acknowledgments
+GRNN [32], and NeoCPU [40] optimize the inference for
+RNN or CNN specific models on either CPU or GPUs. Jain             We thank anonymous reviewers and our shepherd, Prof.
+et al. [33] proposes to leverage both temporal and spatial         Jinyang Li, for their extensive suggestions. We thank Jim
+multiplexing for multiple inference jobs to improve the GPU        Jernigan and Kendall Martin from the Microsoft Grand Cen-
+utilization. R AMMER differentiates with these works in two        tral Resources team for the support of GPUs. Fan Yang thanks
+aspects: 1) R AMMER can apply to general DNN models and            the late Pearl, his beloved cat, for her faithful companion dur-
+accelerators; and 2) more than just compiler optimizations,        ing writing this paper. This work was partially supported
+R AMMER provides a new abstraction and a larger optimiza-          by the National Natural Science Foundation of China under
+tion space for DNN computation. Astra [45] exploits the            Grant No. 61972004.
+
+
+
+894    14th USENIX Symposium on Operating Systems Design and Implementation                                 USENIX Association
+References                                                       Large-Scale Machine Learning. In 12th USENIX Sympo-
+                                                                 sium on Operating Systems Design and Implementation
+ [1] AMD ROCm Platform.      https://github.com/                 (OSDI 16), pages 265–283, GA, 2016. USENIX Associ-
+     RadeonOpenCompute/ROCm.                                     ation.
+ [2] CIFAR-10 dataset. https://www.cs.toronto.edu/          [19] Dario Amodei and Sundaram Ananthanarayanan et al.
+     ~kriz/cifar.html.                                           Deep speech 2 : End-to-end speech recognition in en-
+                                                                 glish and mandarin. In Proceedings of The 33rd Inter-
+ [3] Cooperative Groups. https://devblogs.nvidia.                national Conference on Machine Learning, volume 48
+     com/cooperative-groups/.                                    of Proceedings of Machine Learning Research, pages
+ [4] CUDA Driver API. http://docs.nvidia.com/cuda/               173–182, New York, New York, USA, 20–22 Jun 2016.
+     cuda-driver-api.                                            PMLR.
+
+ [5] CUDA NVCC. https://docs.nvidia.com/cuda/               [20] Remzi H. Arpaci-Dusseau and Andrea C. Arpaci-
+     cuda-compiler-driver-nvcc/.                                 Dusseau. Operating Systems: Three Easy Pieces.
+                                                                 CreateSpace Independent Publishing Platform, North
+ [6] CUDA nvprof. https://docs.nvidia.com/cuda/                  Charleston, SC, USA, 2018.
+     profiler-users-guide/.
+                                                            [21] Riyadh Baghdadi, Jessica Ray, Malek Ben Romdhane,
+ [7] Depthwise separable 2D convolution.   https:                Emanuele Del Sozzo, Abdurrahman Akkas, Yunming
+     //www.tensorflow.org/api_docs/python/tf/                    Zhang, Patricia Suriana, Shoaib Kamil, and Saman Ama-
+     keras/layers/SeparableConv2D.                               rasinghe. Tiramisu: A polyhedral compiler for express-
+                                                                 ing fast and portable code. In Proceedings of the 2019
+ [8] HIP Programming Guide. https://rocmdocs.amd.                IEEE/ACM International Symposium on Code Genera-
+     com/en/latest/Programming_Guides/HIP-GUIDE.                 tion and Optimization, CGO 2019, page 193–205. IEEE
+     html.                                                       Press, 2019.
+ [9] Intel MKL-DNN.               https://github.com/       [22] Mehmet E. Belviranli, Seyong Lee, Jeffrey S. Vetter,
+     oneapi-src/oneDNN.                                          and Laxmi N. Bhuyan. Juggler: A dependence-aware
+                                                                 task-based execution framework for gpus. In Proceed-
+[10] IPU PROGRAMMER’S GUIDE.         https://www.
+                                                                 ings of the 23rd ACM SIGPLAN Symposium on Princi-
+     graphcore.ai/docs/ipu-programmers-guide.
+                                                                 ples and Practice of Parallel Programming, PPoPP ’18,
+[11] LibriSpeech ASR corpus .     http://www.openslr.            page 54–67, New York, NY, USA, 2018. Association
+     org/12/.                                                    for Computing Machinery.
+
+[12] NVIDIA cuDNN. https://developer.nvidia.com/            [23] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin
+     cudnn.                                                      Zheng, Eddie Yan, Haichen Shen, Meghan Cowan,
+                                                                 Leyuan Wang, Yuwei Hu, Luis Ceze, Carlos Guestrin,
+[13] NVIDIA TensorRT.      https://developer.nvidia.             and Arvind Krishnamurthy. TVM: An automated end-
+     com/tensorrt.                                               to-end optimizing compiler for deep learning. In 13th
+                                                                 USENIX Symposium on Operating Systems Design and
+[14] ONNX. https://onnx.ai/.                                     Implementation (OSDI 18), pages 578–594, Carlsbad,
+[15] PyTorch. https://pytorch.org/.                              CA, 2018. USENIX Association.
+
+[16] TorchScript. https://pytorch.org/docs/stable/          [24] Tianqi Chen, Lianmin Zheng, Eddie Yan, Ziheng Jiang,
+     jit.html.                                                   Thierry Moreau, Luis Ceze, Carlos Guestrin, and Arvind
+                                                                 Krishnamurthy. Learning to optimize tensor programs.
+[17] XLA. https://www.tensorflow.org/xla.                        In S. Bengio, H. Wallach, H. Larochelle, K. Grauman,
+                                                                 N. Cesa-Bianchi, and R. Garnett, editors, Advances in
+[18] Martín Abadi, Paul Barham, Jianmin Chen, Zhifeng            Neural Information Processing Systems 31, pages 3389–
+     Chen, Andy Davis, Jeffrey Dean, Matthieu Devin, San-        3400. Curran Associates, Inc., 2018.
+     jay Ghemawat, Geoffrey Irving, Michael Isard, Man-
+     junath Kudlur, Josh Levenberg, Rajat Monga, Sherry     [25] Daniel Crankshaw, Xin Wang, Guilio Zhou, Michael J.
+     Moore, Derek G. Murray, Benoit Steiner, Paul Tucker,        Franklin, Joseph E. Gonzalez, and Ion Stoica. Clipper:
+     Vijay Vasudevan, Pete Warden, Martin Wicke, Yuan            A low-latency online prediction serving system. In 14th
+     Yu, and Xiaoqiang Zheng. TensorFlow: A System for           USENIX Symposium on Networked Systems Design and
+
+
+
+USENIX Association                      14th USENIX Symposium on Operating Systems Design and Implementation       895
+      Implementation (NSDI 17), pages 613–627, Boston, MA,       [36] Junjie Lai and Andre Seznec. Performance upper bound
+      2017. USENIX Association.                                       analysis and optimization of sgemm on fermi and ke-
+                                                                      pler gpus. In Proceedings of the 2013 IEEE/ACM In-
+[26] Jia Deng, Wei Dong, Richard Socher, Li-Jia Li, Kai Li,           ternational Symposium on Code Generation and Opti-
+     and Li Fei-Fei. Imagenet: A large-scale hierarchical             mization (CGO), CGO ’13, USA, 2013. IEEE Computer
+     image database. In 2009 IEEE conference on computer              Society.
+     vision and pattern recognition, pages 248–255. Ieee,
+     2009.                                                       [37] Steven M. LaValle. Planning Algorithms. Cambridge
+                                                                      University Press, USA, 2006.
+[27] Pin Gao, Lingfan Yu, Yongwei Wu, and Jinyang Li. Low
+     latency rnn inference with cellular batching. In Proceed-   [38] Yunseong Lee, Alberto Scolari, Byung-Gon Chun,
+     ings of the Thirteenth EuroSys Conference (EuroSys 18),          Marco Domenico Santambrogio, Markus Weimer, and
+     2018.                                                            Matteo Interlandi. PRETZEL: Opening the black box
+[28] Kaiyuan Guo, Shulin Zeng, Jincheng Yu, Yu Wang, and              of machine learning prediction serving systems. In 13th
+     Huazhong Yang. [dl] a survey of fpga-based neural                USENIX Symposium on Operating Systems Design and
+     network inference accelerators. ACM Trans. Reconfig-             Implementation (OSDI 18), pages 611–626, Carlsbad,
+     urable Technol. Syst., 12(1), March 2019.                        CA, October 2018. USENIX Association.
+
+[29] K. Gupta, J. A. Stuart, and J. D. Owens. A study of per-    [39] Joseph Leung, Laurie Kelly, and James H. Anderson.
+     sistent threads style gpu programming for gpgpu work-            Handbook of Scheduling: Algorithms, Models, and Per-
+     loads. In 2012 Innovative Parallel Computing (InPar),            formance Analysis. CRC Press, Inc., USA, 2004.
+     pages 1–14, 2012.
+                                                                 [40] Yizhi Liu, Yao Wang, Ruofei Yu, Mu Li, Vin Sharma,
+[30] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian                and Yida Wang. Optimizing cnn model inference on
+     Sun. Deep residual learning for image recognition. In            cpus. In Proceedings of the 2019 USENIX Conference
+     Proceedings of the IEEE conference on computer vision            on Usenix Annual Technical Conference, USENIX ATC
+     and pattern recognition, pages 770–778, 2016.                    ’19, page 1025–1040, USA, 2019. USENIX Association.
+
+[31] Sepp Hochreiter and Jürgen Schmidhuber. Long                [41] Rajib Nath, Stanimire Tomov, and Jack Dongarra. An
+     short-term memory. Neural Comput., 9(8):1735–1780,               improved magma gemm for fermi graphics processing
+     November 1997.                                                   units. International Journal of High Performance Com-
+                                                                      puting Applications, 24(4):511–515, November 2010.
+[32] Connor Holmes, Daniel Mawhirter, Yuxiong He, Feng
+     Yan, and Bo Wu. Grnn: Low-latency and scalable rnn          [42] Christopher Olston, Fangwei Li, Jeremiah Harmsen, Jor-
+     inference on gpus. In Proceedings of the Fourteenth              dan Soyke, Kiril Gorovoy, Li Lao, Noah Fiedel, Sukriti
+     EuroSys Conference 2019, page 41. ACM, 2019.                     Ramesh, and Vinu Rajashekhar. Tensorflow-serving:
+[33] Paras Jain, Xiangxi Mo, Ajay Jain, Harikaran Subbaraj,           Flexible, high-performance ml serving. In Workshop on
+     Rehan Sohail Durrani, Alexey Tumanov, Joseph Gonza-              ML Systems at NIPS 2017, 2017.
+     lez, and Ion Stoica. Dynamic space-time scheduling for
+                                                                 [43] Jonathan Ragan-Kelley, Connelly Barnes, Andrew
+     gpu inference. CoRR, abs/1901.00041, Dec 2018.
+                                                                      Adams, Sylvain Paris, Frédo Durand, and Saman Ama-
+[34] Zhihao Jia, Oded Padon, James Thomas, Todd Warsza-               rasinghe. Halide: A language and compiler for optimiz-
+     wski, Matei Zaharia, and Alex Aiken. Taso: Optimizing            ing parallelism, locality, and recomputation in image
+     deep learning computation with automatic generation              processing pipelines. In Proceedings of the 34th ACM
+     of graph substitutions. In Proceedings of the 27th ACM           SIGPLAN Conference on Programming Language De-
+     Symposium on Operating Systems Principles, SOSP ’19,             sign and Implementation, PLDI ’13, pages 519–530,
+     page 47–62, New York, NY, USA, 2019. Association                 New York, NY, USA, 2013. ACM.
+     for Computing Machinery.
+                                                                 [44] Haichen Shen, Lequn Chen, Yuchen Jin, Liangyu Zhao,
+[35] Alex Krizhevsky, Ilya Sutskever, and Geoffrey E Hinton.          Bingyu Kong, Matthai Philipose, Arvind Krishnamurthy,
+     Imagenet classification with deep convolutional neural           and Ravi Sundaram. Nexus: A gpu cluster engine for
+     networks. In F. Pereira, C. J. C. Burges, L. Bottou, and         accelerating dnn-based video analysis. In Proceedings
+     K. Q. Weinberger, editors, Advances in Neural Informa-           of the 27th ACM Symposium on Operating Systems Prin-
+     tion Processing Systems 25, pages 1097–1105. Curran              ciples, SOSP ’19, page 322–337, New York, NY, USA,
+     Associates, Inc., 2012.                                          2019. Association for Computing Machinery.
+
+
+
+896   14th USENIX Symposium on Operating Systems Design and Implementation                              USENIX Association
+[45] Muthian Sivathanu, Tapan Chugh, Sanjay S. Singapu-              In Kamalika Chaudhuri and Ruslan Salakhutdinov, edi-
+     ram, and Lidong Zhou. Astra: Exploiting predictability          tors, Proceedings of the 36th International Conference
+     to optimize deep learning. In Proceedings of the Twenty-        on Machine Learning, volume 97 of Proceedings of
+     Fourth International Conference on Architectural Sup-           Machine Learning Research, pages 7105–7114, Long
+     port for Programming Languages and Operating Sys-               Beach, California, USA, 09–15 Jun 2019. PMLR.
+     tems, ASPLOS ’19, page 909–923, New York, NY, USA,
+     2019. Association for Computing Machinery.                 [51] Yuan Yu, Martín Abadi, Paul Barham, Eugene Brevdo,
+                                                                     Mike Burrows, Andy Davis, Jeff Dean, Sanjay Ghe-
+[46] Ilya Sutskever, Oriol Vinyals, and Quoc V. Le. Sequence
+                                                                     mawat, Tim Harley, Peter Hawkins, Michael Isard, Man-
+     to sequence learning with neural networks. In Proceed-
+                                                                     junath Kudlur, Rajat Monga, Derek Murray, and Xiao-
+     ings of the 27th International Conference on Neural
+                                                                     qiang Zheng. Dynamic control flow in large-scale ma-
+     Information Processing Systems, NIPS’14, pages 3104–
+                                                                     chine learning. In Proceedings of the Thirteenth EuroSys
+     3112, Cambridge, MA, USA, 2014. MIT Press.
+                                                                     Conference, EuroSys ’18, New York, NY, USA, 2018.
+[47] Nicolas Vasilache, Oleksandr Zinenko, Theodoros                 Association for Computing Machinery.
+     Theodoridis, Priya Goyal, Zachary DeVito, William S.
+     Moses, Sven Verdoolaege, Andrew Adams, and Albert          [52] Minjia Zhang, Samyam Rajbhandari, Wenhan Wang,
+     Cohen. Tensor comprehensions: Framework-agnostic                and Yuxiong He. Deepcpu: Serving rnn-based deep
+     high-performance machine learning abstractions. CoRR,           learning models 10x faster. In 2018 USENIX Annual
+     abs/1802.04730, 2018.                                           Technical Conference (USENIX ATC 18), pages 951–
+                                                                     965, Boston, MA, July 2018. USENIX Association.
+[48] Bo Wu, Guoyang Chen, Dong Li, Xipeng Shen, and             [53] Size Zheng, Yun Liang, Shuo Wang, Renze Chen, and
+     Jeffrey Vetter. Enabling and exploiting flexible task           Kaiwen Sheng. Flextensor: An automatic schedule ex-
+     assignment on gpu through sm-centric program trans-             ploration and optimization framework for tensor compu-
+     formations. In Proceedings of the 29th ACM on Interna-          tation on heterogeneous system. In Proceedings of the
+     tional Conference on Supercomputing, ICS ’15, pages             Twenty-Fifth International Conference on Architectural
+     119–130, New York, NY, USA, 2015. ACM.                          Support for Programming Languages and Operating
+                                                                     Systems, ASPLOS ’20, page 859–873, New York, NY,
+[49] Saining Xie, Ross Girshick, Piotr Dollár, Zhuowen
+                                                                     USA, 2020. Association for Computing Machinery.
+     Tu, and Kaiming He. Aggregated residual transfor-
+     mations for deep neural networks. arXiv preprint
+     arXiv:1611.05431, 2016.                                    [54] Barret Zoph, Vijay Vasudevan, Jonathon Shlens, and
+                                                                     Quoc V Le. Learning transferable architectures for
+[50] Chris Ying, Aaron Klein, Eric Christiansen, Esteban             scalable image recognition. In Proceedings of the IEEE
+     Real, Kevin Murphy, and Frank Hutter. NAS-bench-                conference on computer vision and pattern recognition,
+     101: Towards reproducible neural architecture search.           pages 8697–8710, 2018.
+
+
+
+
+USENIX Association                         14th USENIX Symposium on Operating Systems Design and Implementation         897
+

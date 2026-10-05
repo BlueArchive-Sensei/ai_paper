@@ -1,0 +1,1061 @@
+                                                                Longformer: The Long-Document Transformer
+
+
+                                                                 Iz Beltagy∗        Matthew E. Peters∗          Arman Cohan∗
+                                                                 Allen Institute for Artificial Intelligence, Seattle, WA, USA
+                                                                   {beltagy,matthewp,armanc}@allenai.org
+
+
+
+
+                                                                 Abstract
+                                                Transformer-based models are unable to pro-
+                                                cess long sequences due to their self-attention
+arXiv:2004.05150v2 [cs.CL] 2 Dec 2020
+
+
+
+
+                                                operation, which scales quadratically with the
+                                                sequence length. To address this limitation,
+                                                we introduce the Longformer with an attention
+                                                mechanism that scales linearly with sequence
+                                                length, making it easy to process documents of
+                                                thousands of tokens or longer. Longformer’s       Figure 1: Runtime and memory of full self-
+                                                attention mechanism is a drop-in replacement      attention and different implementations of Long-
+                                                for the standard self-attention and combines      former’s self-attention; Longformer-loop is non-
+                                                a local windowed attention with a task moti-      vectorized, Longformer-chunk is vectorized, and
+                                                vated global attention. Following prior work      Longformer-cuda is a custom cuda kernel im-
+                                                on long-sequence transformers, we evaluate        plementations. Longformer’s memory usage scales
+                                                Longformer on character-level language mod-       linearly with the sequence length, unlike the full
+                                                eling and achieve state-of-the-art results on     self-attention mechanism that runs out of memory
+                                                text8 and enwik8. In contrast to most             for long sequences on current GPUs.      Different
+                                                prior work, we also pretrain Longformer and       implementations vary in speed, with the vectorized
+                                                finetune it on a variety of downstream tasks.     Longformer-chunk being the fastest. More details
+                                                Our pretrained Longformer consistently out-       are in section 3.2.
+                                                performs RoBERTa on long document tasks
+                                                and sets new state-of-the-art results on Wiki-
+                                                Hop and TriviaQA. We finally introduce the        quadratically with sequence length, making it infea-
+                                                Longformer-Encoder-Decoder (LED), a Long-         sible (or very expensive) to process long sequences.
+                                                former variant for supporting long document          To address this limitation, we present Long-
+                                                generative sequence-to-sequence tasks, and        former, a modified Transformer architecture with
+                                                demonstrate its effectiveness on the arXiv sum-
+                                                                                                  a self-attention operation that scales linearly with
+                                                marization dataset.1
+                                                                                                  the sequence length, making it versatile for pro-
+                                        1       Introduction                                      cessing long documents (Fig 1). This is an advan-
+                                                                                                  tage for natural language tasks such as long docu-
+                                        Transformers (Vaswani et al., 2017) have achieved         ment classification, question answering (QA), and
+                                        state-of-the-art results in a wide range of natu-         coreference resolution, where existing approaches
+                                        ral language tasks including generative language          partition or shorten the long context into smaller
+                                        modeling (Dai et al., 2019; Radford et al., 2019)         sequences that fall within the typical 512 token
+                                        and discriminative language understanding (De-            limit of BERT-style pretrained models. Such parti-
+                                        vlin et al., 2019). This success is partly due to         tioning could potentially result in loss of important
+                                        the self-attention component which enables the net-       cross-partition information, and to mitigate this
+                                        work to capture contextual information from the           problem, existing methods often rely on complex
+                                        entire sequence. While powerful, the memory and           architectures to address such interactions. On the
+                                        computational requirements of self-attention grow         other hand, our proposed Longformer is able to
+                                                ∗
+                                                 Equal contribution.                              build contextual representations of the entire con-
+                                            1
+                                                https://github.com/allenai/longformer             text using multiple layers of attention, reducing the
+need for task-specific architectures.                       Model                   attention char-LM other pretrain
+                                                                                     matrix           tasks
+   Recent work has addressed the computational in-
+efficiency of Transformers on long sequences (see           Transformer-XL (2019)      ltr    yes     no         no
+                                                            Adaptive Span (2019)       ltr    yes     no         no
+Tab. 1). However, they primarily focus on autore-           Compressive (2020)         ltr    yes     no         no
+gressive language modeling (LM), while the appli-           Reformer (2020)          sparse   yes     no         no
+                                                            Sparse (2019)            sparse   yes     no         no
+cation of long document transformers to document-
+                                                            Routing (2020)           sparse   yes     no         no
+level NLP tasks in the transfer learning setting            BP-Transformer (2019)    sparse   yes    MT          no
+(Dai and Le, 2015; Peters et al., 2018; Howard              Blockwise (2019)         sparse   no     QA         yes
+                                                            Our Longformer           sparse   yes   multiple    yes
+and Ruder, 2018; Devlin et al., 2019) has remained
+largely unexplored. We address this gap and show
+                                                            Table 1: Summary of prior work on adapting Trans-
+that Longformer’s attention mechanism can act as            formers for long documents. ltr: left-to-right.
+a drop-in replacement for the self-attention mecha-
+nism in pretrained Transformers, and leads to gains
+across a suite of document NLP tasks.                       Longformer’s efficient attention pattern on the en-
+   Longformer’s attention mechanism is a combina-           coder network, allowing it to address long docu-
+tion of a windowed local-context self-attention and         ment seq2seq tasks such as summarization. We
+an end task motivated global attention that encodes         demonstrate the effectiveness of LED on the arXiv
+inductive bias about the task. Through ablations            summarization dataset (Cohan et al., 2018).
+and controlled trials we show both attention types
+are essential – the local attention is primarily used       2   Related Work
+to build contextual representations, while the global
+                                                            Long-Document Transformers Tab. 1 summa-
+attention allows Longformer to build full sequence
+                                                            rizes recent prior work on long documents. Two
+representations for prediction.
+                                                            types of self-attention approaches have been ex-
+   We first evaluate Longformer on autoregressive           plored. The first is a left-to-right (ltr) approach that
+character-level language modeling using a com-              processes the document in chunks moving from
+bination of windowed and a new dilated attention            left-to-right. While such models have been success-
+pattern, allowing the model to process sequences of         ful in autoregressive language modeling, they are
+up to 32K characters on modern GPUs. We achieve             unsuitable for transfer learning approaches with
+state-of-the-art results on text8 and enwik8                tasks that benefit from bidirectional context.
+benchmark datasets, demonstrating the effective-               Our work falls within the other general approach
+ness of Longformer in long document modeling.               that defines some form of sparse attention pattern
+   Then, to evaluate Longformer’s ability to re-            and avoids computing the full quadratic attention
+place the full self-attention operation of existing         matrix multiplication. The model with the most
+pretrained models, we pretrain it with the masked           similar attention pattern to ours is Sparse Trans-
+language modeling (MLM) objective, continuing               former (Child et al., 2019), which uses a form of
+from the RoBERTa (Liu et al., 2019) released                dilated sliding window of blocks of size 8x8 pro-
+checkpoint. After pretraining, we apply it to               vided by BlockSparse (Gray et al., 2017). Our
+downstream language tasks through finetuning and            implementation (§3) also includes a custom CUDA
+demonstrate that Longformer consistently outper-            kernel, but it is more flexible and maintainable than
+forms RoBERTa on a wide range of document-level             BlockSparse which is implemented in C++, and
+natural language tasks including text classification,       designed for a specific version of TensorFlow. We
+QA, and coreference resolution, achieving state-of-         also introduce additional task motivated global at-
+the-art results on two of these datasets.                   tention patterns suitable for common NLP tasks
+   We finally introduce a variant of Longformer             (§3) and show they are essential for good perfor-
+which instead of an encoder-only Transformer                mance in the transfer learning setting.
+architecture, it follows an encoder-decoder ar-                A few models tried tasks other than autoregres-
+chitecture similar to the original Transformer              sive language modeling, which is a step forward
+model (Vaswani et al., 2017), and it is in-                 because arguably focusing on language modeling
+tended for sequence-to-sequence (seq2seq) learn-            as the primary evaluation has led to the develop-
+ing (Sutskever et al., 2014). We call this model            ment of models with limited applicability. BP-
+Longformer-Encoder-Decoder (LED) that uses                  Transformer (Ye et al., 2019) evaluated on machine
+
+                                                        2
+       (a) Full n2 attention   (b) Sliding window attention       (c) Dilated sliding window   (d) Global+sliding window
+
+Figure 2: Comparing the full self-attention pattern and the configuration of attention patterns in our Longformer.
+
+
+translation (MT), but didn’t explore the pretrain-                beddings (which we only used for the Autoregres-
+finetune setting. Blockwise attention (Qiu et al.,                sive LM setting), introduces an additional training
+2019) pretrained their models and evaluated on                    objective (CPC loss) for pre-training, and config-
+question answering (QA). However, the evaluation                  ures global attention in a slightly different way.
+is limited as it doesn’t include language modeling,               It shows strong results on several tasks including
+and the QA datasets are of relatively short docu-                 reading comprehension and classification. GMAT
+ments,2 therefore the effectiveness of this model                 (Gupta and Berant, 2020) uses a similar idea of
+on long document tasks remains unexplored.                        few global locations in the input serving as global
+                                                                  memory. BigBird (Zaheer et al., 2020) is an exten-
+Task-specific Models for Long Documents                           sion over ETC with evaluation on additional tasks,
+Many task-specific approaches have been devel-                    including summarization. Importantly, through the-
+oped to workaround the 512 limit of pretrained                    oretical analysis, BigBird shows that sparse Trans-
+transformer models like BERT. The simplest ap-                    formers are universal approximators of sequence
+proach just truncates the document, commonly                      functions and preserve these properties of the full
+used for classification (Xie et al., 2019). An-                   self-attention.
+other approach chunks the document into chunks
+of length 512 (could be overlapping), processes                   3     Longformer
+each chunk separately, then combines the activa-
+                                                                  The original Transformer model has a self-attention
+tions with a task specific model (Joshi et al., 2019).
+                                                                  component with O(n2 ) time and memory complex-
+A third approach popular for multihop and open
+                                                                  ity where n is the input sequence length. To address
+domain QA tasks uses a two-stage model where
+                                                                  this challenge, we sparsify the full self-attention
+the first stage retrieves relevant documents that are
+                                                                  matrix according to an “attention pattern” specify-
+passed onto the second stage for answer extrac-
+                                                                  ing pairs of input locations attending to one another.
+tion (Clark and Gardner, 2017; Chen et al., 2017).
+                                                                  Unlike the full self-attention, our proposed atten-
+All of these approaches suffer from information
+                                                                  tion pattern scales linearly with the input sequence,
+loss due to truncation or cascading errors from
+                                                                  making it efficient for longer sequences. This sec-
+the two stage approach. In contrast, Longformer
+                                                                  tion discusses the design and implementation of
+can process long sequences without truncating or
+                                                                  this attention pattern.
+chunking, allowing us to adopt a much simpler ap-
+proach that concatenates the available context and                3.1    Attention Pattern
+processes it in a single pass.                                    Sliding Window Given the importance of local
+   A few contemporaneous works3 have explored                     context (Kovaleva et al., 2019), our attention pat-
+similar ideas to Longformer using local + global                  tern employs a fixed-size window attention sur-
+attention in Transformers, and pre-training it for                rounding each token. Using multiple stacked lay-
+long document natural language tasks. In particu-                 ers of such windowed attention results in a large
+lar, ETC (Ainslie et al., 2020) uses a similar local              receptive field, where top layers have access to all
++ global attention instead of full self-attention to              input locations and have the capacity to build repre-
+scale Transformers to long documents. Different                   sentations that incorporate information across the
+from Longformer, ETC uses relative position em-                   entire input, similar to CNNs (Wu et al., 2019).
+   2                                                              Given a fixed window size w, each token attends
+    SQuAD contexts typically fit within the 512 limit, and
+MRQA is constructed by dropping long-document examples.           to 12 w tokens on each side (Fig. 2b). The com-
+  3
+    All were published on arXiv after Longformer.                 putation complexity of this pattern is O(n × w),
+
+                                                              3
+which scales linearly with input sequence length n.           simpler than existing task specific approaches that
+In a transformer with ` layers, the receptive field           use complex architecture to combine information
+size at the top layer is ` × w (assuming w is fixed           across smaller input chunks.
+for all layers). Depending on the application, it
+                                                              Linear Projections for Global Attention Re-
+might be helpful to use different values of w for
+                                                              call that given the linear projections Q, K, V , the
+each layer to balance between efficiency and model
+                                                              Transformer model (Vaswani et al., 2017) computes
+representation capacity (§4.1).
+                                                              attention scores as follows:
+Dilated Sliding Window To further increase the                                                      QK T
+                                                                                                        
+receptive field without increasing computation, the            Attention(Q, K, V ) = softmax √             V (1)
+                                                                                                      dk
+sliding window can be “dilated”. This is analogous
+to dilated CNNs (van den Oord et al., 2016) where             We use two sets of projections, Qs , Ks , Vs to com-
+the window has gaps of size dilation d (Fig. 2c).             pute attention scores of sliding window attention,
+Assuming a fixed d and w for all layers, the recep-           and Qg , Kg , Vg to compute attention scores for the
+tive field is ` × d × w, which can reach tens of              global attention. The additional projections provide
+thousands of tokens even for small values of d.               flexibility to model the different types of attention,
+   In multi-headed attention, each attention head             which we show is critical for best performance on
+computes a different attention score. We found set-           downstream tasks. Qg , Kg , Vg are all initialized
+tings with different dilation configurations per head         with values that match Qs , Ks , Vs .
+improves performance by allowing some heads                   3.2    Implementation
+without dilation to focus on local context, while
+others with dilation focus on longer context.                 In regular transformers, attention scores are com-
+                                                              puted as in Eqn. 1. The expensive operation is
+Global Attention In state-of-the-art BERT-style               the matrix multiplication QK T because both Q
+models for natural language tasks, the optimal in-            and K have n (sequence length) projections. For
+put representation differs from language modeling             Longformer, the dilated sliding window attention
+and varies by task. For masked language modeling              computes only a fixed number of the diagonals of
+(MLM), the model uses local context to predict the            QK T . As shown in Fig. 1, this results in a linear
+masked word, while for classification, the model ag-          increase in memory usage compared to quadratic
+gregates the representation of the whole sequence             increase for full self-attention. However, imple-
+into a special token ([CLS] in case of BERT). For             menting it requires a form of banded matrix mul-
+QA, the question and document are concatenated,               tiplication that is not supported in existing deep
+allowing the model to compare the question with               learning libraries like PyTorch/Tensorflow. Fig. 1
+the document through self-attention.                          compares the performance of three different ways
+   In our case, the windowed and dilated attention            of implementing it: loop is a memory efficient Py-
+are not flexible enough to learn task-specific repre-         Torch implementation that supports dilation but is
+sentations. Accordingly, we add “global attention”            unusably slow and only used for testing; chunks
+on few pre-selected input locations. Importantly,             only supports the non-dilated case and is used for
+we make this attention operation symmetric: that              the pretraining/finetuning setting; and cuda is our
+is, a token with a global attention attends to all            fully functioning highly optimized custom CUDA
+tokens across the sequence, and all tokens in the             kernel implemented using TVM (Chen et al., 2018)
+sequence attend to it. Fig. 2d shows an example               and used for the language modeling experiments
+of a sliding window attention with global attention           (see Appendix A for more details).
+at a few tokens at custom locations. For example
+                                                              4     Autoregressive Language Modeling
+for classification, global attention is used for the
+[CLS] token while in QA global attention is pro-              Autoregressive or left-to-right language modeling
+vided on all question tokens. Since the number of             is loosely defined as estimating the probability dis-
+such tokens is small relative to and independent of           tribution of an existing token/character given its
+n the complexity of the combined local and global             previous tokens/characters in an input sequence.
+attention is still O(n). While specifying global              This task is considered one of the fundamental tasks
+attention is task specific, it is a easy way to add in-       in natural language and recent prior work on mod-
+ductive bias to the model’s attention, and it is much         eling long sequences using transformers has relied
+
+                                                          4
+on this task as their primary evaluation (Dai et al.,       Model                                #Param   Dev      Test
+2019; Rae et al., 2020; Sukhbaatar et al., 2019).           Dataset text8
+Similarly, we develop and evaluate our model on             T12 (Al-Rfou et al., 2018)             44M       -    1.18
+                                                            Adaptive (Sukhbaatar et al., 2019)     38M    1.05    1.11
+autoregressive language modeling.                           BP-Transformer (Ye et al., 2019)       39M       -    1.11
+                                                            Our Longformer                         41M    1.04    1.10
+4.1   Attention Pattern
+                                                            Dataset enwik8
+For autoregressive language modeling we use                 T12 (Al-Rfou et al., 2018)             44M       -    1.11
+                                                            Transformer-XL (Dai et al., 2019)      41M       -    1.06
+our dilated sliding window attention. Follow-               Reformer (Kitaev et al., 2020)            -      -    1.05
+ing Sukhbaatar et al. (2019) we use differing win-          Adaptive (Sukhbaatar et al., 2019)     39M    1.04    1.02
+dow sizes across the layers. In particular, we use          BP-Transformer (Ye et al., 2019)       38M       -    1.02
+                                                            Our Longformer                         41M    1.02    1.00
+small window sizes for the lower layers and in-
+crease window sizes as we move to higher layers.              Table 2: Small model BPC on text8 & enwik8
+This allows the top layers to learn higher-level rep-
+resentation of the entire sequence while having the
+lower layers capture local information. In addition,        Model                                #Param   Test BPC
+it provides balance between efficiency (smaller win-        Transformer-XL (18 layers)             88M           1.03
+dow sizes are less computationally expensive due            Sparse (Child et al., 2019)          ≈100M           0.99
+                                                            Transformer-XL (24 layers)            277M           0.99
+to fewer nonzero values) and performance (larger            Adaptive (Sukhbaatar et al., 2019)    209M           0.98
+window sizes have richer representation power and           Compressive (Rae et al., 2020)        277M           0.97
+                                                            Routing (Roy et al., 2020)           ≈223M           0.99
+often result in performance improvements).                  Our Longformer                        102M           0.99
+    We do not use dilated sliding windows for lower
+layers to maximize their capacity to learn and uti-           Table 3: Performance of large models on enwik8
+lize the immediate local context. For the higher
+layers, we use a small amount of increasing dila-
+tion only on 2 heads. This gives the model the              Evaluation We evaluate with sequences of
+ability to directly attend to distant tokens without        length 32,256. Following Dai et al. (2019), we
+sacrificing local context.                                  split the dataset into overlapping sequences of size
+                                                            32,256 with a step of size 512, and report the per-
+4.2   Experiment Setup
+                                                            formance on the last 512 tokens on the sequence.
+To compare to prior work we focus on character-
+level LM (text8 and enwik8; Mahoney, 2009).
+                                                            4.2.1   Results
+Training Ideally, we would like to train our
+model on the largest window size and sequence               Tab. 2 and 3 summarize evaluation results on
+length we can fit in a modern GPU memory. How-              text8 and enwik8 datasets. We achieve a new
+ever, we found that the model needs a large number          state-of-the-art on both text8 and enwik8 using
+of gradient updates to learn the local context first,       the small models with BPC of 1.10 and 1.00 on
+before learning to utilize longer context. To accom-        text8 and enwik8 respectively, demonstrating
+modate this, we adopt a staged training procedure           the effectiveness of our model.
+where we increase the attention window size and                For large models, given how expensive these
+sequence length across multiple training phases. In         experiments are, and following recent work (Ki-
+particular, in the first phase we start with a short        taev et al., 2020; Rae et al., 2020), we are only
+sequence length and window size, then on each sub-          evaluating on enwik8. Tab. 3 shows that Long-
+sequent phase, we double the window size and the            former outperforms the comparable Transformer-
+sequence length, and halve the learning rate. This          XL model, matches the performance of the compa-
+makes training fast, while keeping the slow part            rable Sparse Transformer (Child et al., 2019), and
+(longest sequences and window sizes) to the end.            matches or slightly underperforms recent models
+We train the model over 5 total phases with start-          that have more than twice the number of parameters.
+ing sequence length of 2,048 and ending sequence            It is worth noting that Adaptive Span (Sukhbaatar
+length of 23,040 on the last phase (see Appendix B          et al., 2019) and Compressive Transformer (Rae
+for detailed configurations of each phase, and for          et al., 2020) are not good fit for the pretraining-
+all other hyperparameters).                                 finetuning paradigm as discussed in §2.
+
+                                                        5
+        Model                              Dev BPC                   Model                                           base     large
+        Decreasing w (from 512 to 32)           1.24                 RoBERTa (seqlen: 512)                          1.846    1.496
+        Fixed w (= 230)                         1.23                 Longformer (seqlen: 4,096)                    10.299    8.738
+        Increasing w (from 32 to 512)           1.21                   + copy position embeddings                   1.957    1.597
+                                                                         + 2K gradient updates                      1.753    1.414
+        No Dilation                             1.21
+                                                                         + 65K gradient updates                     1.705    1.358
+        Dilation on 2 heads                     1.20
+                                                                     Longformer (train extra pos. embed. only)      1.850    1.504
+
+Table 4: Top: changing window size across layers. Bot-               Table 5: MLM BPC for RoBERTa and various pre-
+tom: with/without dilation (@ 150K steps on phase1)                  trained Longformer configurations.
+
+
+4.2.2    Ablation Study                                              changes necessary to support Longformer’s atten-
+To show the importance of the design choices of                      tion mechanism. Note that our attention pattern can
+our attention patterns, we tried different variants                  be plugged into any pretrained transformer model
+and report their controlled experiment results. To                   without the need to change the model architecture.
+make the ablation study more manageable, we train
+each configuration for 150K steps4 with phase 1                      Attention Pattern We use sliding window atten-
+configuration on a small model on text8, then                        tion with window size of 512, therefore using the
+report the BPC performance on the dev set.                           same amount of computation as RoBERTa.6
+    The top of Tab. 4 demonstrates the impact of                     Position Embeddings RoBERTa uses learned
+different ways of configuring the window sizes                       absolute position embeddings with the maximum
+per layer. We observe that increasing the window                     position being 512. To support longer documents,
+size from the bottom to the top layer leads to the                   we add extra position embeddings to support up to
+best performance, arranging them in the reverse                      position 4,096. To leverage RoBERTa’s pretrained
+way leads to worse performance, and using a fixed                    weights, instead of randomly initializing the new
+window size (the average of window sizes of the                      position embeddings, we initialize them by copying
+other configuration) leads to a performance that                     the 512 position embeddings from RoBERTa mul-
+it is in between. The bottom of Tab. 4 shows the                     tiple times as analysis of BERT’s attention heads
+impact of adding dilation. Adding some dilation to                   shows a strong learned bias to attending to local
+two heads leads to some improvement compared                         context, including the previous or next token (Clark
+with no dilation at all.                                             et al., 2019). Using the copy initialization preserves
+                                                                     this local structure everywhere except at the parti-
+5    Pretraining and Finetuning                                      tion boundaries. Despite its simplicity, we found
+                                                                     this to be a very effective (see Tab. 5), allowing
+Current state-of-the-art systems for many NLP
+                                                                     Longformer pretraining to rapidly converge with a
+tasks finetune a pretrained model with task super-
+                                                                     small number of gradient updates.
+vision (e.g. BERT). One of our main motivations
+is to develop such a model suitable for long docu-                   Continued MLM Pretraining We pretrain
+ment tasks. To do so, we pretrained Longformer                       Longformer using fairseq (Ott et al., 2019) on a
+on a document corpus and finetune it for six tasks,                  corpus of long documents that we compiled (see
+including classification, QA and coreference resolu-                 Appendix C for corpus details). We train two model
+tion. The resulting model can process sequences up                   sizes, a base model and a large model. Both models
+to 4,096 tokens long (8 times longer than BERT)5 .                   are trained for 65K gradient updates with sequences
+   We pretrain Longformer with masked language                       length 4,096, batch size 64 (218 tokens), maximum
+modeling (MLM), where the goal is to recover                         learning rate of 3e-5, linear warmup of 500 steps,
+randomly masked tokens in a sequence. Since                          followed by a power 3 polynomial decay. The rest
+MLM pretraining is expensive, we continue pre-                       of the hyperparameters are the same as RoBERTa.
+training from the RoBERTa (Liu et al., 2019) re-                        Tab. 5 shows the BPC on the development set of
+leased checkpoint, while only making the minimal                     our training corpus. The first row shows a 1.846
+    4                                                                   6
+      One caveat is that the ordering of end performance will             Adding dilation on a few heads as in §4.1 hurt perfor-
+not agree with that at step 150K. However, this approximation        mance, likely because it is not compatible with the pretrained
+saves the huge cost of running every experiment to completion.       RoBERTa weights. Retraining such model from scratch might
+    5
+      Sequences up to 16K are possible on current GPUs.              be needed to improve performance.
+
+
+                                                                 6
+ Wordpieces    WH    TQA HQA       ON IMDB       HY          nate all available context into a single sequence.
+ avg.         1,535 6,589 1,316 506       300 705               Our baseline is a RoBERTa based model that
+ 95th pctl.   3,627 17,126 1,889 1,147    705 1,975          breaks the context into the longest possible seg-
+                                                             ment, passes each individually through RoBERTa,
+Table 6: Average and 95th percentile of context length       and concatenates the activations for further process-
+of datasets in wordpieces. WH: WikiHop, TQA: Triv-
+                                                             ing. For QA tasks, we also concatenate the question
+iaQA, HQA: HotpotQA, ON: OntoNotes, HY: Hyper-
+partisan news                                                to each segment so that RoBERTa can condition
+                                                             it’s contextual representations of the context on
+                                                             the question. The Longformer variant replaces the
+BPC using RoBERTa-base, which is comparable                  RoBERTa self-attention mechanism with our win-
+to the 1.880 BPC reported on the RoBERTa paper               dowed attention used during pretraining, plus a task
+on their corpus. This indicates our training corpus          motivated global attention. The global attention
+is from a distribution close to that used to train           uses additional linear projections (§3.1).
+RoBERTa. The following two rows show the per-
+formance of Longformer before pretraining with               6.1   Question answering
+randomly initialized position embeddings and with            We used three datasets: WikiHop (Welbl et al.,
+copied position embeddings. The significant differ-          2018), TriviaQA (Joshi et al., 2017, Wikipedia set-
+ence indicates the importance of the copy initial-           ting), and HotpotQA, (Yang et al., 2018, distractor
+ization, and the relative small difference between           setting).7
+the RoBERTa BPC and the initialized BPC indi-                   For WikiHop and TriviaQA we follow the sim-
+cates that our sliding window attention is working           ple QA model of BERT (Devlin et al., 2019), and
+well with the RoBERTa weights. The following                 concatenate question and documents into one long
+two rows show the impact of continuing pretrain-             sequence, run it through Longformer, then have a
+ing. Traininig for 2K steps improves BPC from                dataset-specific prediction layer. WikiHop uses a
+1.957 to 1.753, which further decreases to 1.705 af-         classification layer for the candidate while Trivi-
+ter 65K steps, demonstrating the model is learning           aQA uses the loss function of Clark and Gardner
+to better utilize the sliding window attention and           (2017) to predict answer span. We include global
+longer context. Similar patterns are observed with           attention to question tokens and answer candidates
+RoBERTa-large and Longformer-large.                          for WikiHop and to question tokens for TriviaQA.
+                                                                HotpotQA is a multihop QA dataset that involves
+Frozen RoBERTa Weights We also pretrained
+                                                             extracting answer spans and evidence sentences
+Longformer while freezing all RoBERTa weights,
+                                                             from 10 Wikipedia paragraphs, 2 of which are rele-
+and only training the new position embeddings.
+                                                             vant and the rest are distractors. We use a two-stage
+The motivation for this configuration is to perfectly
+                                                             model that first selects the most relevant paragraphs
+preserve the RoBERTa performance on short doc-
+                                                             then passes them to a second stage for answer ex-
+uments. This configuration has a BPC of 1.850
+                                                             traction. Both stages concatenate question and con-
+(down from 1.957 at initialization), but higher than
+                                                             text into one sequence, run it through Longformer,
+1.705 where all the weights are trainable.
+                                                             then use task-specific prediction layers. We train
+6   Tasks                                                    the models in a multi-task way to predict relevant
+                                                             paragraphs, evidence sentences, answer spans and
+We apply Longformer to multiple long document                question types (yes/no/span) jointly. Note that this
+tasks, including QA, coreference resolution and              model is simpler than recent SOTA models that in-
+classification. Tab. 6 shows the evaluation datasets         clude complex task-specific architectures (e.g., (Tu
+have contexts significantly longer than 512 word-            et al., 2019; Chen et al., 2019; Tu et al., 2020;
+pieces. Our primary goal is to evaluate whether              Groeneveld et al., 2020)). See Appendix D for fur-
+our attention mechanism can act as a replace-                ther details about the models and hyperparameters.
+ment for the standard self-attention mechanism in
+BERT style models, and to perform controlled tri-            6.2   Coreference Resolution
+als against a strong baseline. We are also interested        We use OntoNotes (Pradhan et al., 2012), and the
+in evaluating whether we can replace complicated             model from Joshi et al. (2019), a modification of
+task specific models necessitated by BERT’s lim-                 7
+                                                                   We use the full version of TriviaQA and HotpotQA, not
+ited context with simpler models that just concate-          the simplified versions in MRQA (Fisch et al., 2019).
+
+
+                                                         7
+                                                     QA                             Coref.       Classification
+              Model                 WikiHop      TriviaQA      HotpotQA         OntoNotes     IMDB      Hyperpartisan
+              RoBERTa-base               72.4          74.3            63.5            78.4    95.3                87.4
+              Longformer-base            75.0          75.2            64.4            78.6    95.7                94.8
+
+Table 7: Summary of finetuning results on QA, coreference resolution, and document classification. Results are on
+the development sets comparing our Longformer-base with RoBERTa-base. TriviaQA, Hyperpartisan metrics are
+F1, WikiHop and IMDB use accuracy, HotpotQA is joint F1, OntoNotes is average F1.
+
+
+the system from Lee et al. (2018) to replace ELMo                       Model                 WikiHop     TriviaQA        HotpotQA
+with BERT. The Longformer system is a straightfor-                              ∗
+                                                                        Current SOTA             78.3             73.3        74.2
+ward adaption of the baseline model by replacing                        Longformer-large         81.9             77.3        73.2
+RoBERTa with Longformer and extending the se-
+quence length. We didn’t use global attention for                      Table 8: Leaderboard results of Longformer-large at
+                                                                       time of submission (May 2020). All numbers are F1
+this task.
+                                                                       scores.
+6.3    Document Classification
+We evaluate on IMDB (Maas et al., 2011) and Hy-
+perpartisan news detection (Kiesel et al., 2019)
+datasets.8 IMDB is a standard sentiment classifica-
+                                                                       found that the distance between any two mentions
+tion datasets consisting of movie reviews. While
+                                                                       is typically quite small so that a baseline that pro-
+most documents in this dataset are short, about
+                                                                       cesses smaller chunks separately is able to stitch
+13.6% of them are larger than 512 wordpieces
+                                                                       together mentions into coreference chains without
+(Tab. 6). Documents in Hyperpartisan are relatively
+                                                                       considering cross chunk interactions.
+long, and it is small with only 645 documents mak-
+ing it a good test for Longformer’s ability to adapt
+to limited data. We use global attention on the
+[CLS] token.
+
+6.4    Results
+                                                                       Longformer-large for QA We also evaluate the
+Main Result Tab. 7 summarizes the results of all                       performance of Longformer-large on long context
+our finetuning experiments. We observe that Long-                      QA tasks. Tab. 8 shows that our Longformer-large
+former consistently outperforms the RoBERTa                            achieves new state-of-the-art results9 on WikiHop
+baseline. Its performance gain is especially ob-                       and TriviaQA by large margins (3.6 and 4 points
+vious for tasks that require long context such as                      respectively), and for HotpotQA, it underperforms
+WikiHop and Hyperpartisan. For TriviaQA, the                           the current state-of-the-art (Fang et al., 2020) by
+improvement is more modest as the local context                        a point. Tab. 9 shows the detailed results of Hot-
+is often sufficient to answer the question. In the                     potQA compared with published and unpublished
+case of HotpotQA, the supporting fact auxiliary                        concurrent models. Longformer places second
+supervision allows models to easily find relevant                      on the published leaderboard, outperforming all
+contexts and then focus on local context, leading to                   other published results except for HGN (Fang et al.,
+smaller gains. This is contrasted with WikiHop that                    2020). All published top performing models in
+only includes distant supervision of intermediate                      this task (Tu et al., 2019; Fang et al., 2020; Shao
+reasoning chains, where our approach excels by                         et al., 2020) use GNNs (Kipf and Welling, 2017)
+reasoning over the entire context. On the IMDB                         or graph network of entities, which seem to encode
+and OntoNotes datasets the performance gains are                       an important inductive bias for the task and can po-
+smaller. For IMDB, the majority of the dataset                         tentially improve our results further. Nevertheless,
+consists of short documents and thus it is expected                    Longformer performs strongly outperforming all
+to see smaller improvements. For OntoNotes, we                         other methods including the recent non-GNN meth-
+    8
+      For Hyperpartisan we split the training data into 80/10/10       ods (Glaß et al., 2019; Shao et al., 2020; Groen-
+train/dev/test sets, and report mean F1 across five seeds.             eveld et al., 2020).
+
+                                                                   8
+ Model                                   ans. supp. joint            7   Longformer-Encoder-Decoder (LED)
+ TAP 2 (ensemble) (Glaß et al., 2019)    79.8   86.7   70.7
+ SAE (Tu et al., 2019)                   79.6   86.7   71.4          The original Transformer (Vaswani et al., 2017)
+ Quark (dev) (Groeneveld et al., 2020)   81.2   87.0   72.3          consisted of an encoder-decoder architecture, in-
+ C2F Reader (Shao et al., 2020)          81.2   87.6   72.8
+                                                                     tended for sequence-to-sequence tasks (Sutskever
+ Longformer-large                        81.3   88.3 73.2            et al., 2014), such as summarization and transla-
+            †
+ ETC-large (Ainslie et al., 2020)        81.2   89.1 73.6            tion. While encoder-only Transformers are effec-
+ GSAN-large†                             81.6   88.7 73.9
+ HGN-large (Fang et al., 2020)           82.2   88.5 74.2
+                                                                     tive on a variety of NLP tasks, pre-trained encoder-
+                                                                     decoder Transformer models (e.g. BART (Lewis
+Table 9: HotpotQA results in distractor setting test set.            et al., 2020) and T5 (Raffel et al., 2020)) have
+Quark’s test results are not available. All numbers are              achieved strong results on tasks like summariza-
+F1 scores. † shows contemporaneous leaderboard sub-                  tion. Yet, such models can’t efficiently scale to
+missions.                                                            seq2seq tasks with longer inputs.
+                                                                        To facilitate modeling long sequences for
+                                                                     seq2seq learning, we propose a Longformer variant
+Model                                           Accuracy / ∆
+                                                                     that has both the encoder and decoder Transformer
+Longformer (seqlen: 4,096)                               73.8
+                                                                     stacks but instead of the full self-attention in the
+RoBERTa-base (seqlen: 512)                         72.4 / -1.4       encoder, it uses the efficient local+global attention
+Longformer (seqlen: 4,096, 15 epochs)              75.0 / +1.2
+Longformer (seqlen: 512, attention: n2 )           71.7 / -2.1       pattern of the Longformer. The decoder uses the
+Longformer (seqlen: 2,048)                         73.1 / -0.7       full self-attention to the entire encoded tokens and
+Longformer (no MLM pretraining)                    73.2 / -0.6       to previously decoded locations. We call this model
+Longformer (no linear proj.)                       72.2 / -1.6
+Longformer (no linear proj. no global atten.)      65.5 / -8.3       Longformer-Encoder-Decoder (LED) which scales
+Longformer (pretrain extra position embed. only)   73.5 / -0.3       linearly with the input. Since pre-training LED is
+                                                                     expensive, we initialize LED parameters from the
+       Table 10: WikiHop development set ablations                   BART, and follow BART’s exact architecture in
+                                                                     terms of number of layers and hidden sizes. The
+                                                                     only difference is that to process longer inputs,
+6.5     Ablations on WikiHop                                         we extend position embedding to 16K tokens (up
+                                                                     from BART’s 1K tokens) and we initialize the new
+Tab. 10 presents an ablation study for WikiHop on                    position embedding matrix by repeatedly copying
+the development set. All results use Longformer-                     BART’s 1K position embeddings 16 times as in
+base, fine-tuned for five epochs with identical hy-                  Section 5 for RoBERTa. Following BART, we re-
+perparameters except where noted. Longformer                         lease two model sizes, LED-base and LED-large,
+benefits from longer sequences, global attention,                    which respectively have 6 and 12 layers in both
+separate projection matrices for global attention,                   encoder and decoder stacks.
+MLM pretraining, and longer training. In addition,                      We evaluate LED on the summarization task us-
+when configured as in RoBERTa-base (seqlen: 512,                     ing the arXiv summarization dataset (Cohan et al.,
+and n2 attention) Longformer performs slightly                       2018) which focuses on long document summariza-
+worse then RoBERTa-base, confirming that per-                        tion in the scientific domain. The 90th percentile
+formance gains are not due to additional pretrain-                   of document lengths is 14.5K tokens, making it
+ing. Performance drops slightly when using the                       an appropriate testbed for evaluating LED. LED’s
+RoBERTa model pretrained when only unfreezing                        encoder reads the document and its decoder gener-
+the additional position embeddings, showing that                     ates the output summary. The encoder uses local
+Longformer can learn to use long range context in                    attention with window size 1,024 tokens and global
+task specific fine-tuning with large training datasets               attention on the first <s> token. The decoder uses
+such as WikiHop.                                                     full attention to the entire encoder and previously
+                                                                     decoded locations. As standard in seq2seq models,
+                                                                     LED is trained using teacher forcing on gold train-
+   9
+     At submission time, May 2020. Later, BigBird (Zaheer            ing summaries and uses beam search at inference.
+et al., 2020) improved leaderboard results on these datasets.           Tab. 11 demonstrates the results of LED-large
+There are confounding factors such as using 16X more com-
+pute in BigBird’s pretraining compared with Longformer, po-          16K on the arXiv summarization task. This model
+tentially affecting the performance.                                 is merely initialized from BART, with no additional
+
+                                                                 9
+                                       R-1       R-2    R-L         and enwik8. When pretrained, Longformer con-
+Discourse-aware (2018)                35.80    11.05   31.80        sistently outperforms RoBERTa on long document
+Extr-Abst-TLM (2020)                  41.62    14.69   38.03        tasks and sets new state-of-the-art results on Wik-
+Dancer (2020)                         42.70    16.54   38.44
+Pegasus (2020)                        44.21    16.95   38.83
+                                                                    iHop and TriviaQA. We further present LED, an
+LED-large (seqlen: 4,096) (ours)      44.40    17.94   39.76        encoder-decoder variant of Longformer for model-
+BigBird (seqlen: 4,096) (2020)        46.63    19.02   41.77        ing sequence-to-sequence tasks, and achieve state-
+LED-large (seqlen: 16,384) (ours)     46.63    19.62   41.83
+                                                                    of-the-art results on the arXiv long document sum-
+Table 11: Summarization results of Longformer-                      marization task. For future work, we would like
+Encoder-Decoder (LED) on the arXiv dataset. Met-                    to study other pretraining objectives, especially for
+rics from left to right are ROUGE-1, ROUGE-2 and                    LED, increase the sequence length, and explore
+ROUGE-L.                                                            other tasks that might benefit from our model.
+
+         45        R1                                               Acknowledgment
+                                              46.23
+                   R2         44.48
+         40                                                         We would like to thank Noah Smith, Dan Weld,
+         35    35.21                                                Dirk Groeneveld, Kyle Lo, Daniel King and Doug
+         30                                                         Downey for helpful discussions and feedback, and
+         25                                                         the AI2 infrastructure team for technical support.
+                                              19.62
+         20                   17.99
+         15    11.54
+         10                                                         References
+              1K             4k                 16k
+                                                                    Joshua Ainslie, Santiago Ontanon, Chris Alberti, Va-
+Figure 3: ROUGE-1 and ROUGE-2 of LED when vary-                        clav Cvicek, Zachary Fisher, Philip Pham, Anirudh
+ing the input size (arXiv validation set).                             Ravula, Sumit Sanghai, Qifan Wang, and Li Yang.
+                                                                       2020. ETC: Encoding long and structured inputs
+                                                                       in transformers. In Proceedings of the 2020 Con-
+pre-training. We observe that LED achieves state-                      ference on Empirical Methods in Natural Language
+of-the-art results on arXiv, slightly outperform-                     Processing (EMNLP), pages 268–284, Online. Asso-
+ing BigBird (Zaheer et al., 2020). Note that the                       ciation for Computational Linguistics.
+BigBird summarization model supports sequence                       Rami Al-Rfou, Dokook Choe, Noah Constant, Mandy
+length of 4K tokens but starts from and continues                     Guo, and Llion Jones. 2018. Character-level lan-
+pre-training Pegasus (Zhang et al., 2020), a model                    guage modeling with deeper self-attention. In AAAI.
+specifically designed and pre-trained for summa-
+                                                                    Danqi Chen, Adam Fisch, Jason Weston, and Antoine
+rization. With no pre-training or task-specific ini-                  Bordes. 2017. Reading wikipedia to answer open-
+tialization, but with ability to process longer inputs,               domain questions. In ACL.
+LED can slightly outperform BigBird. Further im-
+                                                                    Jifan Chen, Shih-Ting Lin, and Greg Durrett. 2019.
+provements should be possible through pre-training                     Multi-hop question answering via reasoning chains.
+of LED. Fig. 3 further illustrates the importance                      arXiv preprint, abs/1910.02610.
+of sequence length showing the ablility to process
+longer input significantly improves the results.                    Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin
+                                                                       Zheng, Eddie Yan, Haichen Shen, Meghan Cowan,
+                                                                       Leyuan Wang, Yuwei Hu, Luis Ceze, et al. 2018.
+8   Conclusion and Future Work                                        TVM: An automated end-to-end optimizing com-
+We present Longformer, a transformer-based model                       piler for deep learning. In OSDI.
+that is scalable for processing long documents                      Tianqi Chen, Bing Xu, Chiyuan Zhang, and Carlos
+and that makes it easy to perform a wide range                         Guestrin. 2016. Training deep nets with sublinear
+of document-level NLP tasks without chunk-                             memory cost. arXiv preprint, abs/1604.06174.
+ing/shortening the long input and without com-                      Rewon Child, Scott Gray, Alec Radford, and
+plex architecture to combine information across                       Ilya Sutskever. 2019.       Generating long se-
+these chunks. Longformer employs an attention                         quences with sparse transformers. arXiv preprint,
+pattern that combines local and global information                    abs/1904.10509.
+while also scaling linearly with the sequence length.               Christopher Clark and Matt Gardner. 2017. Simple
+Longformer achieves state-of-the-art results on the                   and effective multi-paragraph reading comprehen-
+character-level language modeling tasks of text8                      sion. In ACL.
+
+
+                                                               10
+Kevin Clark, Urvashi Khandelwal, Omer Levy, and                  Mandar Joshi, Omer Levy, Luke Zettlemoyer, and
+  Christopher D. Manning. 2019. What does bert look               Daniel Weld. 2019. BERT for coreference resolu-
+  at? an analysis of bert’s attention. arXiv preprint,            tion: Baselines and analysis. In EMNLP-IJCNLP.
+  abs/1906.04341.
+                                                                 Johannes Kiesel, Maria Mestre, Rishabh Shukla, Em-
+Arman Cohan, Franck Dernoncourt, Doo Soon Kim,                     manuel Vincent, Payam Adineh, David Corney,
+  Trung Bui, Seokhwan Kim, Walter Chang, and Nazli                 Benno Stein, and Martin Potthast. 2019. SemEval-
+  Goharian. 2018. A discourse-aware attention model                2019 task 4: Hyperpartisan news detection. In
+  for abstractive summarization of long documents. In              Proceedings of the 13th International Workshop on
+  NAACL-HLT 2018.                                                  Semantic Evaluation, pages 829–839, Minneapo-
+                                                                   lis, Minnesota, USA. Association for Computational
+Andrew M Dai and Quoc V Le. 2015. Semi-supervised                  Linguistics.
+  sequence learning. In NeurIPS.
+                                                                 Thomas N Kipf and Max Welling. 2017. Semi-
+Zihang Dai, Zhilin Yang, Yiming Yang, Jaime G. Car-                supervised classification with graph convolutional
+  bonell, Quoc V. Le, and Ruslan Salakhutdinov. 2019.              networks. ICLR.
+  Transformer-XL: Attentive language models beyond
+  a fixed-length context. In ACL.                                Nikita Kitaev, Lukasz Kaiser, and Anselm Levskaya.
+                                                                   2020. Reformer: The efficient transformer. In
+Jacob Devlin, Ming-Wei Chang, Kenton Lee, and                      ICLR.
+   Kristina Toutanova. 2019. BERT: Pre-training of
+   deep bidirectional transformers for language under-           Olga V. Kovaleva, Alexey Romanov, Anna Rogers, and
+   standing. In NAACL-HLT.                                         Anna Rumshisky. 2019. Revealing the dark secrets
+                                                                   of bert. In EMNLP/IJCNLP.
+Yuwei Fang, Siqi Sun, Zhe Gan, Rohit Pillai, Shuo-
+  hang Wang, and Jingjing Liu. 2020. Hierarchical                Kenton Lee, Luheng He, and Luke Zettlemoyer. 2018.
+  graph network for multi-hop question answering. In               Higher-order coreference resolution with coarse-to-
+  Proceedings of the 2020 Conference on Empirical                  fine inference. In NAACL.
+  Methods in Natural Language Processing (EMNLP),
+  pages 8823–8838, Online. Association for Computa-              Mike Lewis, Yinhan Liu, Naman Goyal, Mar-
+  tional Linguistics.                                              jan Ghazvininejad, Abdelrahman Mohamed, Omer
+                                                                   Levy, Veselin Stoyanov, and Luke Zettlemoyer.
+Adam Fisch, Alon Talmor, Robin Jia, Minjoon Seo, Eu-               2020. BART: Denoising sequence-to-sequence pre-
+  nsol Choi, and Danqi Chen. 2019. MRQA 2019                       training for natural language generation, translation,
+  shared task: Evaluating generalization in reading                and comprehension. In Proceedings of the 58th An-
+  comprehension. In MRQA workshop at EMNLP.                        nual Meeting of the Association for Computational
+                                                                   Linguistics, pages 7871–7880, Online. Association
+Alexios Gidiotis and Grigorios Tsoumakas. 2020. A                  for Computational Linguistics.
+  divide-and-conquer approach to the summarization
+  of academic articles. ArXiv, abs/2004.06190.                   Yinhan Liu, Myle Ott, Naman Goyal, Jingfei Du, Man-
+                                                                   dar Joshi, Danqi Chen, Omer Levy, Mike Lewis,
+Michael Glaß, Alfio Massimiliano Gliozzo, Rishav                   Luke Zettlemoyer, and Veselin Stoyanov. 2019.
+  Chakravarti, Anthony Ferritto, Lin Pan, Gaudani                  RoBERTa: A robustly optimized bert pretraining ap-
+  Bhargav, Dinesh Garg, and Avirup Sil. 2019. Span                 proach. arXiv preprint, abs/1907.11692.
+  selection pre-training for question answering. arXiv
+  preprint, abs/1909.04120.                                      Andrew L. Maas, Raymond E. Daly, Peter T. Pham,
+                                                                   Dan Huang, Andrew Y. Ng, and Christopher Potts.
+Scott Gray, Alec Radford, and Diederik P. Kingma.                  2011. Learning word vectors for sentiment analy-
+  2017. Gpu kernels for block-sparse weights.                      sis. In Proceedings of the 49th Annual Meeting of
+                                                                   the Association for Computational Linguistics: Hu-
+Dirk Groeneveld, Tushar Khot, Mausam, and Ashish                   man Language Technologies, pages 142–150, Port-
+  Sabhwaral. 2020. A simple yet strong pipeline for                land, Oregon, USA. Association for Computational
+  HotpotQA. arXiv preprint, abs/2004.06753.                        Linguistics.
+Ankit Gupta and Jonathan Berant. 2020. Gmat: Global              Matt Mahoney. 2009. Large text compression bench-
+  memory augmentation for transformers. ArXiv,                    mark.
+  abs/2006.03274.
+                                                                 Aäron van den Oord, Sander Dieleman, Heiga Zen,
+Jeremy Howard and Sebastian Ruder. 2018. Universal                  Karen Simonyan, Oriol Vinyals, Alex Graves,
+   language model fine-tuning for text classification. In           Nal Kalchbrenner, Andrew W. Senior, and Koray
+   ACL.                                                             Kavukcuoglu. 2016. Wavenet: A generative model
+                                                                    for raw audio. In SSW.
+Mandar Joshi, Eunsol Choi, Daniel S. Weld, and Luke
+ Zettlemoyer. 2017. TriviaQA: A large scale dis-                 Myle Ott, Sergey Edunov, Alexei Baevski, Angela
+ tantly supervised challenge dataset for reading com-             Fan, Sam Gross, Nathan Ng, David Grangier, and
+ prehension. In ACL.                                              Michael Auli. 2019. fairseq: A fast, extensible
+
+                                                            11
+  toolkit for sequence modeling. In Proceedings of               Ming Tu, Kevin Huang, Guangtao Wang, Jing Huang,
+  NAACL-HLT 2019: Demonstrations.                                  Xiaodong He, and Bufang Zhou. 2019. Select, an-
+                                                                   swer and explain: Interpretable multi-hop reading
+Matthew E. Peters, Mark Neumann, Mohit Iyyer, Matt                 comprehension over multiple documents. arXiv
+ Gardner, Christopher Clark, Kenton Lee, and Luke                  preprint, abs/1911.00484.
+ Zettlemoyer. 2018. Deep contextualized word repre-
+ sentations. In NAACL.                                           Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob
+                                                                   Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz
+Sameer Pradhan, Alessandro Moschitti, Nianwen Xue,                 Kaiser, and Illia Polosukhin. 2017. Attention is all
+  Olga Uryupina, and Yuchen Zhang. 2012. CoNLL-                    you need. In NIPS.
+  2012 shared task: Modeling multilingual unre-
+  stricted coreference in OntoNotes. In Joint Confer-            Johannes Welbl, Pontus Stenetorp, and Sebastian
+  ence on EMNLP and CoNLL - Shared Task, pages                     Riedel. 2018. Constructing datasets for multi-hop
+  1–40, Jeju Island, Korea. Association for Computa-               reading comprehension across documents. TACL,
+  tional Linguistics.                                              6:287–302.
+Jiezhong Qiu, Hao Ma, Omer Levy, Scott Yih, Sinong               Felix Wu, Angela Fan, Alexei Baevski, Yann Dauphin,
+   Wang, and Jie Tang. 2019. Blockwise self-attention              and Michael Auli. 2019. Pay less attention with
+   for long document understanding. arXiv preprint,                lightweight and dynamic convolutions.      arXiv
+   abs/1911.02972.                                                 preprint, abs/1901.10430.
+Alec Radford, Jeffrey Wu, Rewon Child, David Luan,               Qizhe Xie, Zihang Dai, Eduard H. Hovy, Minh-Thang
+  Dario Amodei, and Ilya Sutskever. 2019. Language                 Luong, and Quoc V. Le. 2019. Unsupervised
+  models are unsupervised multitask learners.                      data augmentation for consistency training. arXiv
+                                                                   preprint, abs/1904.12848.
+Jack W. Rae, Anna Potapenko, Siddhant M. Jayaku-
+   mar, and Timothy P. Lillicrap. 2020. Compressive              Ruibin Xiong, Yunchang Yang, Di He, Kai Zheng, Shu
+   transformers for long-range sequence modelling. In              xin Zheng, Chen Xing, Huishuai Zhang, Yanyan
+   ICLR.                                                           Lan, Li-Wei Wang, and Tie-Yan Liu. 2020. On layer
+                                                                   normalization in the transformer architecture. arXiv
+Colin Raffel, Noam Shazeer, Adam Roberts, Katherine
+                                                                   preprint, abs/2002.04745.
+  Lee, Sharan Narang, Michael Matena, Yanqi Zhou,
+  W. Li, and Peter J. Liu. 2020. Exploring the limits            Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Ben-
+  of transfer learning with a unified text-to-text trans-          gio, William W. Cohen, Ruslan Salakhutdinov, and
+  former. J. Mach. Learn. Res., 21:140:1–140:67.                   Christopher D. Manning. 2018. HotpotQA: A
+Aurko Roy, Mohammad Saffar, Ashish Vaswani, and                    dataset for diverse, explainable multi-hop question
+  David Grangier. 2020.       Efficient content-based              answering. In EMNLP.
+  sparse attention with routing transformers. arXiv              Zihao Ye, Qipeng Guo, Quan Gan, Xipeng Qiu, and
+  preprint, abs/2003.05997.                                        Zheng Zhang. 2019. BP-Transformer: Modelling
+Nan Shao, Yiming Cui, Ting Liu, Shijin Wang, and                   long-range context via binary partitioning. arXiv
+  Guoping Hu. 2020.      Is graph structure neces-                 preprint, abs/1911.04070.
+  sary for multi-hop reasoning?    arXiv preprint,
+                                                                 Manzil Zaheer, Guru Guruganesh, Kumar Avinava
+  abs/2004.03096.
+                                                                  Dubey, Joshua Ainslie, C. Alberti, S. Ontañón,
+Sandeep Subramanian, Raymond Li, Jonathan Pilault,                Philip Pham, Anirudh Ravula, Qifan Wang, L. Yang,
+  and C. Pal. 2020. On extractive and abstractive neu-            and A. Ahmed. 2020. Big bird: Transformers for
+  ral document summarization with transformer lan-                longer sequences. ArXiv, abs/2007.14062.
+  guage models. In EMNLP.
+                                                                 Rowan Zellers, Ari Holtzman, Hannah Rashkin,
+Sainbayar Sukhbaatar, Edouard Grave, Piotr Bo-                     Yonatan Bisk, Ali Farhadi, Franziska Roesner, and
+  janowski, and Armand Joulin. 2019. Adaptive at-                  Yejin Choi. 2019. Defending against neural fake
+  tention span in transformers. In ACL.                            news. In NeurIPS.
+
+Ilya Sutskever, Oriol Vinyals, and Quoc V. Le. 2014.             Jingqing Zhang, Yao Zhao, Mohammad Saleh, and
+   Sequence to sequence learning with neural networks.              Peter J Liu. 2020. Pegasus: Pre-training with ex-
+   In NIPS.                                                         tracted gap-sentences for abstractive summarization.
+                                                                    ICML.
+Trieu H. Trinh and Quoc V. Le. 2018. A simple
+   method for commonsense reasoning. arXiv preprint,             Yukun Zhu, Ryan Kiros, Richard S. Zemel, Ruslan
+   abs/1806.02847.                                                 Salakhutdinov, Raquel Urtasun, Antonio Torralba,
+                                                                   and Sanja Fidler. 2015. Aligning books and movies:
+Ming Tu, Jinke Huang, Xiaodong He, and Bowen                       Towards story-like visual explanations by watching
+  Zhou. 2020. Graph sequential network for reasoning               movies and reading books. ICCV, pages 19–27.
+  over sequences. In NeurIPS Graph Representation
+  Learning workshop.
+
+
+                                                            12
+A     Implementation Details                                              constructs, then TVM generates the corresponding
+                                                                          CUDA code and compiles it for GPUs.
+Implementing Longformer’s dilated sliding win-
+dow attention requires a form of banded matrix                            B    Character LM Hyperparameters
+multiplication (matrix multiplication where the out-
+put is all zero except certain diagonals) that is                         We evaluate on text8 and enwik8, both contain
+not directly supported in existing deep learning                          100M characters from Wikipedia split into 90M,
+libraries like PyTorch/Tensorflow. Fig. 1 compares                        5M, 5M for train, dev, test. Our model only speci-
+the runtime and memory of three different ways of                         fies how the self-attention component works, and it
+implementing it.                                                          is agnostic to the other design choices for the trans-
+Longformer-loop is a naive implementation                                 former model. Our implementation is based on the
+that computes each diagonal separately in a loop.                         Transformer-XL (Dai et al., 2019) code11 with the
+It is memory efficient because it only computes the                       memory mechanism disabled. We use relative posi-
+non-zero values, but it is unusably slow. We only                         tion embeddings with sinusoidal weights as in Dai
+use it for testing because it is easy to implement                        et al. (2019). We use two different model sizes, a
+but don’t use it to run experiments.                                      small (12 layers, 512 hidden size) model as in Dai
+Longformer-chunks only supports the non-                                  et al. (2019), and a large (30 layers, 512 hidden
+dilated case. It chunks Q and K into overlapping                          size) model as in Child et al. (2019). We employed
+blocks of size w and overlap of size 12 w, multiplies                     mixed precision training (floating points 16 and 32)
+the blocks, then mask out the diagonals. This is                          using apex12 to reduce memory consumption and
+very compute efficient because it uses a single ma-                       speed-up training. However, we kept the attention
+trix multiplication operation from PyTorch, but it                        computation in fp32 to avoid numerical instability
+consumes 2x the amount of memory a perfectly op-                          issues.13 We used gradient checkpointing (Chen
+timized implementation should consume because                             et al., 2016) to reduce memory usage, and ran our
+it computes some of the zero values. Because of                           experiments on 48GB RTX8000 GPUs. All hyper-
+the compute efficiency, this implementation is most                       parameters and stage configurations are listed in
+suitable for the pretrain/finetune case. We didn’t                        Tab. 12. Our CUDA kernel supports the autoregres-
+find the increase in memory to be a problem for                           sive mode where each token attends to a window of
+this setting.                                                             previous tokens only. Our implementation also in-
+Longformer-cuda is a custom CUDA kernel                                   cludes a version of the relative position embedding
+that we implement using TVM (Chen et al., 2018).                          that is compatible with our dilated sliding window
+It is a fully functioning implementation of our at-                       attention.
+tention (not limited as Longformer-chunks),                                  We ran the small model experiments on 4
+it is the most memory efficient, and it is as fast                        RTX8000 GPUs for 16 days. For the large model,
+as the highly optimized full self-attention.10 We                         we ran experiments on 8 RTX8000 GPUs for 13
+mainly use this implementation for the autoregres-                        days. Most of our hyperparameter search is similar
+sive language modeling experiments because of the                         to the ablation in Tab. 4 where we run the configu-
+memory efficiency (allows the longest sequences)                          ration for 150K steps on text8. We experimented
+and the support of dilation (needed for character-                        with absolute position embeddings and learned po-
+LM experiments).                                                          sition embeddings, dropout values of [0.1, 0.2]
+                                                                          (small model) and [0.1, 0.4] (large model), pre-
+Tensor Virtual Machine (TVM) We build our                                 layernorm and post-layernorm (Xiong et al., 2020),
+custom CUDA kernel using TVM (Chen et al.,                                learning rate (LR) of phase1 of values [2.5e-5, 5e-
+2018), a deep learning compiler stack that compiles                       4, 1e-4] constant and cosine LR schedules, and
+high level description of a function into optimized                       different configurations for dilation (on all heads,
+device-specific code. Using TVM, we describe our                          on 2 heads, no dilation). Number of gradient up-
+banded matrix multiplication in high-level python                         dates/phase reported in Tab. 12 is determined by
+                                                                          running each phase until the validation BPC stops
+   10
+      It is worth noting that theoretically, a perfectly optimized           11
+Longformer-cuda should be faster than the n2 computa-                           https://github.com/kimiyoung/
+tion. However, achieving this level of performance requires               transformer-xl
+                                                                             12
+special knowledge of low-level GPU programming, similar to                      https://github.com/NVIDIA/apex
+                                                                             13
+implementing a highly optimized matrix multiplication. Our                      We found that using fp16 in attention operation results in
+current implementation is sufficiently fast and practical to use.         floating point overflow and NaNs in later stages of training.
+
+
+                                                                     13
+getting better.                                                 After preparing the input data, we compute acti-
+                                                             vations from the top layer of each model as follows.
+C    Pretraining Data                                        We take the question and answer candidates and
+                                                             concatenate them to as much context as possible up
+In order to allow the model to learn long depen-
+                                                             to the model sequence length (512 for RoBERTa,
+dencies in pretraining, we compiled a corpus of
+                                                             4,096 for Longformer), run the sequence through
+long documents. Some of these data sources were
+                                                             the model, collect the output activations, and repeat
+also included in the original RoBERTa pretraining
+                                                             until all of the context is exhausted (for all models
+including the Books corpus (Zhu et al., 2015) plus
+                                                             except Longformer-large, where we just include
+English Wikipedia. We additionally included one
+                                                             the first 4,096 length sequence due to memory re-
+third of a subset of the Realnews dataset (Zellers
+                                                             quirements). Then all activations for all chunks are
+et al., 2019) with documents longer than 1,200 to-
+                                                             concatenated into one long sequence. In the case of
+kens as well as one third of the Stories (Trinh and
+                                                             Longformer, we use global attention to the entire
+Le, 2018) corpus. Our goal was to include a mix of
+                                                             question and answer candidate sequence.
+long and short documents to both allow the model
+                                                                For prediction, we attach a linear layer to each
+to learn longer dependencies while not to forget in-
+                                                             [ent] that outputs a single logit, average over all
+formation from the original RoBERTa pretraining.
+                                                             logits for each candidate across the chunks, apply
+The statistics of the pretraining data is shown in
+                                                             a softmax and use the cross entropy loss with the
+Tab. 13.
+                                                             correct answer candidate.
+D    Task specific model details                                Training used the Adam optimizer with linear
+                                                             warmup over 200 gradient updates to a maximum
+All the QA and classification models are imple-              LR, and linear decay over the remainder of training.
+mented using PyTorch-Lightning14 . We use the                We used gradient accumulation to effective batch
+official train/dev/test splits of all datasets except        size of 32 instances, checking the development ac-
+for the Hyperpartisan news which we randomely                curacy every 250 gradient updates and reported the
+split into 80/10/10 for train/dev/test.                      maximum development accuracy. Other hyperpa-
+                                                             rameters (dropout, weight decay) were identical to
+WikiHop Instances in WikiHop consist of: a
+                                                             RoBERTa pretraining.
+question, answer candidates (ranging from two
+                                                                In general, we ran minimal hyperparameter trials,
+candidates to 79 candidates), supporting contexts
+                                                             but for fair comparison between Longformer and
+(ranging from three paragraphs to 63 paragraphs),
+                                                             RoBERTa ran an identical hyperparameter search
+and the correct answer. The dataset does not pro-
+                                                             with Longformer-base and RoBERTa-base. This
+vide any intermediate annotation for the multihop
+                                                             consisted of a grid search of LR in [2e-5, 3e-5,
+reasoning chains, requiring models to instead infer
+                                                             5e-5] and number epochs in [5, 10, 15]. The
+them from the indirect answer supervision.
+                                                             best Longformer-base configuration used lr=3e-5,
+   To prepare the data for input to Longformer
+                                                             15 epochs. We ran two hyperparameter trials for
+and RoBERTa, we first tokenize the question,
+                                                             Longformer-large, lr=3e-5 and number epochs in
+answer candidates, and support contexts using
+                                                             [5, 15] (the 5 epoch model had higher dev accuracy
+RoBERTa’s wordpiece tokenizer.          Then we
+                                                             of 77.6, and was the single model submitted to the
+concatenate the question and answer candi-
+                                                             public leaderboard for test set evaluation). All mod-
+dates with special tokens as [q] question
+                                                             els were trained on a single RTX8000 GPU, with
+[/q] [ent] candidate1 [/ent] ...
+                                                             Longformer-base taking about a day for 5 epochs.
+[ent] candidateN [/ent]. The contexts
+are also concatenated using RoBERTa’s doc-                   TriviaQA TriviaQA has more than 100K ques-
+ument delimiter tokens as separators: </s>                   tion, answer, document triplets for training. Doc-
+context1 </s> ... </s> contextM                              uments are Wikipedia articles, and answers are
+</s>.       The special tokens [q], [/q],                    named entities mentioned in the article. The span
+[ent], [/ent] were added to the RoBERTa                      that answers the question is not annotated, but it is
+vocabulary and randomly initialized before task              found using simple text matching.
+finetuning.                                                     Similar to WikiHop, we tokenize the question
+  14
+     https://github.com/PyTorchLightning/                    and the document using RoBERTa’s tokenizer,
+pytorch-lightning                                            then form the input as [s] question [/s]
+
+                                                        14
+               Param                        Value
+               Position Embeddings          Relative and Sinusoidal as in Dai et al. (2019)
+               Small model config           12 layers, 8 heads, 512 hidden size as in Dai et al. (2019)
+               Large model config           30 layers, 8 heads, 512 hidden size as in Child et al. (2019)
+               Optimizer                    AdamW
+               Dropout                      0.2 (small model), 0.4 (large model)
+               Gradient clipping            0.25
+               Weight Decay                 0.01
+               Layernorm Location           pre-layernorm (Xiong et al., 2020)
+               Activation                   GeLU
+               Number of phases             5
+               Phase 1 window sizes         32 (bottom layer) - 8,192 (top layer)
+               Phase 5 window sizes         512 (bottom layer) - (top layer)
+               Phase 1 sequence length      2,048
+               Phase 5 sequence length      23,040 (gpu memory limit)
+               Phase 1 LR                   0.00025
+               Phase 5 LR                   000015625
+               Batch size per phase         32, 32, 16, 16, 16
+               #Steps per phase (small)     430K, 50k, 50k, 35k, 5k
+               #Steps per phase (large)     350K, 25k, 10k, 5k, 5k
+               Warmup                       10% of the phase steps with maximum 10K steps
+               LR scheduler                 constant throughout each phase
+               Dilation (small model)       0 (layers 0-5), 1 (layers 6-7), 2 (layers 8-9), 3 (layers 10-11)
+               Dilation (large model)       0 (layers 0-14), 1 (layers 15-19), 2 (layers 20-24), 3 (layers 25-29)
+               Dilation heads               2 heads only
+
+          Table 12: Hyperparameters for the best performing model for character-level language modeling
+
+
+ Source                            Tokens     Avg doc len          on 32GB V100 GPUs. Small model takes 1 day to
+ Books (Zhu et al., 2015)           0.5B            95.9K          train on 4 GPUs, while large model takes 1 day on
+ English Wikipedia                  2.1B              506          8 GPUs.
+ Realnews (Zellers et al., 2019)    1.8B             1.7K
+ Stories (Trinh and Le, 2018)       2.1B             7.8K          HotpotQA HotpotQA dataset involves answer-
+                                                                   ing questions from a set of 10 paragraphs from
+               Table 13: Pretraining data
+                                                                   10 different Wikipedia articles where 2 paragraphs
+                                                                   are relevant to the question and the rest are dis-
+                                                                   tractors. It includes 2 tasks of answer span ex-
+document [/s]. We truncate the document at
+                                                                   traction and evidence sentence identification. Our
+4,096 wordpiece to avoid it being very slow. After-
+                                                                   model for HotpotQA combines both answer span
+wards, we get the activations from RoBERTa and
+                                                                   extraction and evidence extraction in one joint
+Longformer similar to WikiHop (discussed above).
+                                                                   model. We found a higher performance using a
+We use global attention on all question tokens.
+                                                                   two-stage Longformer model with similar setup
+   For prediction, we add one layer that predicts the              that first identifies relevant paragraphs and then
+beginning and end of the answer span. Because of                   does find the final answer span and evidence.15
+the distant supervision nature of the training data                This is largely because removing the distracting
+(no gold answer spans), we use the loss function                   paragraphs first reduces the noise for the final ev-
+of Clark and Gardner (2017) which works like an                    idence and span detection as also found to be im-
+OR that the model only needs to get one answer                     portant by recent state-of-the-art methods in this
+span right, not all of them.                                       dataset (Fang et al., 2020). Similar to Wikihop and
+   Hyperparameters of the best configuration are                   TriviaQA, to prepare the data for input to Long-
+listed in Tab. 14. All other hyperparameters are                   former, we concatenate question and then all the
+similar to RoBERTa’s. For hyperparameter search,                   10 paragraphs in one long context. We particu-
+we only tuned LR for the RoBERTa baseline and                      larly use the following input format with special
+tried rates [3e-5, 5e-5, 1e-4], then used the best,                tokens: “[CLS] [q] question [/q] hti
+which is 3e-5, for all subsequent experiments with                 title1 h/ti sent1,1 [s] sent1,2 [s] ...
+no further tuning. We trained the Longformer-large                   15
+                                                                       The final dev performance of the two stage model im-
+with the best configuration once and submitted its                 proves over a single stage model by about 4.2 points on joint-
+output to the leaderboard. We ran our experiments                  F1 metric
+
+
+                                                              15
+hti title2 h/ti sent2,1 [s] sent2,2                             Param               WikiHop     TriviaQA     HotpotQA
+[s] ...” where [q], [/q], hti, h/ti, [s],                       Epochs                    15           5            5
+[p] are special tokens representing, question start             LR                      3e-5        3e-5         5e-5
+                                                                Warmup steps             200        1000         1000
+and end, paragraph title start and end, and sentence,           Batch size                32          32           32
+respectively. The special tokens were added to the              Optimizer              Adam        Adam         Adam
+Longformer vocabulary and randomly initialized
+before task finetuning. For Longformer, we use               Table 14: Hyperparameters of the QA models. All mod-
+global attention to question tokens, paragraph ti-           els use a similar scheduler with linear warmup and de-
+                                                             cay.
+tle start tokens as well as sentence tokens. The
+model includes additional feedforward layers on
+top of paragraph title start tokens for prediction           document into non-overlapping segments up to the
+of relevant paragraphs, as well as sentence tokens           maximum sequence length, then concatenates the
+for predicting evidence sentences. After training            activations for the coarse-to-fine clustering stage
+the first stage model, we predict relevant paragraph         that forms coreference clusters. The maximum se-
+scores for both training and development set. We             quence length was 384 for RoBERTa-base, chosen
+then keep up to 5 paragraphs whose raw score is              after three trials from [256, 384, 512] using the
+higher than a pre-specified threshold (-3.0), and            default hyperparameters in the original implemen-
+remove the other paragraphs from the context. We             tation.16 For Longformer-base the sequence length
+then train the second stage model on the resulting           was 4,096. Similar to the original implementation,
+shortened context. For answer span extraction we             different learning rates were used for the pretrained
+use BERT’s QA model (Devlin et al., 2019) with               RoBERTa parameters and the randomly initialized
+addition of a question type (yes/no/span) classifi-          task parameters. Using a larger learning rate in the
+cation head over the first special token ([CLS]).            task parameters allows the optimizer to adjust them
+For evidence extraction we apply 2 layer feedfor-            farther from their randomly initialized values with-
+ward networks on top of the representations corre-           out destroying the information in the pretrained
+sponding to sentence and paragraph tokens to get             RoBERTa parameters.
+the corresponding evidence prediction scores and                Hyperparameter searches were minimal and con-
+use binary cross entropy loss to train the model.            sisted of grid searches of RoBERTa LR in [1e-5,
+At inference time for evidence extraction, we use            2e-5, 3e-5] and task LR in [1e-4, 2e-4, 3e-4] for
+a constrained decoding strategy similar to Groen-            both RoBERTa and Longformer for a fair compari-
+eveld et al. (2020) that ensures that the evidence           son. The best configuration for Longformer-base
+sentences come from exactly two paragraphs which             was RoBERTa lr=1e-5, task lr=1e-4. All other hy-
+is the setup of this dataset. We combine span, ques-         perparameters were the same as in the original im-
+tion classification, sentence, and paragraphs losses         plementation. Training takes about 10 hours on a
+and train the model in a multitask way using lin-            single GPU.
+ear combination of losses. Our experiments are                  Our implementation is a superhack that involves
+done on RTX8000 GPUs and training each epoch                 PyTorch and Tensorflow sharing a single process
+takes approximately half a day on 4 GPUs. We                 and GPU. To avoid re-implementing the com-
+trained the model using Adam optimizer with lin-             plicated coarse-to-fine logic from Tensorflow in
+ear warmup (1000 steps) and linear decay. We used            PyTorch (that involves a highly optimized cus-
+minimal hyperparameter tuning using LRs of 3e-5              tom GPU kernel originally released by Lee et al.
+and 5e-5 and epochs of 3 to 7 and found the model            (2018)), we devised a system where the lower trans-
+with LR of 3e-5 and 5 epochs to work best. We                former portion of the model passes activations and
+conduct the same hyperparameter search for the               gradients back and forth between PyTorch and Ten-
+RoBERTa baseline as well. The rest of hyperpa-               sorflow. The input tensors are first run through
+rameters are reported in Tab 14.                             the transformer in PyTorch, the activations are col-
+                                                             lected from the top layer, transferred from GPU
+Coreference model details The coreference
+                                                             to CPU then from CPU to Tensorflow and back to
+model is a straightforward adaptation of the coarse-
+                                                             GPU to run the coarse-to-fine clustering and com-
+to-fine BERT based model from Joshi et al.
+                                                             pute the loss. Then gradients are back propogated
+(2019). After preprocessing each document with
+                                                               16
+the RoBERTa wordpiece tokenizer, it splits each                     https://github.com/mandarjoshi90/coref
+
+
+                                                        16
+in Tensorflow to the top of the transformer and
+the process reversed to transfer them to PyTorch
+for back propogation through the remainder of the
+model. Separate optimizers are maintained with
+identical LR schedules for parameter updates. The
+overhead in this approach is minimal compared to
+the overall cost of running the model.
+Text classification For classification, following
+BERT, we used a simple binary cross entropy loss
+on top of a first [CLS] token with addition of
+global attention to [CLS]. We used Adam opti-
+mizer with batch sizes of 32 and linear warmup
+and decay with warmup steps equal to 0.1 of the
+total training steps. For both IMDB and Hyperpar-
+tisan news we did grid search of LRs [3e-5, 5e-5]
+and epochs [10, 15, 20] and found the model with
+[3e-5] and epochs 15 to work best. Experiments
+were done on a single RTX8000 GPU.
+
+
+
+
+                                                    17
+

@@ -1,0 +1,1160 @@
+                                             GSPMD: General and Scalable Parallelization for ML
+                                                          Computation Graphs
+                                               Yuanzhong Xu, HyoukJoong Lee, Dehao Chen, Blake Hechtman, Yanping Huang, Rahul Joshi,
+                                               Maxim Krikun, Dmitry Lepikhin, Andy Ly, Marcello Maggioni, Ruoming Pang, Noam Shazeer,
+                                                                 Shibo Wang, Tao Wang, Yonghui Wu, Zhifeng Chen
+                                                                                                      Google
+
+                                         Abstract                                                              shared, robust mechanism for different parallelism patterns
+                                                                                                               is particularly relevant moving forward because the ML com-
+arXiv:2105.04663v2 [cs.DC] 23 Dec 2021
+
+
+
+
+                                         We present GSPMD, an automatic, compiler-based paral-
+                                         lelization system for common machine learning computa-                munity is increasingly investing into multimodality, where
+                                         tions. It allows users to write programs in the same way as           text, image and audio are combined into a single model [31].
+                                         for a single device, then give hints through a few annotations           GSPMD separates the concerns of machine learning model
+                                         on how to distribute tensors, based on which GSPMD will               programming and parallelism. It allows users to write pro-
+                                         parallelize the computation. Its representation of partition-         grams with giant tensors as if there were a single giant device.
+                                         ing is simple yet general, allowing it to express different or        Then the user can insert annotations in a few places that
+                                         mixed paradigms of parallelism on a wide variety of models.           specify how tensors are distributed across devices; GSPMD
+                                            GSPMD infers the partitioning for every operator based             will run compiler passes that complete the sharding speci-
+                                         on limited user annotations, making it convenient to scale            fication on the entire computation graph, and transform it
+                                         existing single-device programs. It solves several technical          into a mathematically equivalent, parallelized computation
+                                         challenges for production usage, allowing GSPMD to achieve            to run on each device. It allows the users to focus on model
+                                         50% to 62% compute utilization on up to 2048 Cloud TPUv3              building instead of sharding implementation, and enables
+                                         cores for models with up to one trillion parameters.                  easy porting of existing single-device programs to run at a
+                                                                                                               much larger scale. To experiment with different partitioning
+                                         1    Introduction                                                     strategies, only the annotations need to be reconfigured.
+                                                                                                                  GSPMD addresses several practical issues when applying
+                                         Recent development of neural networks has shown dramatic
+                                                                                                               automatic partitioning to production models:
+                                         benefit from model scaling, creating a demand to parallelize
+                                                                                                                  • Generating one program for each partition would in-
+                                         computation in terms of both training data and model pa-
+                                                                                                               crease compilation time significantly, so GSPMD instead
+                                         rameters. Parallelism may be introduced in several ways:
+                                                                                                               produces a single program for all partitions. This property is
+                                         data parallelism [22] partitions training data, pipeline par-
+                                                                                                               called Single Program Multiple Data (SPMD), and is crucial
+                                         allelism [18, 25, 27] partitions the computation graph, and
+                                                                                                               for scaling to thousands of partitions.
+                                         within-layer model parallelism [36] partitions the weight
+                                                                                                                  • GSPMD supports unevenly partitioned dimensions, al-
+                                         and computation of each model layer.
+                                                                                                               lowing any tensor to be partitioned on arbitrary device
+                                            We present GSPMD, a system that uses simple tensor shard-
+                                                                                                               meshes. It is often a practical constraint for accelerators
+                                         ing annotations to achieve different parallelism paradigms
+                                                                                                               to require statically known shapes at compile time in order
+                                         in a unified way, including data parallelism, in-layer model
+                                                                                                               to ease development. Despite supporting uneven partitions,
+                                         parallelism, and novel strategies like image spatial partition-
+                                                                                                               GSPMD is compatible with such constraints.
+                                         ing [11] and weight-update/optimizer-state sharding [30, 40].
+                                                                                                                  • We implemented GSPMD as an extension to our pro-
+                                         Although pipeline parallelism partitions the graph instead
+                                                                                                               duction ML compiler, XLA [3]. The implementation covers
+                                         of individual operators/tensors, GSPMD could still achieve it
+                                                                                                               the full set of operators in XLA, including those with com-
+                                         with the help of a simple wrapper library that reduces pipelin-
+                                                                                                               plicated semantics like Convolution [2]. XLA is a unifying
+                                         ing to a tensor/operator partitioning problem. GSPMD is
+                                                                                                               abstraction for multiple frameworks (TensorFlow [5], Jax [7],
+                                         flexible enough to express combinations of these approaches,
+                                                                                                               Pytorch [29] and Julia [6]) and hardware platforms (CPUs,
+                                         e.g., different layers could be partitioned in different man-
+                                                                                                               GPUs and Cloud TPUs [16]), making GSPMD reusable.
+                                         ners, and different approaches could be combined in the
+                                                                                                                  • GSPMD supports nested patterns of parallelism; at per-
+                                         same layer.
+                                                                                                               operator level, that means different types of dimensions
+                                            GSPMD is generalized from the backend of GShard [23]
+                                                                                                               could be partitioned across orthogonal subgroups of devices.
+                                         based on our experiences of model scaling beyond the mixture-
+                                                                                                               We have developed a recursive method for such nested pat-
+                                         of-expert (MoE) use case, and it has helped Google to scale
+                                                                                                               terns, maximizing the generality of GSPMD without requir-
+                                         many deep learning models across several domains, includ-
+                                                                                                               ing excessive handwritten partitioning rules.
+                                         ing language (e.g., LamBDA [1], GShard-M4 [24]), image (e.g.,
+                                         MetNet-2 [14]), and speech (e.g., BigSSL[41]). GSPMD as a
+                                                                                                           1
+   We demonstrate the capability of GSPMD by applying                   parallelism, which includes everything above except pipelin-
+it on several categories of ML model, and measuring the                 ing. Although pipeline parallelism is not in-operator parti-
+performance and memory scaling of model training on thou-               tioning, it could be reduced to an operator partitioning
+sands of Cloud TPUv3 [16] devices. The use cases include                problem with the help of a wrapper library over existing
+image models, speech models, and sparse and dense lan-                  code (Section 3.3) in some common cases, and GSPMD could
+guage models. By choosing intuitive initial annotations, we             still be used to shard individual stages in combination with
+can achieve close-to-linear memory and performance scaling              other pipelining implementations for unsupported cases.
+with respect to the number of devices.                                     More importantly, GSPMD can easily express nested pat-
+                                                                        terns of the above techniques. Section 5 shows examples of
+                                                                        combining them in the Transformer [38] model.
+2     Background
+Modern ML models are typically defined as dataflow graphs               2.2   XLA and TensorFlow
+of connected layers (subgraphs). Each layer has its model
+weights/parameters, and produces outputs that are referred              The automatic partitioner in GSPMD is implemented as trans-
+to as “activations”. Model training requires first computing            formation passes in the XLA compiler [3]. XLA defines a
+the model’s final output (forward pass), then computing                 backend-agnostic intermediate representation (IR) calld HLO,
+the gradients of each layer weight (backward pass), which               which models a computation as a dataflow graph where
+happens in the reverse layer order due to backward data                 nodes are operators and edges are tensors.
+dependencies. Model serving requires only the forward pass.                 Multiple front-end frameworks including TensorFlow [5],
+                                                                        JAX [7], PyTorch [29] and Julia [6] already have lowering
+                                                                        logic to transform their graph representation to XLA HLO
+2.1   Common parallelism patterns in ML workloads                       graph, which can then be compiled into target executables
+Below are a few typical parallelism patterns used in modern             if the accelerator has a compiler backend for XLA. XLA has
+ML workloads.                                                           a much smaller set of operators than front-end frameworks
+   Data parallelism is a technique for parallelizing train-             like TensorFlow. This reduces the burden of implementing a
+ing [22]. Different devices (replicas) have the same copy of            partitioner without harming generality.
+the model, but compute on different training data to produce                In this paper we demonstrate the use cases with models
+local gradients. They collect and sum their gradients to keep           written in TensorFlow. TensorFlow offers a Python API for
+in sync with each other. Such synchronization is typically              defining and running ML models. A component called the
+implemented as an MPI-style AllReduce operator [26].                    TF2XLA bridge transforms the TensorFlow model into an
+   Within-layer model parallelism partitions the weight                 equivalent XLA graph, so that XLA can compile it into a de-
+tensor of a layer across multiple devices [36]. It may also re-         vice executable. GSPMD is integrated to JAX with a slightly
+quire communication across devices, e.g., AllReduce when                different API, but it is mapped to the same XLA abstraction.
+the layer sums over a partitioned dimension. Compared to
+data parallelism, this technique can help building larger mod-          3     Tensor Sharding and Auto Completion
+els by sharding the weights.
+   Spatial partitioning is a technique to shard image input             GSPMD defines an intuitive and general representation of
+data along spatial dimensions [11], which helps fitting large           tensor sharding. Following the philosophy of separation of
+image data on devices with limited memory capacity.                     concern, GSPMD has two independent compiler transforma-
+   Weight-update sharding or optimizer-state sharding                   tions: sharding completion and per-operator partitioning.
+is an enhancement to data parallelism where the computa-
+tion to apply combined gradients onto weights is sharded                3.1   Representation of tensor sharding
+across replica devices [30, 40]. It is an optimization especially       In GSPMD, each tensor will be assigned a sharding property,
+for expensive optimizers like ADAM [21].                                either explicitly by the user as initial annotations, or by the
+   Pipeline parallelism partitions the training graph into              sharding completion pass. The sharding property specifies
+multiple stages that run on different devices [18] to help              how the data is distributed across devices. GSPMD defines
+build large models. Each stage sends its result to its down-            three types of sharding (see also Figure 1).
+stream stage in the forward pass, and to its upstream stage                • Replicated. All devices have the same full data.
+in the backward pass. Due to data dependencies between the                 • Tiled. A tiled sharding contains a multi-dimensional
+forward and backward passes, devices can be idle during part            tensor consisting of device IDs (e.g., [[0,2],[1,3]] in Figure 1),
+of the training step, which is known as a “bubble”. The over-           which must have the same rank as the data tensor. Each
+head of bubbles can be amortized with larger global training            data dimension is sharded across devices along the same
+batch size. Pipelining can also help build large models.                dimension in the device tensor, and each device occupies
+   GSPMD is designed to be a general solution for all of the            the corresponding tile in the data tensor that matches its
+above types of parallelism. It natively supports in-operator            location in the device tensor. There is zero data duplication.
+                                                                    2
+          1. Replicated:                                       0       2
+                                                                                             Einsum. The equivalent operator in XLA is Dot. It is a gen-
+           ●    Every partition has full data                  1       3                     eralized matrix multiply, where the user can define arbitrary
+                                                 3. Partially Tiled:                         numbers of dimensions of different types. An Einsum can
+          2. Tiled:
+                                                  ●
+                                                  ●
+                                                       Replicated in subgroups
+                                                       Each subgroup has a different
+                                                                                             be expressed as a string equation, e.g., 𝐴𝐵𝐶, 𝐴𝐶𝐷 → 𝐴𝐵𝐷,
+  0   2    ●    Every partition has one ¼ data         subset of data                        where 𝐴 is an embarrassingly parallel batch dimension in
+           ●    Device order can be speciﬁed      ●    Device mesh tensor            ,
+  1   3    ●    Device mesh tensor                     inner-most dim is replication         both operands and the output, C is a contracting dimension
+           ●                                      ●
+                                                                                             that only exist in the operands and will be sum-reduced,
+                                                                                             while 𝐵 and 𝐷 are non-contracting dimensions that exist in
+Figure 1. Examples of the three types of sharding on a data tensor,                          one operand and are inherited by the output.
+and the mesh_split API calls to represent them.                                                 With GSPMD, the user can annotate the operands and the
+                                                                                             output to combine different parallelism modes. For a typical
+   • Partially tiled (an extension to GShard [23]). The devices                              fully connected projection layer, 𝐵𝐷, 𝐷𝐹 → 𝐵𝐹 , the user can
+are first divided into equally sized subgroups, and the data                                 combine data- and model-parallelism by annotating
+tensor is replicated across devices in each subgroup but tiled                                       bd = mesh_split ( bd , mesh , [0 , -1])
+across subgroups. Internally, it is also represented as a tensor                                     df = mesh_split ( df , mesh , [ -1 , 1])
+of device IDs, with an additional dimension at the end for                                   and GSPMD will auto-complete the output sharading with
+replication subgroups.                                                                       mesh_split(bf, mesh, [0,1]) so that the input and out-
+   This representation is simple yet general, because it treats                              put are partitioned on the batch dimension (data-parallelism)
+all tensor dimensions in the same way and does not specialize                                across mesh dimension 0, while the layer weight df and the
+for batch dimensions (data parallelism [22]), weight dimen-                                  output are partitioned on the feature dimension F (model-
+sions (model-parallelism or weight-update sharding [40]), or                                 parallelism) on mesh dimension 1.
+image dimensions (spatial partitioning [11]).                                                  If the user further partitions the weights along the other
+   GSPMD provides a convenient abstraction on top of the                                     mesh dimension, i.e.,
+above low-level sharding representation. Devices can be or-
+                                                                                                     df = mesh_split ( df , mesh , [0 , 1])
+ganized in a logical multi-dimensional tensor called a device
+mesh, which can be used with an intuitive API.                                               it will additionally trigger the weight-update sharding op-
+   mesh_split(tensor, device_mesh, dims_mapping) is                                          timization [30, 40] where the weight will be unsharded on
+the primary API GSPMD provides for users. It generates a                                     demand on the D dimension right before this layer in the for-
+sharding annotation for tensor, based on the device mesh                                     ward pass to reduce peak memory usage, and gradients will
+and a mapping from each data tensor dimension (i) to an                                      be communicated with ReduceScatter instead of AllReduce
+optional device mesh dimension (dims_mapping[i]). It uses                                    in the backward pass and applied on a sharded optimizer.
+-1 to represent a non-existing mapping in dims_mapping.                                         If the layer has a sparsely activated mixture-of-expert
+Each device mesh dimension should appear at most once in                                     (MoE) architecture [34], it can additionally have an expert
+dims_mapping. This simple API is general enough to express                                   E dimension in the Einsum equation on both operands and
+all types of sharding: depending on whether dims_mapping                                     the output, i.e., 𝐸𝐵𝐷, 𝐸𝐷𝐹 → 𝐸𝐵𝐹 . To parallelize the experts
+contains all, part, or none of the mesh dimensions, it can                                   across different devices, the user only needs to annotate the
+represent tiled, partially tiled, and replicated sharding.                                   E dimension on these tensors, e.g.,
+   When generating collective communication operators,                                               ebd = mesh_split ( ebd , mesh , [0 , -1 , -1])
+GSPMD preserves the order of devices in device_mesh. There-                                          edf = mesh_split ( edf , mesh , [0 , -1 , 1])
+fore, device_mesh can be configured by the user in order to                                          ebf = mesh_split ( ebf , mesh , [0 , -1 , 1])
+optimize communication based on the topology of the device                                   In practice, the annotations on the activations ebd and ebf
+network. For example, it could model the actual topology of                                  can be omitted and GSPMD can infer them from the weights,
+device network, or reorder devices to avoid long links.                                      unless the upstream or downstream layers have a different
+   In typical use cases, the user only needs to define the                                   pattern of parallelism.
+device mesh once, and then focus on the mapping of tensor
+dimensions. However, GSPMD does not have any restrictions                                    3.3   Pipeline parallelism reduced to tensor sharding
+if the user wants to use a different device mesh for each                                    Pipelining does not partition individual operators or tensors,
+tensor. This could be useful when different parts of the model                               but partitions the graph into pipeline stages. We consider a
+have very different parallelism patterns.                                                    constrained scenario of pipelining: all stages are the same
+                                                                                             subcomputation except for having different weight values.
+                                                                                             This constraint is practical because a common way to scale
+3.2   Examples of expressing in-operator parallelism                                         up models is to stack layers of the same pattern [8, 18].
+We explain a useful and succinct operator in TensorFlow                                        We reduce pipelining into a layer-wise sharding prob-
+(and other libraries like numpy), the Einstein Summation or                                  lem. Imagine that the layer computation is rewritten in a
+                                                                                         3
+                                                                         Input batch                                                                           Input batch
+stage-parallel way, where a leading layer/stage dimension L                            Embedding                                                                               Softmax
+
+
+
+
+                                                                                                                                                               batch
+has been added to each tensor, and the computation is en-
+
+
+
+
+                                                                         batch
+                                                                                         vocabulary                                                                            vocabulary
+
+tirely parallel on this dimension. This transformation can be
+done by existing frontends’ vectorization support like JAX’s                                              Encoder: 4 pipeline stages           Decoder: 4 pipeline stages
+vmap() and TensorFlow’s vectorized_map().
+
+   Basic GPipe schedule. Pipelining requires data to be or-
+ganized into microbatches; each stage loops over them one at                           In-stage partitioning                                       In-stage partitioning
+                                                                                                                               MoE
+a time [18]. We use a shifting buffer to pass data across stages,
+
+
+
+
+                                                                                                                                     Combine
+                                                                                                          Dispatch
+
+
+                                                                                                                     experts
+                                                                                                  Dense
+
+
+
+
+                                                                                                                                                                       Dense
+                                                                                       batch
+
+
+
+
+                                                                                                                                                       batch
+and it also has a leading L dimension, as shown below.
+
+   # Shifting buffer .
+   state = zeros ([ L , ...])
+                                                                        Figure 2. A partitioning strategy over 16 devices organized as a
+   for i in range ( num_microbatches + L - 1):
+                                                                        logical 4x4 mesh for an encoder-decoder model, where the encoder
+     # Shift state to the right by 1.
+                                                                        conains MoE layers. Blue represents partitioning along the first
+     from_prev_stage = pad_left ( state , 1)[: -1]
+                                                                        mesh dimension X, and yellow represents partitioning along the sec-
+     stage_ids = range ( L ) # [0 , 1 , 2 , ...]
+                                                                        ond mesh dimension Y. X and Y are repurposed for different model
+     inp = next_input ()
+                                                                        components to achieve different parallelism modes. For example,
+     input = elementwise_select (
+                                                                        the X dimension is used for data parallelism in the embedding and
+       stage_ids == 0 , inp , from_prev_stage )
+                                                                        softmax layers, but used for pipeline parallelism in the encoder and
+     state = vmap ( OneStageCompute )( input , ...)
+                                                                        decoder. The Y dimension is also used in different ways to partition
+   The above is the Python code for the forward pass of                 the vocabulary, batch or model expert dimensions.
+vectorized pipelining. During each iteration, the state buffer
+is shifted to the right by one along L, so that the previous               Circular schedule. This method also allows us to imple-
+stage’s last result is passed to the next stage. The loop runs          ment more advanced pipelinine scheduling algorithms. For
+additional stages - 1 iterations to wait for the last stage to          example, by assigning layers to devices in a non-contiguous
+finish processing all the microbatches. The extra iterations            manner (e.g., Layers 0, 4, 8 to Device 0, Layers 1, 5, 9 to Device
+are equivalent to the bubbles in earlier work [18] that describe        1, ...), we can reduce the bubble ratio with the same num-
+the idle time due to data dependency, although the waiting              ber of microbatches. It is implemented by adding an extra
+devices compute on padded data instead of being idle.                   dimension to represent the layers within a device. We refer
+   With the help of vmap or vectorized_map, this loop im-               to this type of scheduling as circular pipelining, which is
+plementation can wrap a legacy single-stage implementation              similar to the interleaved schedule in [28].
+OneStageCompute and turn it to a pipelined computation.
+   This user-level loop library does not implement distributed
+execution, and it can run on a single device. To distribute it on
+multiple devices, users can simply annotate the L dimension
+to be sharded, and GSPMD will turn the buffer shifting into             3.4       Manually partitioned subgraphs and pipelining
+cross-device communication via CollectivePermute.                       GSPMD has a mechanism to allow power users to control
+   There are several benefits of this pipelining implementa-            exactly how a subgraph is partitioned, by entering a manual
+tion. 1) It runs naturally when combined with other types               partitioning mode in the subgraph. Within this subgraph, the
+of parallelism in GSPMD, avoiding the need for extra infras-            user writes program with shard-sized shapes; outside the
+tructure. 2) It enables pipelining on part of the model, and            subgraph, the program is still to be partitioned automatically
+switching to other types of parallelism in other parts (Sec-            by the compiler, and there are special conversion nodes to
+tion 5.3). 3) It benefits from the SPMD property, so that the           switch between the modes. It was originally used to work
+infrastructure is very simple and does not need to maintain             around cases where GSPMD was inefficient (see Section 3.2
+the interface between multiple programs.                                in [23]), but as the software matures and advanced optimiza-
+   It is limited to homogeneous pipeline stages, but this is not        tions are added, most of the use cases are no longer needed.
+a constraint for encoder-decoder models in general, since we               On the other hand, GSPMD pipelining (Section 3.3) be-
+can run separate pipelines for the encoder and the decoder              comes a popular use case for manual-mode subgraphs, as
+separately. Figure 2 shows a configuration where the encoder            an alternative to avoid vectorized_map() in TensorFlow
+and decoder have their own pipelines that share the same set            since it supports only a subset of operators. Instead of doing
+of devices, in combination of sharding on other dimensions.             vectorized_map() then partitioning the new stage dimen-
+   For heterogeneous stages that cannot be supported, we                sion, we can simply convert the inputs to manual mode be-
+recommend integrating GSPMD with other pipeline imple-                  fore OneStageCompute thus removing the stage dimension,
+mentations [18, 25, 27] and sharding each stage.                        and convert the outputs back to automatic mode.
+                                                                    4
+             Partially tiled on A                                                More formally, we use 𝑂 𝑓 𝑓 𝑠𝑒𝑡 (𝑆, 𝑑, 𝑖) to denote the shard
+       0 1                                                                    offset of device 𝑑 in dimension 𝑖 according to sharding 𝑆.
+                   AyB
+       2 3
+                                      Dot                      0 1            The shard offset describes the location of the device’s data
+                                                    AyCx
+                                    (matmul)                   2 3
+       0 1                                                                    partition within the original shape before partitioning. Then,
+                   BCx                         From input AyB: AyC
+       2 3                                                                    two shardings 𝑆 0 and 𝑆 1 are compatible with each other if
+                                               From input BCx: ACx
+             Partially tiled on C              Merged: fully tiled AyCx       there exists a sharding 𝑆 where for each device 𝑑,
+
+Figure 3. Sharding propagation through a Dot operator. The result                          𝑂 𝑓 𝑓 𝑠𝑒𝑡 (𝑆, 𝑑, 𝑖) == 𝑂 𝑓 𝑓 𝑠𝑒𝑡 (𝑆 0, 𝑑, 𝑖)
+is merged from both inputs. Different colors and subscripts of the
+                                                                              for every sharded dimension 𝑖 in 𝑆 0 , and
+letters represent sharding along different device mesh dimensions.
+                                                                                           𝑂 𝑓 𝑓 𝑠𝑒𝑡 (𝑆, 𝑑, 𝑗) == 𝑂 𝑓 𝑓 𝑠𝑒𝑡 (𝑆 1, 𝑑, 𝑗)
+   To allow GSPMD to still partition other dimensions for
+data- or in-layer model-parallelism, we extended the man-                     for every sharded dimension 𝑗 in 𝑆 1 . In this case, 𝑆 is a merged
+ual mode to support subgroups similar to partial replica-                     sharding of 𝑆 0 and 𝑆 1 .
+tion, i.e., devices within a subgroup are manually partitioned,                  Merging compatibile shardings is the key to support nested
+while devices across subgroups are automatically partitioned.                 parallelism patterns with simple user annotations. For ex-
+In this case, the sets of devices used as pipeline stages are                 ample, if the user wants to mix data- and model-parallelism,
+the manual subgroups.                                                         they could simply annotate the inputs to be sharded on the
+                                                                              batch dimension along one device mesh dimension, while
+3.5   Intuitive sharding completion                                           the layer weights are sharded on certain model dimensions
+                                                                              along other mesh dimensions. This way, the result of this
+This section describes how GSPMD auto-completes the shard-
+                                                                              layer will be propagated with sharding on both dimensions.
+ing on every tensor based on limited user annotations. It is
+implemented as a compiler pass in XLA.                                           Iterative, priority-based sharding propagation. To com-
+   Preserved dimensions in operators. XLA operators typ-                      plete the sharding assignment on all tensors, GSPMD runs
+ically preserve some dimensions from inputs to outputs. We                    the propagation pass on the entire graph in multiple itera-
+simply propagate sharding of such a dimension from inputs                     tions, and alternates between forward propagation (input to
+to outputs, and vice versa. For example, a sharding anno-                     output) and backward propagation (output to input). While it
+tation on the input batch dimension could be propagated                       preserves initial user annotations, shardings assigned by the
+down to all layers’ results (activations), and the same is true               pass could be refined incrementally over the iterations. This
+for image spatial dimensions.                                                 means it changes the sharding on a tensor only when it finds
+   We decided to keep the sharding propagation simple, so it                  a more fine-grained sharding (possibily by combining with
+does not try to create new sharding patterns on dimensions.                   existing compatible sharding). This property guarantees the
+The propagation result may not always be optimal, but re-                     pass could reach a fixed point after finite iterations.
+sults will be the most intuitive to users. Users may insert                      Figure 4 illustration of the sharding propagation processes
+more sharding annotations to instruct GSPMD to partition                      with and without priorities on a typical linear layer followed
+each tensor as desired.                                                       by a ReLu activation function.
+   In comparison, a fully automatic approach could apply                         In practice, some use cases would require switching the
+advanced algorithms to find the best partitioning strategy                    sharding on a dimension in different tensors (Section 5), and
+(e.g., [19]) beyond user annotations, but there has not been                  the sharding decision on each tensor will depend on the or-
+a working implementation for our production need due to                       der in which the propagation pass iterates over the operators.
+different representations and incompleteness in problem for-                  To produce the most intuitive sharding assignment, GSPMD
+mulation. GSPMD instead focuses on propagating user in-                       assigns a priority to the propagation through each opera-
+tentions, though it may also be useful in defining the search                 tor from each direction. Elementwise operators are assigned
+space for a fully automatic approach.                                         the highest priority to propagate through in both directions,
+                                                                              because there is no communication if their inputs/outputs
+   Merging compatible shardings. The result of an XLA                         are sharded consistently, and propagating through element-
+operator can inherit dimensions from different inputs. For ex-                wise operators would be the most intuitive decision to users.
+ample, the Dot operator is a generalized matrix multiply, and                 Operators like Dot, which add or remove dimensions are
+GSPMD infers sharding based on each operand; GSPMD also                       assigned lower priority. We also assign different priorities
+tries to combine shardings from different operands if they                    to different directions; for example, the Broadcast operator
+are compatible to form a more refined sharding. A typical                     adds dimensions to the input by duplicating the data, so we
+example of compatible shardings is two orthogonal partially                   assign higher priority to the backward propagation, which
+tiled shardings created by mesh_split on different tensor                     helps to avoid potential communication on the larger shape
+dimensions, as shown in Figure 3.                                             due to mismatched shardings. See Figure 4.
+                                                                          5
+                                                     May choose either BDx or BxD.               Mismatched sharding around Add.                         by writing regular TensorFlow programs. From the user’s
+                                                     They cannot be merged.                      Cross-device communication needed
+                                              FyDx     BxFy                                     FyDx BxFy
+                                                                                                                      Dy
+                                                                                                                                                         point of view, XlaSharding is semantically equivalent to an
+                                                                                D
+                                                                                                         Dot
+                                                                                                                                                         Identity operator that passes the input through unchanged,
+                                                     Dot                  Broadcast                                          Broadcast
+
+                                                           BDx                                                  BDx          BxDy
+                                                                                                                                                         but the sharding annotation can be specified as an attribute.
+                                                                         BD
+   Initial user annotations
+                                                              Add                   Broadcast                     Add                    Broadcast       The TF2XLA bridge preserves the annotation when convert-
+FyDx    BxFy
+                                                                  BxDy                                                BxDy      BxDy                     ing the TensorFlow program to an XLA program.
+                              D                                               BD
+       Dot               Broadcast                                                                                max                                       Frameworks like TensorFlow also support automatic gra-
+                                                              max
+             BD          BD                                       BxDy              Propagation                       BxDy
+                                                                                    without priorities                                                   dient calculation. It requires each operator to have a reg-
+               Add                Broadcast                                                      FyDx      BxFy
+                  BxDy
+                                              FyDx     BxFy                                                                         Dy                   istered gradient computation. We define the gradient of
+                              BD                                                D
+
+                                                     Dot                  Broadcast
+                                                                                                         Dot                 Broadcast                   XlaSharding to be a copy of itself. In this way, the back-
+               max
+                  BD                                       BxDy          BxDy
+                                                                                                               BxDy      BxDy                            ward computation will be annotated automatically with the
+                                                              Add                   Broadcast                     Add                    Broadcast       same sharding.
+                                                              BxDy                                                BxDy         BxDy
+                                                                           BxDy
+
+                                                              max                                                 max
+
+                                                              BxDy
+                                                                                     Propagation with
+                                                                                     priorities
+                                                                                                                  BxDy                                   4     The SPMD Partitioner
+                                                                                                                                                         There are two options when implementing the partitioner:
+Figure 4. Comparison between sharding propagation algorithms                                                                                             1) creating a customized program for each of the partitions
+with and without priorities. The top-right figure shows a potential                                                                                      (Multiple Programs Multiple Data, or MPMD), and 2) creating
+propagation process without priority, where tensors are visited                                                                                          a single program that works for all partitions (Single Program
+in a topological order; since there are multiple ways to propagate                                                                                       Multiple Data). We choose SPMD because we aim to scale up
+through Dot, it may result in mismatched sharding specifications                                                                                         to thousands of partitions, where compiling the many pro-
+around an elementwise operator. The bottom-right figure shows
+                                                                                                                                                         grams would be prohibitively slow in MPMD. Compilation
+the propagation process when elementwise operators are given a
+higher priority, where all the BD-shaped tensors are assigned the
+                                                                                                                                                         time is an important usability concern because modern ML
+same sharding specification.                                                                                                                             frameworks often include JIT optimizations and compilation,
+                                                                                                                                                         especially for those targeting custom accelerators [3, 9, 32],
+                                                                                                                                                         and parallelizing the compilation can be non-trivial because
+  Partial specification. By default, GSPMD does not change                                                                                               operators in different programs may need to be globally
+user-provided annotations. However, in some cases the user                                                                                               scheduled to maintain correct communication order.
+wants to specify only a subset of tensor dimensions. For ex-                                                                                                However, implementing the partitioner in SPMD creates
+ample, the wrapper library for GSPMD pipeline (Section 3.3)                                                                                              unique challenges for production ML compilers. This sec-
+wants to specify sharding only for the stage and the num-                                                                                                tion covers the challenges for SPMD partitioning and the
+_microbatches dimensions, while letting the wrapped lay-                                                                                                 techniques we use to solve them.
+ers determine other dimensions of the variables and inputs.
+We could not use partial replication to specify such cases
+in the default way, because that would prevent sharding                                                                                                  4.1   Static constraints
+propagation from refining them. To support such cases, we                                                                                                   Static shapes. ML accelerators get their performance edge
+extended the annotation API to have a subset of unspecified                                                                                              via specialized hardware, such as vector and matrix units. In
+tensor dimensions subject to propagation changes.                                                                                                        practice, the XLA compiler supports only limited degree of
+                                                                                                                                                         dynamism in tensor shapes, in order to ease the development
+   Guide for users. Sharding propagation allows the users                                                                                                of highly efficient operator kernels.
+of GSPMD to skip manual annotations on many intermediate                                                                                                    GSPMD is designed to work even with full static shape
+results, such as those produced by layers like ReLu and Batch                                                                                            constraints, but static shapes create a challenge for SPMD
+Normalization. If users want explicit control over sharding                                                                                              partitioning. It’s not always the case that all partitions have
+decisions, especially when tensors are sharded differently                                                                                               the same input/output shapes, because dimensions may not
+along a logical dimension, they could focus on operators                                                                                                 be evenly divisible by the number of partitions. GSPMD
+that significantly change the dimensions. For example, if the                                                                                            rounds up the size of the shape to a multiple of partition
+inputs of a dot operator do not have compatible shardings,                                                                                               count, and the data in that padded region can be arbitrary.
+there are multiple ways for the sharding propagation to infer                                                                                               When creating certain partitioned operators, data in the
+the output sharding; the user can explicitly annotate the                                                                                                padding area needs to be masked off. For example, a reduce
+output to precisely control the sharding decision.                                                                                                       operator needs to prevent the padding data from affecting
+                                                                                                                                                         the result, so GSPMD first replaces them with the identity
+3.6          API Integration in high-level frameworks                                                                                                    value of the reduction.
+GSPMD’s sharding API is essentially an annotation on un-                                                                                                    The amount of padding can vary between different par-
+partitioned graphs. We created a wrapper operator in Ten-                                                                                                titions. Although shapes are static, several XLA operators
+sorFlow, XlaSharding, to allow users to instrument GSPMD                                                                                                 accept dynamic offsets as operands, which allows GSPMD
+                                                                                                                                                     6
+to express dynamic padding area as a function of the parti-            partitioner, but this can be ameliorated by applying careful
+tion ID. Masking padded data can be expressed as a Select              padding and slicing.
+according to a mask calculated by comparing Iota and an
+offset based on PartitionId.                                              Halo exchange for data formatting. Another use of
+                                                                       halo exchange is for data formatting operators that change
+   Static operator configurations. XLA operators also have             the size of the shape. For example, after a Slice or Pad opera-
+static configurations, like the padding, stride, and dilation          tor, the shape of the tensor changes, and so do the boundaries
+defined in Convolution. However, different partitions may              between partitions. This requires us to realign the data on
+not execute with the same operator configuration. E.g., for            different partitions, which can be handled as a form of halo
+a Convolution, the left-most partition applies padding to              exchange (Figure 5b).
+its left while the right-most partition applies padding to its            Other data formatting operators may need halo exchange
+right. The partitioner chooses a conservative configuration            even when not changing the size, because the partitions
+that makes some partitions to produce slightly more data               may be uneven and the shapes are constrained to be static.
+than needed, then slices out the the irrelevant parts.                 For example, the Reverse operator reverses the order of
+                                                                       elements in a tensor, but if it is partitioned unevenly, we need
+4.2   Communication primitives                                         to shift data across partitions to keep the padding logically
+Since the partitioner forces all the devices to run the same           to the right of the result tensor. Another example is Reshape.
+program, the communication patterns are regular. We use                Consider reshaping a tensor from (3, 2) to (6), where the
+XLA’s operators that provide MPI-style collective communi-             input is unevenly partitioned in 2 ways on the first dimension
+cations [26]. CollectivePermute exchanges data among a                 (partition shape (2, 2)), and the output is also partitioned in 2
+list of source-destination pairs. AllGather concatenates ten-          ways (partition shape (3)). There is padding on the input due
+sors from all participants following a specified order. AllRe-         to uneven partitioning, but after Reshape, the output tensor
+duce performs elementwise reduction (e.g., summation) over             no longer has padding; as a result, halo exchange is required
+the inputs from all participants. AllToAll logically splits the        in a similar way to Slice (Figure 5c).
+input of each participant along one dimension, then sends
+each piece to a different participant. On receiving data pieces        4.4   Grouping and recursive partitioning
+from others, each participant concatenates the pieces to pro-
+                                                                       Many XLA and TensorFlow operators are rank polymorphic,
+duce its result. ReduceScatter is semantically equivalent
+                                                                       where the same opcode can be used on tensors with arbi-
+to an AllReduce followed by a DynamicSlice where each
+                                                                       trary number of dimensions; a classic example is the Einsum
+partition gets one slice of the fully reduced data. An efficient
+                                                                       operator as we discussed in Section 3.2. GSPMD’s generic
+implementation has only half the cost of AllReduce.
+                                                                       annotation API makes it convenient to combine different par-
+4.3   Halo exchange with dynamic bounds                                allelism modes by sharding multiple dimensions, so there is a
+                                                                       need for the partitioner to recognize not only fixed patterns
+Certain operators have a communication pattern which in-               but also nested cases. In order to avoid manually writing par-
+volves partial data exchange with neighboring partitions,              titioning rules on all combinations of patterns, we developed
+which we call halo exchange. We use the CollectivePermute              a framework (Figure 6) to recursively pattern-match each
+operator to exchange halo data between partitions.                     set of sharded dimensions, and partition nested cases.
+   Windowed operators. The most typical use case of halo                  First, we introduce a device context object for the parti-
+exchange is for partitinoning window-based operators (e.g.,            tioner, which defines how cross-partition collective operators
+Convolution, ReduceWindow), because neighboring parti-                 are created based on given subgroups of devices, and how
+tions may require overlapping input data (Figure 5a). In prac-         the partition ID is calculated. This context generalizes the
+tice, halo-exchange for these operators often needs to be              concept of devices as virtualized logical partitions via custom
+coupled with proper padding, slicing, and masking due to               factory methods of collective operators and partition IDs.
+advanced use of window configurations (dilation, stride, and              Second, we introduce partition grouping. We can divide
+padding), as well as uneven halo sizes. See Section A.2 in the         the devices into equally sized groups, and treat each group as
+Appendix for more details.                                             a logical partition. Once we have such grouping, we can cre-
+                                                                       ate a new partitioner context, where each logical partition is
+   Non-constant halo size. The amount of halo data needed              mapped to a group of devices. Within this context, whenever
+by different partitions are often different. In such cases,            a collective operator is created, the logical partition IDs are
+GSPMD uses maximum halo size across partitions, then                   rewritten to subgroups of original device IDs.
+uses DynamicSlice to remove excessive data in the halos.                  With this approach, GSPMD can perform recursive pattern
+GSPMD supports the full set of configurations in the XLA               matching on an Einsum op. For example, the partitioner
+Convolution operator, including arbitrary padding and di-              detects whether there is a matching pattern on how the
+lation. These configurations add further complexity to the             batch dimensions are partitioned in the inputs and the output.
+                                                                   7
+                                                                                                          Padding
+              Input with halo
+                                                                                                                        Reshape from [3, 2] to [6]
+           Partitioned input
+                   Padding
+                                                                          DynamicSlice                                          Padding
+               DynamicSlice                                          CollectivePermute                              Local reshape
+           CollectivePermute                                                                                          DynamicSlice
+                                                                            Concat
+                                                                                                                    CollectivePermute
+                     Concat                                                     Pad                                       Concat
+                Convolution                                          DynamicSlice                                    DynamicSlice
+                              (a) Convolution                              (b) Pad changes shard boundaries            (c) Reshape changes uneven padding
+
+                               Figure 5. Halo exchange examples. Different colors represent data from different partitions.
+
+                    AxCy = einsum(AxB, BxCy)
+                                                                                                4.6    Compiler optimizations for data formatting
+                          Top-level partitioner: default context
+    0 1                   Found matching Cy sharding, reduce to shard                              Pre-processing. Certain transformations may help pro-
+                          size, group devices along on Y.
+    2 3                                                                                         duce faster programs simply by rearranging the data. For
+                                      Recursion with new device context:
+2D device mesh:                       Logical to physical devices: {0->{0, 2}, 1->{1, 3}}       example, a data rotation pattern Concat(a[k:], a[:k])
+  X dim marked as bluex                  Axc = einsum(AxB, Bxc)
+  Y dim marked as redy
+                                                                                                that moves the first k elements to the end can be recognized
+                                             Second-level partitioner:
+                                             Found matching Ax sharding, AllGather
+                                                                                                to avoid multiple rounds of halo exchanges in Slice and
+                                             non-matching Bx and reduce Ax to shard size.       Concat. XLA does not define such an operator, but we de-
+ Partitioned graph:
+                                                                                                fine a custom SPMD_Rotate within the partitioner. Similar
+   aB                                                  Einsum              ac                   optimizations include merging a sequence of Pad and Slice
+   bc           AllGather            Bc                                                         operators, which is important to partition the pipelined pro-
+            groups={{0,1}, {2,3}}
+                                                                                                gram in Section 3.3 where the shifting using Pad and Slice
+                                                                                                can be done with a single CollectivePermute.
+Figure 6. Recursive partitioning of 𝐴𝐶 = 𝑒𝑖𝑛𝑠𝑢𝑚(𝐴𝐵, 𝐵𝐶). Letters
+                                                                                                   Post-partitioning optimizations. The partitioner cre-
+in blue indicate dimensions sharded on the X dimension of the
+device mesh, while letters in red indicate dimensions sharded on the                            ates various data formatting operators in order to perform
+Y dimension. Lower case letters indicate sharded size. AllGather                                slicing, padding, concatenation, masking and halo exchange.
+is created by the inner partitioner, where logical subgroups {0,1}                              We leverage XLA’s fusion capabilities, as well as new code
+are rewritten to {{0,1}, {2,3}} according to the context.                                       motion optimizations for slicing and padding, to largely hide
+                                                                                                the overhead of data formatting. As a result, the run-time
+If such a batch-partitioned pattern exists, it could create a                                   overhead is typically small.
+nested partitioner context by grouping the partitions across
+the batch dimensions and reducing the shape sizes; then it                                      5      Case Study and Evaluation
+recursively calls the partitioner to handle other dimensions.                                   This section demonstrates a few cases where we apply GSPMD
+    This technique greatly simplifies the partitioner’s imple-                                  to widely-used language, speech and image models.
+mentation of operators with rank polymorphism and com-                                             We measure the model performance with GSPMD on the
+plicated dimension configurations. For example, we applied                                      Cloud TPUv3 platform [16], which has an XLA compiler
+it to Convolution, which allows the user to combine spatial                                     backend so that it can execute the partitioned graphs pro-
+partitioning and feature partitioning in the same operator.                                     duced by GSPMD. Each TPUv3 core has 16GB on-device
+                                                                                                memory, and the platform has high-speed homogeneous
+                                                                                                device-to-device links across many cores even if they are
+4.5 Resharding                                                                                  hosted on different machines, and these links form a 2D
+                                                                                                mesh. Such a platform is ideal to study the scalability of
+GSPMD always produces a valid partitioned graph regard-
+                                                                                                GSPMD, which achieves high compute utilization with op-
+less of what sharding annotations are provided. If the pro-
+                                                                                                erator sharding alone in many workloads. We also study
+vided shardings are not the typical supported cases, the parti-
+                                                                                                pipeline parallelism that works well in certain models and
+tioner will perform resharding on the inputs and/or outputs.
+                                                                                                can be combined with operator sharding, which could be
+Resharding can involve cross-device communications. It
+                                                                                                more useful for GPU platforms 1 where high-speed links
+uses AllGather to replicate data along sharded dimensions,
+                                                                                                typically exist only within a server host.
+AllToAll to switch sharded dimensions, CollectivePermute
+to change device order, and DynamicSlice to shard repli-
+cated dimensions. GSPMD could use multiple steps of re-                                         1 We have enabled GSPMD in XLA’s GPU backend and verified its correct-
+sharding to reach the desired sharding.                                                         ness, but do not have large-scale measurements for this paper.
+                                                                                            8
+5.1   Dense Transformer language model                                  Win
+                                                                                                Win mxhy          bxSM
+                                                                                                                                Win mxhy            bxSmy
+                                                                        mxhy          BSmx                                         AG-x            AG-y
+Transformer [38] is a widely-deployed model for tasks in-                                           AG-x
+                                                                                                                                    Mhy       bxSM
+cluding translation, text generation and understanding. Its                                          Mhy
+                                                                          einsum
+core consists of two alternating types of layers. Suppose the              BShy                                     Wout hymx
+                                                                                                                                           einsum      Wout hymx
+                                                                                                        einsum
+                                                                                                                                           bxShy            AG-x
+                                                                              AR-x       Wout            bxShy           AG-x
+input to such layers is a tensor of shape (B, S, M), where B
+                                                                                         hymx                                               relu          hyM
+                                                                               relu                        relu          hyM
+is the sample batch size, S is the sequence length per batch,
+                                                                          einsum                        einsum                             einsum
+and M is the model dimension for features.                                 BSmx                          bxSM                               bxSM
+   The attention layer can be described as:                                   AR-y                         AR-y                            RS-y
+                                                                              BSmx                         bxSM                            bxSmy
+       𝑦 = Attention(𝑊𝑄 × 𝑥,𝑊𝐾 × 𝑥,𝑊𝑉 × 𝑥) × 𝑊𝑂
+                                                                       2D sharding Attempt 1:       2D sharding Attemp 2:            Finalized 2D sharding:
+                                                                       consistently shard M, H in   on-demand AllGather for          on-demand AllGather for
+where each of 𝑊𝑄 , 𝑊𝐾 , 𝑊𝑉 is a weight matrix that projects            all tensors                  weights                          weights & activations
+𝑥 into a tensor of shape (B, S, N, D). The N dimension is
+called the “attention heads”, a parallel dimension during the          Figure 7. Partitioned graphs for a Transformer feed-forward layer
+computation of Attention(). The 𝑊𝑂 weight matrix projects              produced by GSPMD with the sharding annotations in Table 1.
+the attention result back to shape (B, S, M).                          Lower-case letters indicate sharded dimensions, where different
+   The feed-forward layer can be described as                          colors and subscripts denote different mesh dimensions. Collec-
+                                                                       tive operators: AR is AllReduce, AG is AllGather, and RS is
+                  𝑦 = Relu(𝑊𝑖𝑛 × 𝑥) × 𝑊𝑜𝑢𝑡                             ReduceScatter.
+where 𝑊𝑖𝑛 is a weight matrix that projects 𝑥 into a tensor of
+shape (B, S, H), Relu() is elementwise, and the 𝑊𝑜𝑢𝑡 weight            have mismatching sharding along X, so GSPMD will perform
+matrix projects the result back to shape (B, S, M). In the rest        subgrouped AllGather to unshard weights along X before
+of the section, we refer to the combination of one attention           each layer, but this avoids the need for AllReduce on BSH.
+layer and one feed-forward layers as one Transformer layer.            This AllGather will not increase peak memory usage signif-
+   Recent research has shown the benefit of scaling up the             icantly since it is short-lived and the buffer will be freed as
+Transformer model [1, 8, 13, 18, 33] by increasing the number          soon as the layer completes. In the backward pass, GSPMD
+of layers and the sizes of dimensions M, H and N, which                will add a ReduceScatter on gradients due to batch and
+could reach hundreds of billions of parameters. We show                weight sharding on X. This behavior along X is conceptu-
+that GSPMD allows these models to be trained efficiently               ally the same as the weight-update/optimizer-state sharding
+by annotating just 7 tensors per Transformer layer (roughly            technique [30, 40]. This approach solves the compute effi-
+0.7% of all tensors in the entire XLA graph). Internal attention       cency problem, but it still suffers from an activation memory
+computation and other layers like normalization do not need            problem since the BSM tensor is still partially sharded.
+annotations, since GSPMD can find reasonable shardings                    In our finalized sharding configurations (2D finalized in
+automatically.                                                         Table 1), we enhance Attempt 2 by further sharding the
+   2D sharding. One main goal of sharding is to make sure              BSM activation’s M dimension along Y. GSPMD will add
+the model weights could fit into accelerator device memory.            a subgrouped AllGather for BSM to unshard M at the be-
+We study a 2-dimensional sharding strategy that aims to                ginning of each layer, and replace the AllReduce on the
+scale to very large model sizes. We define the device mesh as          output BSM with a ReduceScatter. The two new collective
+a matrix of shape (X, Y), and annotate the tensors as specified        operators combined have comparable performance to the
+in Table 1. We choose 2D mesh for 2 reasons: 1) it maps to             original AllReduce. In this approach, all long-lived tensors
+the 2D topology of the TPU platform’s device network, and              are fully sharded across all devices, so that peak memory
+2) sharding a single dimension to a very small size would              can scale linearly when we increase the number of devices.
+affect the compute efficiency on TPUs. We study 3 types of             We are now also able to use a relatively large batch size,
+sharding configurations.                                               which further helps TPU compute efficiency. This shard-
+   In a vanilla approach (2D Attempt 1 in Table 1), we shard           ing configuration combines the benefit of data parallelism,
+H and N along Y, and M along X. The sharding annotations               weight-update sharding [30, 40] and in-layer model paral-
+are consistent on all weight and activation tensors, avoiding          lelism [36], and only requires 7 annotations in the model.
+any resharding. GSPMD adds subgrouped AllReduce to the                 Figure 7 shows the partitioned graphs for the 3 approaches.
+graph. However, 1) the activations are only partially sharded,
+so that activation memory during training becomes the bot-               Performance experiments. To evaluate the scalability of
+tlenneck for scalability; 2) the per-device weight is so small         GSPMD, we measure the performance of training Trans-
+that it affects compute efficiency on TPUs.                            former models that have many layers of large weights. We
+   Another approach (2D Attempt 2 in Table 1) is to use                choose the following dimension sizes: M is 8192, H is 65536,
+the same weight shardings, but switch the activations’ X               N is 128, D is 256, and the vocabulary size is 32000. These
+sharding to the batch dimension. Weights and activations               dimensions are comparable to GPT-3 [8]. We use a sequence
+                                                                   9
+                                   𝑊𝑄 ,𝑊𝐾 ,𝑊𝑉         𝑊𝑂        𝑊𝑖𝑛    𝑊𝑜𝑢𝑡             Activations                 Memory usage               Communication
+                     Shape            MND             NDM       MH     HM       BSM       BSND        BSH         weight + activation        weight + activation
+      Shardings
+
+                  2D Attempt 1        X,Y,_           Y,_,X     X,Y     Y,X     _,_,X     _,_,Y,_     _,_,Y   O(1/(XY)) + (O(1/Y)+O(1/X))    0 + (O(1/Y)+O(1/X))
+                  2D Attempt 2        X,Y,_           Y,_,X     X,Y     Y,X     X,_,_     X,_,Y,_     X,_,Y       O(1/(XY)) + O(1/X)           O(1/Y) + O(1/X)
+                   2D finalized       X,Y,_           Y,_,X     X,Y     Y,X     X,_,Y     X,_,Y,_     X,_,Y      O(1/(XY)) + O(1/(XY))         O(1/Y) + O(1/X)
+                                  Table 1. Dense Transformer sharding annotations. X and Y are the two mesh dimensions.
+
+
+
+Parameter count                    64B               128B     256B    512B     1T             Total devices       64       128       256        64       128       256
+  Layer count                       32                 64      128     256    128             Device mesh       (4,16)    (8,16)    (8,32)    (16,4)    (16,8)    (32,8)
+     M dim                                       8192                        16384              Batch size        48        96       192        48        96       192
+      H dim                                      65536                       131072           Peak memory      12.4GB    14.6GB    14.8GB    13.8GB    12.7GB    14.1GB
+ Total devices           128       512       2048                  2048                         Step time       3.56s     3.43s     5.71s     3.10s     3.37s     3.36s
+  Device mesh           (8,16)   (16,32)    (32,64)               (32,64)                      FLOPS util       39.4%     40.5%     27.1%     45.7%     41.7%     41.3%
+   Batch size             64       256       1024      512     256      128  128             Table 3. Benchmarks for 2D-sharded narrower dense Transformer.
+ Peak memory           15.3GB    13.3GB    15.56GB 14.0GB    12.9GB 13.6GB 15.8GB
+                                                                                             The model has 64 Transformer layers and 16 billion parameters.
+    Step time           5.74s     6.25s      6.30s 6.31s      6.71s 7.64s 12.66s
+   FLOPS util           62.7%     57.1%      56.9% 56.5%      54.1% 47.5% 55.6%
+Table 2. Benchmarks for dense Transformer with wide layers. The
+last column has 4x wider layers compared to others.                                             Narrower dense Transformer. Due to the relatively large
+                                                                                             batch size, activation communication is typically much more
+                                                                                             significant than weight/gradient communication. In Trans-
+                                                                                             former layers, the amount of compute is 𝑂 (𝑀𝐻 + 𝑀𝑁 𝐷),
+length of 1024 for each input sample. Each Transformer layer
+                                                                                             while the amount of activation communication is 𝑂 (𝑀);
+(attention + feed-foward) has 2 billion parameters. We use
+                                                                                             therefore, with a fixed 2D device mesh, narrower models
+32-bit floating-point parameters, 16-bit floating-point activa-
+                                                                                             with smaller dimensions cannot utilize the TPU’s compute
+tions, and Adafactor optimizer [35].
+                                                                                             power as well as wider models due to higher percentage of
+   Scalability is evaluated by 2 sets of experiments: 1) a fixed
+                                                                                             communication time. One mitigation is to reduce the Y di-
+model size (32 layers, 64B parameters) on different device
+                                                                                             mension size of the mesh, while increasing the X dimension
+topologies, and 2) different model sizes (32, 64, 128 and 256
+                                                                                             size accordingly.
+layers) on a fixed device topology. Making the model deeper
+                                                                                                We measure the performance of a 8x narrower model
+is more difficult than making it wider, because both compute
+                                                                                             which is still too big to fit on a single device: M is 4096,
+and memory scale linearly with the model depth; in contrast,
+                                                                                             H is 16384, N is 64, and D is 128. It has 64 layers and 16
+if we increase per-layer size to 4x by doubling the size of M,
+                                                                                             billion parameters in total. The results are shown in Table 3,
+H and N, the activation memory only increases by 2x.
+                                                                                             which are consistent with our analysis above. While memory
+   Table 2 shows the training performance of the above model
+                                                                                             scaling is still roughly linear to the number of devices, having
+configurations on the TPUv3 platform. GSPMD achieves
+                                                                                             a smaller Y mesh dimension helps to achieve higher efficiency
+close to linear scaling for such models, in terms of both
+                                                                                             (with the same number of devices). With the same Y mesh
+memory and performance. For the 32-layer model, when we
+                                                                                             dimension size, increasing the size of the X dimension allows
+increase the number of TPU devices by 2x, we can roughly
+                                                                                             to increase the batch size linearly with relatively constant
+double the maximum input batch size, while maintaining
+                                                                                             step time.
+similar step time (within 10%). On the same 2048-core device
+mesh, when the model depth increases by 2x, the maximum
+input batch size is roughly halved, while the step time in-
+creases only 7% from 64B to 256B. When the model size                                        5.2      Combining pipelining and in-layer sharding
+reaches 512B, the batch size becomes small and the step                                      This section studies the performance of GSPMD pipelining
+time increases by 13% over 256B. The last column shows a                                     described in Section 3.3. We choose the same narrower model
+configuration with 1 trillion parameters, which is shallower                                 in Table 3, because activation communication is expensive
+than the 512B configuration, but each layer is 4x wider; as                                  in 2D-sharded narrower models if the Y mesh dimension is
+expected, the shallower 1T model can fit the same batch size                                 large, and another level of parallelism could be helpful.
+as the 512B deeper model, while achieving higher efficiency                                     We use a 3D device mesh (L, X, Y) where the leading L
+due to wider layers. GSPMD achieves high overall FLOPS                                       is used to shard pipeline stages. X and Y are used in a sim-
+utilization (from 54% to 62% for most cases and 47.5% for the                                ilar way to 2D sharding (Table 1), except that weights are
+512B configuration) of the TPU devices.                                                      not sharded along X; this is because pipelining requires the
+                                                                                             input to be divided into microbatches and weight shard-
+                                                                                             ing on X would incur expensive per-microbatch AllGather.
+                                                                                        10
+   Device mesh      (2,16,8)   (4,16,4)   (4,16,4)   (8,16,2)    (8,8,4)         Parameter count                     6.47B                               12.95B
+  Pipeline stages       2          4          4          8          8              Layer count                         32                                   64
+     Batch size     16 × 64    16 × 64    32 × 32    32 × 32    32 × 32           Pipeline stages                      8                                    16
+   Peak memory      14.9GB     13.3GB     13.1GB     15.0GB     11.5GB               Schedule            GPipe     GPipe Circular GPipe                  GPipe Circular
+     Step time       24.0s      22.3s      22.2s      23.4s       23.7s             Batch size           64 × 1    16 × 1 16 × 1 128 × 1                 32 × 1 32 × 1
+  Raw FLOPS util     46.2%      58.0%      51.8%      54.8%      55.5%            Peak memory            13.8GB    12.2GB 14.1GB 15.4GB                  12.8GB 14.8GB
+      Bubbles         5.6%      14.8%       8.0%      16.5%      16.1%               Step time            8.40s     2.80s  2.30s  18.37s                  5.58s  4.42s
+    Recompute        22.3%      21.3%      21.7%      22.2%      20.6%           Raw FLOPS util           59.4%     57.9% 53.9%   60.5%                   59.0% 50.6%
+Table 4. Benchmarks for pipelining on the same model in Table 3.                      Bubbles             9.6%      29.9%  9.0%   10.4%                   31.0% 10.0%
+                                                                                    Recompute             22.9%     22.3% 21.3%   29.9%                   22.8% 22.4%
+The device mesh has shape (L, X, Y), where L is used to shard
+pipeline stages, X is used for data parallelism, and Y is used for              Table 5. Benchmarks for pipelining on Conformer models. The
+in-layer model parallelism. Raw FLOPS util is the reading from the              batch size is num_microbatches × microbatch_size. The circular
+profiler which counts padded compute (bubbles) as valid compute.                schedule assigns layers to the stages in a round-robin manner.
+The batch size is described as num_microbatches × microbatch_size.
+
+
+
+Nonetheless, per-device weights are sufficiently small due
+to L sharding.
+   We follow GPipe’s approach [18], where a key difference                                     bSM                data
+                                                                                                        Gating                         bxSmy                          data + model
+                                                                                                                  parallelism                       Gating
+from non-pipelined configurations is that we recompute                            Win                                                                        EbxCmy
+                                                                                                                                                                      parallelism
+                                                                                                            EbCM                                A2A-x
+forward pass intermediate results during the backward pass,                       eMH                 A2A
+                                                                                                                                             exBCmy
+                                                                                               eBCM                             Win exMhy                AG-y
+a technique known as rematerialization [10] to lower peak
+                                                                                                                                                          exBCM
+memory usage. Rematerialization enables us to use larger                            einsum
+                                                                                                                                            einsum
+                                                                                     eBCH        Wout                                       exBChy                    2D model
+number of microbatches to reduce pipeline bubbles.                                                                model                                 Wout
+                                                                                                                                                                      parallelism
+                                                                                        relu     eHM              parallelism                relu       exhyM
+   Table 4 summarizes the performance results for configura-
+                                                                                    einsum                                                  einsum
+tions with 2, 4 and 8 stages. There are two major observations.                     eBCM                                                    exBCM
+1) It is beneficial to balance the number of pipeline stages (L)                     A2A                                                     RS-y
+                                                                                                                                            exBCmy
+and the number of in-layer model-parallel shards (Y), and                            EbCM                         data                      A2A-x
+                                                                                    Combine                       parallelism               EbxCmy
+the fastest configuration has 4 stages and 4 model-parallel                                                                                                           data + model
+                                                                                        bSM                                                 Combine                   parallelism
+shards. 2) Although these configurations have higher raw                                                                                    bxSmy
+FLOPS utilization as reported by the profiler, the best one is
+                                                                                        (a) MoE layer partitioning              (b) Hybrid MoE layer partitioning
+still 24% slower than 2D sharding with (X=32, Y=8) (Table 3),
+because bubbles (compute on padded data) and recompute                          Figure 8. Partitioned graphs for MoE feed-forward layer and hybrid
+are overheads but counted as useful compute by the profiler.                    sparse and dense MoE layer. Lower-case letters indicate sharded
+                                                                                dimensions, where different colors and subscripts denote different
+5.3   Pipelined Conformer models                                                mesh dimensions. Collective operators: A2A is AllToAll, AG is
+Conformer [17] is a speech model, and its backbone is stack                     AllGather, and RS is ReduceScatter.
+of convolution-enhanced Transformer layers. It also has a
+convolutional subsampling layer before the backbone. We                         model weights (called “experts”), and each input token is
+study scaling up this model by adding more layers, while                        operated on by only a couple of experts. Such models usually
+each layer has dimensions M=3072, H=12288, N=16. It is even                     consist of both MoE and non-MoE layers in an alternating
+narrower than the one in Section 5.2, and we find it is easier                  way.
+to scale using pipelining on the backbone, and switching                           The per-expert matrix multiplies in the MoE feed-forward
+to data parallelism on the layers before and after. Table 5                     layer can be expressed as Einsum operators with an extra par-
+shows the results of using GSPMD pipelining on two model                        allel dimension, E (for experts), e.g., 𝐸𝐵𝐶𝑀, 𝐸𝑀𝐻 → 𝐸𝐵𝐶𝐻
+configurations, with various batch sizes and both GPipe and                     and 𝐸𝐵𝐶𝐻, 𝐸𝐻 𝑀 → 𝐸𝐵𝐶𝑀, where C is the per-expert ca-
+circular schedules. The circular schedule is especially use-                    pacity, i.e., the number of tokens to process per batch. Before
+ful when the batch size is small, achieving similar bubble                      each MoE layer, a gating layer computes which experts each
+ratio compared to GPipe with much larger batch sizes. This                      token goes to, transforming a (B, S, M) tensor to (E, B, C, M).
+pipelining approach has been used in BigSSL [41].                                  To scale up the model, we can increase the number of
+                                                                                experts E, as well as the input batch size so that each expert
+5.4   Sparse Transformer language model                                         still has a reasonable amount of data to process. We found a
+Mixture-of-experts (MoE) is a recently explored research                        simple yet efficient way to partition such a model: use a 1D
+direction in scaling up the Transformer model [13, 24, 34],                     devicde mesh to shard the MoE layer’s expert dimension, and
+where the feed-forward layer provides many independent                          switch to batch partitioning (data parallelism) in other layers.
+                                                                           11
+      Parameter count       10B      37B     145B     577B                    Parameter count      33B         57B       420B      804B
+      Experts per layer      32      128      512     2048                    Experts per layer     8           16        32        64
+        Device mesh         (32)    (128)    (512)   (2048)                         H dim                 32768              131072
+         Batch size         128      512     2048     8192                          N dim                  128                 512
+       Peak memory        10.8GB   11.2GB   11.2GB   11.6GB                     Device mesh         (8,4)      (16,8)   (32,16) (64,32)
+          Step time        0.98s    1.01s    1.10s    1.51s                      Batch size          32         128       128       512
+         FLOPS util        58.2%    49.8%    49.8%   46.80%                    Peak memory        12.3GB 12.9GB         11.9GB 8.5GB
+       AllToAll time         2%      6%       9%      11%                         Step time        2.12s       2.19s     2.08s     1.92s
+       Table 6. Benchmarks for sparse MoE Transformer.                           FLOPS util        55.3%       50.2%     50.8%     53.8%
+                                                                       Table 7. Benchmarks for hybrid sparse/dense MoE Transformer.
+
+
+For this type of sharding, GSPMD will insert AllToAll oper-
+ators to switch the sharded dimension between E and B. In               Device mesh (1,1)   (1,2) (1,4) (1,8)           (1,16) (4,16) (2,32)
+the backward pass, GSPMD inserts gradient AllReduce only                 Image size            128x128x128                      256x256x256
+for non-MoE layers because there is no data parallelism for               Batch size                4                                8
+MoE layers. Figure 8a shows the partitioned forward pass.               Peak memory 14.3GB 14.8GB 7.9GB 4.5GB           2.7GB 14.9GB 8.52GB
+                                                                          Step time  2.99s 1.56s 0.79s 0.39s            0.19s 1.66s 0.76s
+                                                                         FLOPS util  47.9% 43.7% 43.5% 43.5%            43.8% 20.5% 41.2%
+   Performance experiments. Except for the gating logic,
+the per-sample compute of this model is constant regardless            Table 8. Benchmarks for 3D U-Net with spatial partitioning. The
+of the number of experts. We study GSPMD’s scalability on              first mesh dimension is used for data parallelism, and the second
+                                                                       mesh dimension is used for spatial partitioning. Peak memory usage
+this model by fixing the size of each expert, while scaling
+                                                                       includes TPU-specific padding and does not scale linearly.
+the number of experts and the batch size. Table 6 shows the
+performance and memory results when we set the per-device
+expert count to 1 (could be any constant). The step time
+increases only from 0.98s to 1.10s from 32 to 512 experts, as          the variance is much smaller than pure sparse MoE configu-
+expected; when the model further increases to 2048 experts,            rations (Table 6) because the hybrid configuration has fewer
+                    to 1.51s. The AllToAll communication
+step time increases √                                                  experts and much smaller AllToAll and gating overhead
+time is roughly 𝑂 ( num_devices) on the 2D TPU device                  compared to the per-expert compute.
+mesh, which contributes to the overhead with 2048 devices,
+but the main difference is that the gating compute becomes             5.6   Image spatial partitioning
+more significant with 2048 experts.                                    High-resolution images are often required in object detection
+                                                                       and segmentation tasks, but they may not fit in the memory
+5.5   Hybrid sparse and dense Transformer                              of a single device. This section discusses spatial partitioning
+                                                                       of convolution neural networks (CNNs). The goal is to shard
+We consider a configuration of Transformer that combines               activation tensors (along non-batch dimension) instead of
+the characteristics of sparse and dense models. There are still        model weights. As usual, GSPMD can express it with the
+MoE layers, but each expert is sufficiently large such that we         same sharding API. In fact, sharding annotations are required
+still need to shard each expert to fit the model weights. The          only for the model inputs; GSPMD can propagate the shard-
+largest model configuration, “64B64E”, in GLaM [13] falls              ings on the spatial dimensions to all of the convolutional
+into this category. The non-MoE layers have the same size as           layers, because they share the same set of spatial dimensions.
+a single expert in an MoE layer. We use a 2D device mesh of            This technique has been used in MetNet-2 [14].
+shape (X, Y), and the non-MoE layers are sharded the same
+way as the dense Transformer (Table 1). The MoE layers’ H                Performance experiments. We experimented with the
+and N dimensions are sharded on Y, while the E dimension is            3D U-Net model [12], a popular dense 3D segmentation
+sharded on X. The partitioned forward pass graph is shown              model which has been widely used in the medical image
+in Figure 8b.                                                          domain. With GSPMD, this model could run with the orig-
+                                                                       inal resolution for CT images, which can be as large as
+  Performance experiments. We scale the number of ex-                  256x256x256. Spatial partitioning avoids downsampling which
+perts proportionally to X, and scale (batch size × per-expert          could affect accuracy. GSPMD makes this possible by sim-
+weight size) proportionally to the total number of devices.            ply annotating an input spatial dimension. We measure the
+Table 7 shows the performance results of different config-             performance of spatially partitioned 3D U-Net to evaluate
+urations of the model using GSPMD. These configurations                GSPMD’s convolution partitioning with halo exchange (Fig-
+have roughly the same theoretical per-device compute and               ure 5a).
+memory usage. As expected, the measured step time and                    Table 8 shows two sets of measurements. We first measure
+peak memory stay relatively constant as we scale the model;            GSPMD’s performance scaling with spatial partitioning only.
+                                                                  12
+For image size 128x128x128, GSPMD achieves nearly linear                    Combination of in-layer model parallelism and pipelining
+scaling with a 15.7x step time reduction on 16 partitions.               has also been studied in previous works [4, 28]. GSPMD pro-
+   We then measure the step time when combining spatial                  vides a general implementation of many of their partitioning
+partitioning with data parallelism to keep the same number               techniques under the same sharding annotation API. For ex-
+of total devices. This time we choose image size 256x256x256,            ample, the scatter/gather optimization across pipeline stages
+which does not fit in a single device even with per-device               in [28] is automatically enabled for all of the configurations
+batch size 1. We compare the results of 16-way and 32-way                in Table 4, because the activations are fully sharded (scatter
+spatial partitioning, and found 32-way partitioning achieves             phase) and then combined on-demand (gather phase) in the
+2x higher FLOPS utilization because it enables a higher per-             next stage (bSm and bSM tensors in Figure 7).
+device batch size.                                                          FlexFlow [20] uses automated search to discover the par-
+                                                                         titioning strategy of operators in a graph for better perfor-
+                                                                         mance. While FlexFlow focuses on determining the partition-
+                                                                         ing policy, GSPMD focuses on the mechanisms to transform
+6    Related Work                                                        an annotated graph. The two are complementary to each
+Because programming in a distributed heterogeneous envi-                 other: GSPMD can be used to define a search space and per-
+ronment is challenging, particularly for high-level practition-          form the transformation, and automated search combined
+ers, deep-learning frameworks do not force users to specify              with GSPMD could provide a fully automated system.
+precisely how the distributed computation is done. For ex-
+ample, TensorFlow [5] has support for data parallelism, and              7    Conclusion
+basic model parallelism with graph partitioning by per-node              GSPMD is a largely automated parallelization system for ma-
+device assignment. Mesh TensorFlow [33] helps the user to                chine learning computations. It offers a simple yet powerful
+build large models with SPMD-style per-operator partition-               API which is general enough to combine different typical par-
+ing, by rewriting the computation in a Python library on top             allelism patterns. GSPMD offers an intuitive auto-completion
+of TensorFlow; in comparison, GSPMD partitions the graph                 feature that enables the user to annotate only a few tensors to
+in the compiler based on lightweight annotations, without                partition the entire model efficiently. We have demonstrated
+requiring the user to rewrite the model.                                 that GSPMD is able to partition several image, speech and
+   GSPMD is generalized from the back-end system used in                 language models on up to thousands of Cloud TPUv3 cores,
+GShard [23]. GSPMD expands the sharding representation                   with good and predictable performance and memory scaling.
+with partial tiling and manual subgroups, and implements
+new techniques like priority sharding propagation, recur-                References
+sive partitioning and pipelining, making it more suitable for
+                                                                          [1] LaMDA: our breakthrough conversation technology. https://blog.
+combined parallelism patterns and support much more use                       google/technology/ai/lamda/.
+cases beyond MoE language models.                                         [2] XLA operation semantics. https://www.tensorflow.org/xla/operation_
+   Tofu [39] is another parallelization system for large mod-                 semantics. Online; accessed 17 April 2021.
+els, but it supports only limited partition strategies (e.g.,             [3] XLA: Optimizing Compiler for TensorFlow. https://www.tensorflow.
+“partition-n-reduce“), while GSPMD supports partitioning all                  org/xla. Online; accessed 17 April 2021.
+                                                                          [4] DeepSpeed: Extreme-scale model training for everyone.
+dimensions of complex operators like Convolution.                             https://www.microsoft.com/en-us/research/blog/deepspeed-
+   Pipelining algorithms [15, 18, 25, 27, 37] focus on one type               extreme-scale-model-training-for-everyone/, 2020. Online; accessed
+of parallelism, while GSPMD can be used either to express                     17 April 2021.
+similar ideas with the help of vectorization (Section 3.3), or to         [5] Abadi, M., Barham, P., Chen, J., Chen, Z., Davis, A., Dean, J., Devin,
+work in combination of these implementations by addition-                     M., Ghemawat, S., Irving, G., Isard, M., Kudlur, M., Levenberg, J.,
+                                                                              Monga, R., Moore, S., Murray, D. G., Steiner, B., Tucker, P., Vasude-
+ally partitioning each pipeline stage. Some of these works                    van, V., Warden, P., Wicke, M., Yu, Y., and Zheng, X. TensorFlow: A
+also provide orthogonal pipeline scheduling techniques that                   System for Large-Scale Machine Learning. In 12th USENIX Symposium
+could be used in GSPMD to reduce pipeline bubbles.                            on Operating Systems Design and Implementation (OSDI) (Savannah,
+   Zero [30] presents a set of optimizations to reduce mem-                   GA, Nov. 2016).
+ory redundancy in parallel training devices, by partitioning              [6] Bezanson, J., Edelman, A., Karpinski, S., and Shah, V. B. Julia: A
+                                                                              fresh approach to numerical computing. SIAM review 59, 1 (2017),
+weights, activations, and optimizer state separately. GSPMD                   65–98.
+is more general: it does not distinguish these tensors and                [7] Bradbury, J., Frostig, R., Hawkins, P., Johnson, M. J., Leary, C.,
+dimensions, and those specific partitioning techniques can                    Maclaurin, D., and Wanderman-Milne, S. JAX: composable trans-
+be supported by annotating the corresponding tensor dimen-                    formations of Python+NumPy programs.
+sions with a uniform API. Weight-update sharding [40] is an-              [8] Brown, T. B., Mann, B., Ryder, N., Subbiah, M., Kaplan, J., Dhari-
+                                                                              wal, P., Neelakantan, A., Shyam, P., Sastry, G., Askell, A., et al.
+other automatic parallelization transformation that achieves                  Language models are few-shot learners. arXiv preprint arXiv:2005.14165
+optimizer state sharding similar to Zero, and conceptually it                 (2020).
+can be viewed as a special case for GSPMD.                                [9] Chen, T., Moreau, T., Jiang, Z., Zheng, L., Yan, E., Cowan, M., Shen,
+                                                                    13
+       H., Wang, L., Hu, Y., Ceze, L., Guestrin, C., and Krishnamurthy, A.                   language models, 2021.
+       TVM: An automated end-to-end optimizing compiler for deep learning.              [26] MPI Forum. MPI: A Message-Passing Interface Standard. Version 2.2,
+       In Proceedings of the 13th USENIX Conference on Operating Systems                     September 4th 2009. available at: http://www.mpi-forum.org (Dec.
+       Design and Implementation (USA, 2018), OSDI’18, USENIX Association,                   2009).
+       p. 579–594.                                                                      [27] Narayanan, D., Harlap, A., Phanishayee, A., Seshadri, V., Devanur,
+[10]   Chen, T., Xu, B., Zhang, C., and Guestrin, C. Training deep nets                      N. R., Ganger, G. R., Gibbons, P. B., and Zaharia, M. PipeDream:
+       with sublinear memory cost, 2016.                                                     Generalized pipeline parallelism for dnn training. In Proceedings of the
+[11]   Cheng, Y., Lee, H., and Berghammer, T. Train ML models                                27th ACM Symposium on Operating Systems Principles (SOSP) (2019).
+       on large images and 3D volumes with spatial partitioning on                      [28] Narayanan, D., Shoeybi, M., Casper, J., LeGresley, P., Patwary,
+       Cloud TPUs. https://cloud.google.com/blog/products/ai-machine-                        M., Korthikanti, V., Vainbrand, D., Kashinkunti, P., Bernauer, J.,
+       learning/train-ml-models-on-large-images-and-3d-volumes-with-                         Catanzaro, B., Phanishayee, A., and Zaharia, M. Efficient large-
+       spatial-partitioning-on-cloud-tpus, 2019. Online; accessed 17 April                   scale language model training on gpu clusters, 2021.
+       2021.                                                                            [29] Paszke, A., Gross, S., Massa, F., Lerer, A., Bradbury, J., Chanan, G.,
+[12]   Çiçek, Ö., Abdulkadir, A., Lienkamp, S. S., Brox, T., and Ron-                        Killeen, T., Lin, Z., Gimelshein, N., Antiga, L., et al. PyTorch: An
+       neberger, O. 3D U-Net: Learning dense volumetric segmentation from                    imperative style, high-performance deep learning library. Advances in
+       sparse annotation. In Medical Image Computing and Computer-Assisted                   Neural Information Processing Systems 32 (2019), 8026–8037.
+       Intervention – MICCAI 2016 (Cham, 2016), S. Ourselin, L. Joskowicz,              [30] Rajbhandari, S., Rasley, J., Ruwase, O., and He, Y. ZeRO: Memory
+       M. R. Sabuncu, G. Unal, and W. Wells, Eds., Springer International                    optimization towards training a trillion parameter models. arXiv
+       Publishing, pp. 424–432.                                                              preprint arXiv:1910.02054 (2019).
+[13]   Du, N., Huang, Y., Dai, A. M., Tong, S., Lepikhin, D., Xu, Y., Krikun,           [31] Ramesh, A., Pavlov, M., Goh, G., Gray, S., Voss, C., Radford, A.,
+       M., Zhou, Y., Yu, A. W., Firat, O., Zoph, B., Fedus, L., Bosma, M.,                   Chen, M., and Sutskever, I. Zero-shot text-to-image generation.
+       Zhou, Z., Wang, T., Wang, Y. E., Webster, K., Pellat, M., Robinson,                   CoRR abs/2102.12092 (2021).
+       K., Meier-Hellstern, K., Duke, T., Dixon, L., Zhang, K., Le, Q. V.,              [32] Rotem, N., Fix, J., Abdulrasool, S., Catron, G., Deng, S., Dzhabarov,
+       Wu, Y., Chen, Z., and Cui, C. Glam: Efficient scaling of language                     R., Gibson, N., Hegeman, J., Lele, M., Levenstein, R., Montgomery,
+       models with mixture-of-experts, 2021.                                                 J., Maher, B., Nadathur, S., Olesen, J., Park, J., Rakhov, A., Smelyan-
+[14]   Espeholt, L., Agrawal, S., Sønderby, C., Kumar, M., Heek, J.,                         skiy, M., and Wang, M. Glow: Graph lowering compiler techniques
+       Bromberg, C., Gazen, C., Hickey, J., Bell, A., and Kalchbrenner, N.                   for neural networks, 2018.
+       Skillful twelve hour precipitation forecasts using large context neural          [33] Shazeer, N., Cheng, Y., Parmar, N., Tran, D., Vaswani, A., Koanan-
+       networks, 2021.                                                                       takool, P., Hawkins, P., Lee, H., Hong, M., Young, C., et al. Mesh-
+[15]   Fan, S., Rong, Y., Meng, C., Cao, Z., Wang, S., Zheng, Z., Wu, C., Long,              tensorflow: Deep learning for supercomputers. In Advances in Neural
+       G., Yang, J., Xia, L., Diao, L., Liu, X., and Lin, W. DAPPLE: A pipelined             Information Processing Systems (2018), pp. 10414–10423.
+       data parallel approach for training large models. In Proceedings of the          [34] Shazeer, N., Mirhoseini, A., Maziarz, K., Davis, A., Le, Q., Hinton,
+       26th ACM SIGPLAN Symposium on Principles and Practice of Parallel                     G., and Dean, J. Outrageously large neural networks: The sparsely-
+       Programming (New York, NY, USA, 2021), PPoPP ’21, Association for                     gated mixture-of-experts layer. arXiv preprint arXiv:1701.06538 (2017).
+       Computing Machinery, p. 431–445.                                                 [35] Shazeer, N., and Stern, M. Adafactor: Adaptive Learning Rates with
+[16]   Google Cloud. Cloud TPU. https://cloud.google.com/tpu/. Online;                       Sublinear Memory Cost. CoRR abs/1804.04235 (2018).
+       accessed 17 April 2021.                                                          [36] Shoeybi, M., Patwary, M., Puri, R., LeGresley, P., Casper, J., and
+[17]   Gulati, A., Qin, J., Chiu, C.-C., Parmar, N., Zhang, Y., Yu, J., Han, W.,             Catanzaro, B. Megatron-LM: Training multi-billion parameter
+       Wang, S., Zhang, Z., Wu, Y., and Pang, R. Conformer: Convolution-                     language models using GPU model parallelism. arXiv preprint
+       augmented transformer for speech recognition, 2020.                                   arXiv:1909.08053 (2019).
+[18]   Huang, Y., Cheng, Y., Chen, D., Lee, H., Ngiam, J., Le, Q. V., and               [37] Tarnawski, J., Phanishayee, A., Devanur, N. R., Mahajan, D., and
+       Chen, Z. Gpipe: Efficient training of giant neural networks using                     Paravecino, F. N. Efficient algorithms for device placement of dnn
+       pipeline parallelism. CoRR abs/1811.06965 (2018).                                     graph operators, 2020.
+[19]   Jia, Z., Zaharia, M., and Aiken, A. Beyond Data and Model Paral-                 [38] Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez,
+       lelism for Deep Neural Networks. In Proceedings of the Conference on                  A. N., Kaiser, L., and Polosukhin, I. Attention Is All You Need. In
+       Systems and Machine Learning (SysML) (Palo Alto, CA, 2019).                           Proceedings of the 31st Conference on Neural Information Processing
+[20]   Jia, Z., Zaharia, M., and Aiken, A. Beyond Data and Model Paral-                      Systems (NIPS) (Long Beach, CA, 2017).
+       lelism for Deep Neural Networks. In Proceedings of the Conference on             [39] Wang, M., Huang, C.-c., and Li, J. Supporting very large models
+       Systems and Machine Learning (SysML) (Palo Alto, CA, 2019).                           using automatic dataflow graph partitioning. In Proceedings of the
+[21]   Kingma, D. P., and Ba, J. L. Adam: a Method for Stochastic Optimiza-                  Fourteenth EuroSys Conference 2019 (2019), pp. 1–17.
+       tion. In International Conference on Learning Representations (ICLR)             [40] Xu, Y., Lee, H., Chen, D., Choi, H., Hechtman, B., and Wang, S.
+       (San Diego, CA, May 2015).                                                            Automatic cross-replica sharding of weight update in data-parallel
+[22]   Krizhevsky, A., Sutskever, I., and Hinton, G. E. ImageNet clas-                       training, 2020.
+       sification with deep convolutional neural networks. In Advances in               [41] Zhang, Y., Park, D. S., Han, W., Qin, J., Gulati, A., Shor, J., Jansen,
+       neural information processing systems (2012), pp. 1097–1105.                          A., Xu, Y., Huang, Y., Wang, S., Zhou, Z., Li, B., Ma, M., Chan, W.,
+[23]   Lepikhin, D., Lee, H., Xu, Y., Chen, D., Firat, O., Huang, Y., Krikun,                Yu, J., Wang, Y., Cao, L., Sim, K. C., Ramabhadran, B., Sainath, T. N.,
+       M., Shazeer, N., and Chen, Z. GShard: Scaling giant models with                       Beaufays, F., Chen, Z., Le, Q. V., Chiu, C.-C., Pang, R., and Wu, Y.
+       conditional computation and automatic sharding. CoRR abs/2006.16668                   Bigssl: Exploring the frontier of large-scale semi-supervised learning
+       (2020).                                                                               for automatic speech recognition, 2021.
+[24]   Lepikhin, D., Lee, H., Xu, Y., Chen, D., Firat, O., Huang, Y., Krikun,
+       M., Shazeer, N., and Chen, Z. GShard: Scaling giant models with
+       conditional computation and automatic sharding. In International
+       Conference on Learning Representations (2021).
+[25]   Li, Z., Zhuang, S., Guo, S., Zhuo, D., Zhang, H., Song, D., and Stoica,
+       I. TeraPipe: Token-level pipeline parallelism for training large-scale
+                                                                                   14
+A     Appendix                                                         • Base dilation is the dilation factor of the LHS, i.e., one
+A.1   XLA operators for dynamism                                    plus the number of elements padded between every element
+                                                                    (excluding low/high padding). No base dilation means the
+Although XLA requires static shapes, data access can have
+                                                                    value is set to 1. Base dilation is applied before low/high
+dynamic offsets based on run-time values. Table 9 summa-
+                                                                    padding.
+rizes a few operators in XLA that GSPMD uses to support
+                                                                       • Window dilation is one plus the number of elements
+dynamic behaviors across different partitions.
+                                                                    padded between every element in the RHS (window).
+
+ PartitionId ()                                                        Non-constant halo size. We demonstrate that non-constant
+ Returns the partition id (integer) of the current device           halo size is common using a simple example. Figure 9a shows
+ running the program.                                               a 4-way partitioned convolution, where the right halo sizes
+ DynamicSlice (Tensor[T] operand, Tensor[int]                       for the partitions are (1, 2, 3, 4) and can be expressed as a
+ start_indices, List[int] size_indices)                             linear function of the partition ID: partition_id + 1.
+ Returns a slice (of shape size_indices) from the operand              Figure 9b describes the sequence of operations for a gen-
+ tensor where the offset is given as a tensor. Used to              eral halo exchange. First, we calculate the maximum sizes of
+ allow each partition to select different regions of a ten-         left and right halos across partitions and perform the halo
+ sor, where the dynamic offset is often calculated from             exchange of the maximum size (Steps 1 and 2). Since some
+ PartitionId.                                                       partitions may have excessive halos than needed, we use
+ DynamicUpdateSlice (Tensor[T] operand, Ten-                        DynamicSlice (based on the partition ID) to get the valid re-
+ sor[T] update, Tensor[int] start_indices)                          gion for the current partition (Step 3). Finally, some partitions
+ Returns a tensor that replaces a sub-region of                     may include garbage values (e.g., halos from out-of-range
+ the operand tensor with the given update tensor.                   input data), so we apply masking as described in Section 4.1.
+ start_indices specifies the offset of the region to be up-
+ dated. Used similar to DynamicSlice, but to update dif-               Base dilation. Base dilation adds additional complexities
+ ferent regions of a tensor by each partition.                      to halo exchange, because the offset of each partition may be
+ Iota (List[int] dimensions, int64 iota_dimension)                  positioned at the dilation holes, which makes the edges have
+ Creates an integer tensor of dimensions shape,                     different behavior than the interior elements. We handle base
+ with sequentially increasing values from 0 along                   dilation in 3 cases (Figure 10).
+ the iota_dimension (similar to std::iota(), but multi-                • 𝑠𝑡𝑟𝑖𝑑𝑒×𝑝𝑒𝑟 _𝑠ℎ𝑎𝑟𝑑_𝑤𝑖𝑛𝑑𝑜𝑤_𝑐𝑜𝑢𝑛𝑡 is divisible by 𝑑𝑖𝑙𝑎𝑡𝑖𝑜𝑛,
+ dimensional). Used to create a mask of a partitioned               where 𝑝𝑒𝑟 _𝑠ℎ𝑎𝑟𝑑_𝑤𝑖𝑛𝑑𝑜𝑤_𝑐𝑜𝑢𝑛𝑡 is the number of windows
+ tensor on each partition by comparing it against the               to be processed by each partition (i.e., the number of output
+ un-partitioned dimension size.                                     elements for each partition). This condition guarantees that
+ Select (Tensor[bool] pred, Tensor[T] on_true, Ten-                 all partitions start with the same number of (interior or low)
+ sor[T] on_false)                                                   padding elements before the first data element in the LHS,
+ Selects each element between two tensors based on the              so that we can use the same low padding configuration. Halo
+ predicate tensor. All three tensors have the same shape.           exchange occurs on the non-dilated and non-padded base
+ Used to mask out a region of a tensor (e.g., padded re-            region, and the limit index of required data for Partition 𝑖
+ gion due to uneven partitions), where the mask is often            can be represented as 𝑎 ×𝑖 +𝑏, where 𝑎 and 𝑏 are both integer
+ computed using Iota.                                               constants. This limit determines the right halo size.
+                                                                       • 𝑠𝑡𝑟𝑖𝑑𝑒 = 1 but 𝑝𝑒𝑟 _𝑠ℎ𝑎𝑟𝑑_𝑤𝑖𝑛𝑑𝑜𝑤_𝑐𝑜𝑢𝑛𝑡 is not divisi-
+Table 9. XLA operators used by GSPMD to handle non-uniform
+                                                                    ble by 𝑑𝑖𝑙𝑎𝑡𝑖𝑜𝑛. In this case, the low padding sizes vary on
+behavior between partitions.
+                                                                    different partitions, but it is a static configuratio. Using Pad
+                                                                    and DynamicSlice on the operand also would not work, be-
+                                                                    cause those operators would be applied before dilation, so
+                                                                    everything would be multiplied by the dilation factor. For-
+A.2   Halo exchange details                                         tunately, with 𝑠𝑡𝑟𝑖𝑑𝑒 = 1, all positions on the padded and
+We first introduce the window configurations for operators          dilated base region are valid window starts, and we can use
+like Convolution that GSPMD has to consider. Each spa-              the maximum low padding on all partitions to ensure that
+tial dimension in the convolution has the following set of          each partition calculates all required windows, then perform
+configurations.                                                     a DynamicSlice on the output of the partitioned operator
+   • Stride is the distance (in number of elements) that the        to remove unnecessary data. The limit index of required
+window moves to produce the next output element.                    data on the non-padded base region for Partition 𝑖 can be
+   • Low/high padding is the number of elements padded              represented as (𝑎 × 𝑖 + 𝑏)/𝑐, where 𝑎, 𝑏 and 𝑐 are all integer
+to the low/high end of the dimension in LHS (base).                 constants and “/” is integer division.
+                                                               15
+                                                                                                                                           1. Exchange maximum halo for left (1) and right (3)             2. Concatenate exchanged left and right halos
+                                                                                                                                                                                                                   Collective                    Collective
+                                                                                                                                                                                                                   permute                       permute
+      LHS: shard 0       shard 1       shard 2       shard 3
+
+                                                                                      Base size: 12
+                                                                                      Window size: 3                                      slice and                             slice and
+                                                                                      Padding low: 1                                      collective-permute                    collective-permute                              base
+                                                                                      Padding high: 1
+                                                                                      Stride: 2
+                                                                                                                                           3. DynamicSlice on the region actually needed                 4. Mask out invalid regions with the identity value (0)
+                                                                                      Input shard size: 3                                     (e.g., 0 left halo and 2 right halo for partition 2)       (e.g., partition 3 has 4 elements in the invalid region)
+                                                                                      Output shard size: 2
+                                                                                                                                                                                                                                 iota, select,
+                                                                                                                                                                                                                                 broadcast, ..
+                                                                                      Left halo size for shard i: 1 -1 * i
+                                                                                      Right halo size for shard i: 1 + 1 * i
+                                                                                                                                                          Dynamic
+                                                                                                                                                           Slice                                                                       0   0     0    0
+         Output:     shard 0 shard 1 shard 2 shard 3
+
+     (a) Convolution halo size depends on shard offset. Input data required by                                                                      (b) Sequence of operations for a general halo exchange.
+     each partition are indicated by dotted windows of a unique color.
+
+                      Figure 9. Non-constant halo size in a partitioned convolution and the solution with padding and slicing.
+
+                        Case 1:                                                                First window                              First window
+                        (stride * per_shard_window_count) % dilation == 0                                                                                                                        windows for Partition 0
+                                                                                               of Partition 0                            of Partition 1
+                                                                                                                                                                                                 windows for Partition 1
+                                                                                               P0                 P0                     P1               P1                P2      …            Stride: 3
+                                                                                                                                                                                                 Window size: 5
+                                                                                                                                                                                                 Base dilation: 3
+                                                                                                                                                                                                 P0, P1, P2: data on each partition
+
+                                                                                                                                                                                                 All partitions start with the same pattern:
+                                                                                                P0   P0      P1                                                                                  [padding, data, padding, padding, ..]
+
+                                                                                                           halo
+                                                                                 halo exchange on non-padded                                   For all partitions,
+                                                                                 base region                                                   * low padding: 1
+                                                                                                                                               * base dilation: 3
+
+                        Case 2: stride == 1, but per_shard_window_count % dilation != 0                         Case 3: stride != 1, and (stride * per_shard_window_count) % dilation != 0
+
+                                                                                                                                  First window                 First window
+                                                                                                                                  of Partition 0               of Partition 1
+                          First window        First window         First window                                                                                                                                                 Stride: 2
+                          of Partition 0      of Partition 1       of Partition 2                                                                                                                                  …            Window size: 3
+                                                                                                                                                                                                                                Base dilation: 3
+
+                                                                                                             No value for low_padding could work:
+
+
+                                                                                                                        Not calculated                    Not calculated                                             Not calculated
+                            Halo exchange
+                                                                                                                                              …                                              …                                             …
+                        low_padding: 2                                           Stride: 1
+                                                                                 Window size: 3
+                                                                                 Base dilation: 3
+                                                                                                             Partition 0 would be invalid if                    Partition 1 would be invalid                 Partition 2 would be invalid
+                                                                                                             low_padding == 1                                   if low_padding == 0                          if low_padding == 2
+
+                                                   conv                                                         Instead: fixed low_padding == 2, then pad the window from 3 to 5 ( 3 + 2 holes) using different offsets
+                                                                      Execute partitioned op
+
+                                                                                                                                                  …                                          …                                                       …
+                                    Dynamic-slice with offsets:
+                                     partition 0: 2, partition 1: 0, partition 2: 1                             0      0 original window                        original window 0        0                     0     original window 0
+
+                                                                                                                       Partition 0                                   Partition 1                                       Partition 2
+
+
+
+                                                                   Figure 10. Convolution partitioning with base dilation.
+
+
+   • 𝑠𝑡𝑟𝑖𝑑𝑒 ≠ 1 and 𝑠𝑡𝑟𝑖𝑑𝑒 × 𝑝𝑒𝑟 _𝑠ℎ𝑎𝑟𝑑_𝑤𝑖𝑛𝑑𝑜𝑤_𝑐𝑜𝑢𝑛𝑡 is                                                                                       The window padding is used to mask off the unaligned ele-
+not divisible by 𝑑𝑖𝑙𝑎𝑡𝑖𝑜𝑛. If neither of the above conditions                                                                                 ments in the base area, so that the start of the non-padding
+are true, different partitions could start with different num-                                                                                window element will be aligned with the desired start in the
+ber of padding elements, and not all offsets are valid window                                                                                 base area.
+starts. Consider the last example in Figure 10. Whatever low
+                                                                                                                                                 Window dilation. If the RHS is replicated, window dila-
+padding we choose, some partition will be invalid, because
+                                                                                                                                              tion only affects the effective window size when the operator
+valid windows could be skipped since 𝑠𝑡𝑟𝑖𝑑𝑒 ≠ 1. A solution
+                                                                                                                                              is partitioned based on its LHS. If the dilated RHS is also par-
+to this problem is to pad the window in addition to padding
+                                                                                                                                              titioned, which typically occurs in the gradient computation
+the base area. We can use the maximum low padding required
+                                                                                                                                              of strided convolutions, handling window dilation is still sim-
+by the partitions on the base area, and increase the window
+                                                                                                                                              pler than handling base dilation, because there is no low/high
+size by that low padding amount. The positions of the addi-
+                                                                                                                                              padding on the RHS. We skip the implementation details.
+tional window padding vary on different partitions, which
+can be implemented as a Pad followed by a DynamicSlice.
+
+                                                                                                                                16
+

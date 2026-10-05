@@ -1,0 +1,487 @@
+                                         TinyIREE: An ML Execution
+                                         Environment for Embedded
+                                         Systems from Compilation to
+                                         Deployment
+arXiv:2205.14479v1 [cs.PL] 28 May 2022
+
+
+
+
+                                         Hsin-I Cindy Liu
+                                         Google, Mountain View, CA, USA
+                                         Marius Brehler
+                                         Fraunhofer IML, Dortmund, Germany
+                                         Mahesh Ravishankar
+                                         Google, Seattle, WA, USA
+                                         Nicolas Vasilache
+                                         Google, Zürich, Switzerland
+                                         Ben Vanik
+                                         Google, Seattle, WA, USA
+                                         Stella Laurenzo
+                                         Google, Seattle, WA, USA
+
+
+
+
+                                         Abstract—Machine learning model deployment for training and execution has been an important
+                                         topic for industry and academic research in the last decade. Much of the attention has been
+                                         focused on developing specific toolchains to support acceleration hardware. In this paper, we
+                                         present IREE, a unified compiler and runtime stack with the explicit goal to scale down machine
+                                         learning programs to the smallest footprints for mobile and edge devices, while maintaining the
+                                         ability to scale up to larger deployment targets. IREE adopts a compiler-based approach and
+                                         optimizes for heterogeneous hardware accelerators through the use of the MLIR compiler
+                                         infrastructure which provides the means to quickly design and implement multi-level compiler
+                                         intermediate representations (IR). More specifically, this paper is focused on TinyIREE, which is
+                                         a set of deployment options in IREE that accommodate the limited memory and computation
+                                         resources in embedded systems and bare-metal platforms, while also demonstrating IREE’s
+                                         intuitive workflow that generates workloads for different ISA extensions and ABIs through LLVM.
+
+
+
+                                             M ACHINE LEARNING has attracted a lot of              the hardware are also increasing. This has led to
+                                         attention in the last decade, both in industry            the development of new processor architectures
+                                         and academic research. As new, deeper machine             that accelerate ML model training and execu-
+                                         learning (ML) model architectures emerge and              tion (inference). However, to fully take advantage
+                                         bigger datasets become available, the demands on          of such acceleration hardware, the development
+
+
+
+                                         IEEE Micro                           Published by the IEEE Computer Society                        © 2022 IEEE
+                                                                                                                                                          1
+    toolchains require new deployment and compi-         and low-level operation optimization in vari-
+    lation flows. In addition, special considerations    ous intermediate representations. Although TVM
+    must be made when deploying models to mobile         targets various device backends such as CPU,
+    and edge devices, due to system resource and         GPU, DSP, etc., for bare-metal microcontrollers,
+    power constraints.                                   a MicroTVM extension is required to support the
+        A large portion of investment in the in-         model execution scheduling and memory man-
+    dustry has targeted use cases that scale up to       agement, in order to make up for the lack of an
+    the most powerful deployment targets, leaving        operating system.
+    low-power and embedded devices poorly catered            This brings us to how we approach this chal-
+    to. IREE (Intermediate Representation Execution      lenge with IREE. IREE is an end-to-end com-
+    Environment) was created to address this imbal-      piler and runtime framework for model execution
+    ance by designing a unified compiler and runtime     based on the MLIR compiler infrastructure [4]. It
+    stack with the explicit goal to scale down to the    follows a compiler-based approach that converts
+    smallest footprints while retaining its ability to   ML models into an intermediate representation
+    scale up to larger deployments (and integrate with   that allows for analysis and optimization of the
+    higher-level distributed runtimes). This focus on    ML model while generating code to target hetero-
+    model portability has driven IREE to effectively     geneous hardware accelerators [5]. As shown in
+    target bare-metal/embedded CPUs and microcon-        Figure 1, IREE can take various model represen-
+    trollers. This paper presents how that portability   tations as inputs, and generate executable formats
+    is achieved.                                         for different hardware targets. IREE treats the ML
+        Traditionally, targeting microcontrollers by     model as just another program, represents it with
+    public ML inference frameworks has largely been      various MLIR dialects, and eventually generates
+    done by kernel-based, op-by-op runtimes that are     the binary that can be run on the target architec-
+    hand-adapted and optimized for a small set of        ture. An MLIR dialect can be roughly thought
+    frequently used operators. One approach to ease      of as a logical level of IR. This multi-phase
+    the deployment of models to microcontrollers is      compilation through a progression of composable
+    TensorFlow Lite for Microcontrollers (TFLM), a       IRs [5] is a key differentiator because it allows
+    framework specifically designed to support model     us to more effectively retarget and generalize
+    execution on microcontrollers [1]. It uses a small   approaches and components used to target larger
+    runtime library (∼16 kB for Arm Cortex-M3)           scale parts for specialized, deeply embedded uses.
+    that supports a subset of TensorFlow operators,      Such generalization is much harder to achieve in
+    with hardware-specific, high-level operator ker-     classic, emitter based, two phase compilers and
+    nel implementations. The graph optimization still    is not possible at all in executors such as TFLM.
+    utilizes the TensorFlow Lite compilation flow and        IREE is designed to target various edge de-
+    performs optimizations at the operator level.        vices and accelerators, including CPUs, GPUs,
+        Whereas TFLM is a runtime library with           and various ML accelerators. As a result, aspects
+    limited hardware-specific kernels, compiler-based    of mobile deployment, like small binary size,
+    approaches have also recently been applied to        inter-operability with applications, and portability
+    accelerators and embedded systems. One of those      are first-class concerns. In this paper, we focus
+    compilers is Glow [2], which uses a two-phase        on TinyIREE, the subset of IREE options that
+    intermediate representation (IR) to lower a neural   generate a compact workload and runtime library
+    network graph. It uses a high-level intermedi-       that’s optimized for embedded systems without an
+    ate representation to apply domain-specific op-      operating system. These options enable seamless
+    timizations. This is followed by a lower-level IR,   support for different CPU architectures and ISA
+    allowing the compiler to apply memory-related        extensions, while also providing an interface to
+    optimizations. These optimizations include in-       support embedded ML accelerators. In Figure 1,
+    struction scheduling, static memory allocation,      the TinyIREE options are colored, whereas the
+    and copy elimination.                                general IREE compilation and deployment op-
+        Another compiler is Apache TVM [3], which        tions are grayed out.
+    performs both high-level graph reconfiguration           In the following sections, we present IREE’s
+
+
+
+2                                                                                                   IEEE Micro
+Figure 1. A simplified end-to-end flow diagram of IREE.
+
+
+compilation flow and explain some of the                  The primary vehicle in MLIR to achieve this is
+TinyIREE deployment options. Furthermore, we              dialects. A dialect in MLIR is a collection of
+show results for a compiled MobileNet Single-             operations and associated types that allow you
+Shot Detector (SSD) model before giving a con-            to represent a program. Different dialects can be
+clusion.                                                  used to model the program at different levels of
+                                                          abstraction.
+IREE COMPILATION FLOW                                        For example, the IREE importers in Figure 1
+   IREE’s compilation flow uses the MLIR ap-              show some different dialects used in IREE to
+proach of progressively lowering an ML pro-               convert an ML program into machine executable
+gram into an executable for the target hardware.          code. The TOSA (Tensor Operator Set Architec-
+
+
+July/August 2022
+                                                                                                              3
+    ture) [6] / MHLO (Meta High Level Optimizer)           operation. This representation is intended to make
+    dialects model the ML program at the level of          it easier to apply traditional loop transformations
+    tensor operations. The Linalg dialect represents       like loop fusion, loop tiling, and loop interchange.
+    perfectly nested loop computation in a succinct,       This modeling is inspired by the polyhedral com-
+    easy-to-manipulate manner, making it easy to im-       pilation domain where the computation is rep-
+    plement transformations like fusion, tiling, loop      resented using an orthonormal space, with one
+    interchange, etc. The Vector dialect models parts      axis for every loop of the computation. This
+    of the program in terms of operations on virtual       orthonormal space is referred to as the iteration
+    vectors. Finally, the LLVM dialect is a leaf dialect   space of the computation. The values of the
+    that allows MLIR programs to be translated into        induction variables in a loop are represented as
+    LLVM IR for compilation into an executable             points along the corresponding axis. Each point
+    binary. Because each of these dialects are defined     in this orthonormal space represents the sequence
+    using a common infrastructure, at each level           of scalar operations performed within the inner-
+    you can apply common compiler optimizations            most loop. Listing 2 shows the Linalg dialect’s
+    like Common Subexpression Elimination (CSE),           representation of a GEMM operation of the form
+    Dead Code Elimination (DCE), etc. It is also           Dij = Cij + Aik · Bkj . The number of loops
+    possible to apply custom optimizations within          is captured by the number of entries in the list
+    each dialect that use the semantic information         iterator types. The data dependence between the
+    captured by operations in that dialect. For exam-      iterations of a loop are specified as either parallel
+    ple, in the TOSA dialect, one can easily recognize     (for no dependence) or reduction (for reduction-
+    1×1 2D convolution operations and convert them         type dependence).
+    into matrix-matrix multiply operations that can
+    then be executed more efficiently. The process         Listing 2. Matrix-matrix multiply in Linalg dialect.
+                                                           #map0 = affine_map<(i, j, k) → (i, k)>
+    of converting from a dialect at a higher-level of      #map1 = affine_map<(i, j, k) → (k, j)>
+    representation (like TOSA/MHLO) through inter-         #map2 = affine_map<(i, j, k) → (i, j)>
+    mediate dialects into an executable binary—with        %3 = linalg.generic {
+                                                            iterator_types = ["parallel", "parallel",
+    each subsequent dialect using a more general or              "reduction"],
+    less specialized representation—is known as pro-        indexing_maps = [#map0, #map1, #map2]}
+    gressive lowering. The rest of the section provides     ins(%0, %1 : tensor<?x?xf32>, tensor<?x?xf32>)
+                                                            outs(%2 : tensor<?x?xf32>) {
+    an overview of the program representation for           ˆbb0(%arg0 : f32, %arg1 : f32, %arg2 : f32):
+    each of the dialects supported by IREE importers.        %0 = mulf %arg0, %arg1 : f32
+        Frontend dialects like TOSA and MHLO rep-            %1 = addf %arg1, %arg2 : f32
+                                                             linalg.yield %1 : f32
+    resent the program with operations like add, con-
+                                                           } → tensor<?x?xf32>
+    volution, and dot product. For example, Listing 1
+    shows a simple sequence with a dot product                 Similar to iteration space, each operand is
+    followed by bias-add in the TOSA dialect. Notice       also represented by an orthonormal space of the
+    that built-in MLIR types like tensor use ? to          same dimensionality as the operand. This space is
+    represent dynamic dimensions (i.e., dimensions         referred to as the data space of the operand. For
+    whose extent is not known at compile time).            example, in a GEMM operation, all the operands
+    As a result, MLIR has first-class support for          are represented by a 2D data space. The maps in
+    representing dynamically shaped computations.          indexing maps capture the data access pattern for
+                                                           each operand. In each map, the domain represents
+    Listing 1. Dot + Bias add in TOSA dialect.
+    %2 = "tosa.matmul"(%0, %1) : ( tensor<?x8xf32>,
+                                                           a point in the iteration space, and the range
+          tensor<8x?xf32> ) → tensor<?x?xf32>              represents the point in the operand’s data space
+    %3 = "tosa.add"(%2, %3) : ( tensor<?x?xf32>,           that is accessed by the map.
+          tensor<?x?xf32> ) → tensor<?x?xf32>
+                                                               The region of the operation (the sequence
+        The program is then lowered into the Linalg        of operations between the { and }) represents
+    dialect. At this level, operations are represented     the computation performed at each point in the
+    as perfectly nested loop computations with the         iteration space. Each Linalg operation has a re-
+    body of the innermost loop performing a scalar         gion with a single basic block whose arguments
+
+
+
+4                                                                                                         IEEE Micro
+represent the scalar values, which are obtained        able on the target architecture, like the Arm sdot
+from the operands using the indexing map. The          instructions.
+yielded value is the result of the computation at          The last step in the device-side compilation
+that point in the iteration space. For example,        is lowering the program into the LLVM dialect,
+in Listing 2, each point in the iteration space        which allows the program to be mechanically
+performs a multiply-add operation.                     converted into LLVM IR. The LLVM compilation
+    All tensor operations of TOSA/MHLO can be          stack can then generate the binary code for the
+lowered to the linalg.generic operation of             target architecture. The LLVM target flags can
+the Linalg dialect. Two such operations that have      be used to select which CPU architecture, ABI,
+a producer-consumer relationship can be fused          and ISA extensions to use. For example, to build
+into another linalg.generic operation by               the module for x86 64 CPU, apply the following
+using just the information in the iterator types       flag:
+and the indexing maps. This fusion encompasses         − −iree−llvm−target−triple=x86 64−pc−linux−elf
+all element-wise fusion optimizations (also known
+                                                       Whereas for RISC-V 32-bit CPU with multipli-
+as loop fusion in XLA) without having to reason
+                                                       cation and floating point ISA extension support,
+about the actual computation performed by each
+                                                       use these flags:
+operation. Doing the same fusion at, say, the
+                                                       −   −iree−llvm−target−triple=riscv32−pc−linux−elf
+TOSA/MHLO level, would result in a combina-            −   −iree−llvm−target−cpu=generic−rv32
+torial explosion in the number of fusion possi-        −   −iree−llvm−target−cpu−features=+m,+f
+                                                       −   −iree−llvm−target−abi=ilp32
+bilities. Notice that the class of operations that
+can be fused in this manner is larger than pure        In addition, for Armv7E-M CPU, use the follow-
+elementwise operations, including permutations         ing flags:
+and broadcasts.                                        − −iree−llvm−target−triple=armv7em−pc−linux−elf
+    Operations in Linalg dialect can also be tiled     − −iree−llvm−target−float−abi=hard
+
+using just the information provided by the iterator        The aforementioned optimization process can
+types and indexing maps. This transformation           easily be applied to other non-ML-specific linear
+allows splitting the computation at each layer into    algebra operations, as long as these operations are
+smaller tiles of a similar computation. For exam-      in the appropriate format. In other words, IREE
+ple, a GEMM operation can be tiled into several        can also optimize operations that perform input
+smaller GEMM operations. These smaller tiles           pre-processing and output post-processing as part
+can be computed in parallel, and can therefore         of the program. For example, it is typical to
+be distributed to different threads. Then, the com-    perform color space conversion or image resizing
+putation represented by each tile is encapsulated      of the image data stream for vision ML programs,
+within a dispatch region. Each dispatch region         and these operations can be fused within the
+contains code that has to be executed on the           program by following the same compilation flow.
+device in an atomic fashion. At this point, each
+computation is split into two parts for execution:     TINYIREE DEPLOYMENT OPTIONS
+The dispatch region (the tiled computation) and            The output of the compilation flow described
+the code to execute host-side computation (VM          above is an IREE module, which contains a seg-
+commands), which specifies the order in which          ment of VM commands to control the buffer setup
+dispatch regions are executed. The code within         and a collection of dispatch regions as workloads.
+dispatch regions is then transformed further using     These workloads enfold the ML program that can
+fusion, loop interchange, etc., to achieve better      be dispatched to the target devices. As shown
+cache locality and data access patterns.               in the bottom part of Figure 1, when targeting
+    Finally, the code is lowered into the Vector       embedded systems, the user needs to build an
+dialect. This dialect represents high-level, retar-    IREE runtime application, which includes the
+getable, vector instructions available on the tar-     IREE runtime library to configure the VM setup,
+get hardware. Transformations within this dialect      the workload loader, and a workload scheduler.
+allow the generated code to use efficient vector       The latter two are defined as the device hardware
+reads/writes and special fixed function units avail-   abstraction layer (HAL) driver.
+
+
+July/August 2022
+                                                                                                             5
+        Before compiling the final executable, we can      bytecode representation. Therefore, the bytecode
+    further break down the IREE module structure           interpreter is not linked into the executable, thus
+    with different deployment strategies, as described     reducing its size.
+    in the following subsections. As shown in Fig-         An example of using EmitC is provided in the
+    ure 2, IREE provides a flexible set of tools for       static library demo c sample in the IREE repos-
+    various deployment scenarios on CPUs, including        itory.
+    static and dynamic embedded libraries, whereas
+    the VM control support can be implemented with         ML workload as a static or dynamic library
+    a bytecode renderer or C source code. Here, the            The ML workload can be included either in a
+    VM bytecode is stored in a file in FlatBuffer          static or a dynamic library. In both cases, IREE
+    format (vmfb), with the option of embedding            uses LLVM to compile the program into highly
+    the device workload in the format of the shared        optimized instruction streams for the particular
+    dynamic library.                                       target. The static ML workload library can be
+                                                           used in combination with the serialized VM byte-
+                                                           code module to form an IREE module. However,
+                                                           to create a binary optimized for size, the static
+                                                           library should instead be used in combination
+                                                           with the VM operations translated to C calls.
+                                                               The dynamic ML workload library, on the
+                                                           other hand, provides more flexibility. For exam-
+                                                           ple, it is possible to create multiple dynamic
+                                                           libraries optimized for different architectures with
+    Figure 2. IREE executable deployment options for       the same entry and exit points. It is then possible
+    TinyIREE.                                              to decide at runtime which of the dynamic li-
+                                                           braries to use. Because embedded systems often
+        In addition to these deployment paths for em-      do not provide dynamic library support, IREE
+    bedded CPUs, developers can also utilize the ex-       uses a fixed dynamic library ABI, and integrates
+    isting HAL interface to interact with customized       its own low-overhead dynamic library loader in
+    ML accelerators. Moreover, while IREE runtime          the runtime library.
+    can support dynamic deployments, embedded
+    systems can even bypass the IREE runtime en-           Scheduler of the HAL driver
+    tirely and deploy a specific workload to achieve           Once the command buffer is set properly by
+    the most efficient execution.                          the host VM, a workload scheduler is responsible
+                                                           to dispatch the device workload set in the com-
+    Virtual machine control with EmitC                     mand buffer. Inspired by the GPU scheduler and
+        VM commands control the resource owner-            compute APIs, IREE adopts a 3D grid topology
+    ship and execution flow, and they are encoded          for the workload scheduling with regard to a
+    as another MLIR dialect: the VM dialect. These         specific worker structure that contains the data
+    operations can be serialized to a bytecode module      buffer and schedule information, as shown in
+    that is interpreted at runtime. Another option is to   Listing 3.
+    serialize these operations into C source code. This
+                                                           Listing 3. Workload dispatch loop
+    is achieved by converting the VM operations into       for (int z = 0; z < worker.cnt.z; ++z) {
+    the EmitC dialect, an MLIR dialect that allows           for (int y = 0; y < worker.cnt.y; ++y) {
+    the generation of C/C++ from MLIR. After con-              for (int x = 0; x < worker.cnt.x; ++x) {
+                                                                 vec3_t work_id = {{x, y, z}};
+    verting the VM operations into EmitC operations,             int ret = dispatch_ptr(&st, &work_id);
+    these are translated into C via the Cpp emitter.           }
+    EmitC contains a call operation that represents a        }
+                                                           }
+    C function call. Amongst other things, this type
+    of operation is used to directly call the VM API       For systems with multi-threading support, IREE
+    instead of serializing the calls into an equivalent    provides an asynchronous task scheduler to split
+
+
+
+6                                                                                                         IEEE Micro
+up the workload with more efficient execution of      can be allocated on one side (host or device),
+directed acyclic graphs (DAG). This allows for        while being selectively accessible from the other
+out-of-order and pipelined execution, which can       end. For example, the input buffer for the ML
+achieve better parallelism and better utilization     program may be allocated at the host so it can be
+of the target device. However, IREE also sup-         initiated with the correct input value, while set to
+ports synchronous scheduler execution by issuing      be visible to the device with read access so its
+the workload sequentially. For embedded systems       content can be consumed by the workload. This
+without the threading handlers or a CPU without       visibility and permission control—in conjunction
+the operating system support, the synchronous         with systems supporting enclave computing—
+scheduler provides an intuitive path to dispatch      provides a secured ML execution environment.
+the workload.
+                                                      RESULTS
+Stream execution                                          By applying IREE’s compilation flow and
+    Work scheduled by the IREE runtime is             choosing bare-metal-friendly configurations to
+provided to the underlying system scheduler—          deploy ML programs, we can reduce the artifact
+whether a hardware command processor or CPU           size of both the IREE module and the IREE
+thread pool—with dependency information order-        runtime library.
+ing the work submissions. This provides for a             Table 1 shows the result of passing MobileNet
+final level of just-in-time scheduling, work bal-     SSD V2 [7] through the IREE compilation flow
+ancing, and safe preemption points for when the       for different compilation targets and modes, using
+system is sharing limited device resources. The       IREE snapshot 20211203.686. To compile for
+memory needed during the asynchronous work            an Armv7E-M (e.g., Arm Cortex-M4) target, the
+is reserved from a pool that is aware of the          parameters are quantized. It shows both the size
+streaming behavior, and only as much memory as        of the IREE module, packed into the FlatBuffer
+is required for the concurrently executable work      file type, and the size of the executable workload
+is ever allocated. This enables deep pipelines of     (embedded within the module FlatBuffer) across
+work to be submitted to devices without over-         different LLVM compilation targets, each with
+committing limited memory resources. Because          four IREE compilation modes: Debug-dylib (dy-
+a majority of the memory used within a typical        namic library with debug symbols included; the
+inference is either constant or transient (local      default), Dylib (no debug symbols), Embedded
+to only a particular invocation), this approach       (embedded system-friendly dynamic library), and
+reduces the at-rest memory consumption of a           Static (static library). The latter two modes are the
+loaded program to mere kilobytes, in addition         TinyIREE modes. The result shows the workload
+to the memory required by constants, which can        sizes vary with the LLVM targets. In particular,
+often be mapped into discardable memory. This         the workload size is much smaller for the targets
+allows for several programs to be loaded—even         for the embedded systems, such as Armv7E-M,
+when retaining state across invocations—which         as a result of the LLVM optimization for such
+can then be scheduled for interleaved execution       targets.
+while only consuming the peak memory used by              Figure 3 plots the workload size compari-
+any individual invocation.                            son across different targets and modes, and the
+                                                      benefit of TinyIREE modes for embedded sys-
+Buffer allocation and permission control              tems. Notice for the static library mode, the ML
+    The IREE runtime uses device-provided mem-        workload becomes a library that can be optimized
+ory allocators to handle the device buffer configu-   during the link time, so its final size depends on
+ration and preparation, accompanied by a system       how the user application integrates the workload
+allocator to handle the host-side VM buffers.         library. For example, when switching from the
+The allocators can set the visibility of the buffer   static library to the virtual machine control with
+between the host (VM) and the device explicitly,      EmitC, the bytecode interpreter can be dropped,
+while using the standard memory allocation li-        which saves about 15 kB when compiling for
+braries for the proper alignment. A memory block      Armv7E-M.
+
+
+July/August 2022
+                                                                                                              7
+    Table 1. IREE module FlatBuffer and the embedded          TFLite interpreter library, the same workload can
+    device executable workload size for Mobilenet V2 SSD      be deployed with a much smaller runtime library.
+    model compiled for different CPU architecture targets.    Notice that TFLM could provide a host library
+     Mode                   FlatBuffer size Workload size     with a similar size, but it only supports a subset
+                                      (kB)           (kB)
+                                                              of operators. Thus, not all the TFLite artifacts
+     x86 64
+     Debug-dylib                     5,588         256.55     are compatible with TFLM. For example, the
+     Dylib                           5,525         208.35     pre-2.5.0-rc0 TFLM build can deploy the same
+     Embedded                        5,521         203.80     MobileNet V2 SSD model shown in Table 2
+     Static                          5,317              –
+     Armv7E-M                                                 with 4.91 MB of peak memory usage and a
+     Debug-dylib                     5,468         136.55     80.02 kB x86 64 host library, but TFLM has
+     Dylib                           5,420         102.98     since dropped its support for unsigned operators
+     Embedded                        5,406          88.84
+     Static                          5,317              –
+                                                              in favor of the recommended signed ones, hence
+     RISC-V32imf                                              the support for this particular model.
+     Debug-dylib                     5,500         168.42
+     Dylib                           5,437         120.18     CONCLUSION
+     Embedded                        5,437         120.18
+     Static                          5,317              –         We presented IREE, a compiler-based ML
+                                                              execution framework that takes the full advantage
+                                                              of MLIR and that can be easily configured for
+                                                              different target devices. Moreover, TinyIREE op-
+                                                              tions can use the same program compilation flow,
+                                                              but easily adjust its runtime to target embedded
+                                                              systems with reduced overhead. We also demon-
+                                                              strated the capability of supporting different CPU
+                                                              architectures and ISA extensions by adjusting the
+                                                              LLVM compilation flags. As a result, the pre-
+                                                              sented framework can be optimized for multiple
+                                                              target backends at the same time, while keeping
+    Figure 3. Workload size comparison of MobileNet           enough flexibility for customization.
+    SSD V2 model generated by IREE flow for different
+    CPU architectures in different deployment modes.          APPENDIX
+                                                                  IREE is an open-source project, and we hope
+    Table 2. Runtime peak memory usage and the host library   to encourage the ML community to contribute to
+    size for running MobileNet V2 SSD model with TFLite       the work so the framework can be applicable for
+    interpreter vs. IREE runtime application.                 more targets and applications.
+                      Peak memory (MB) Host library (kB)          Please visit https://github.com/google/iree and
+      TFLite
+                                                              https://github.com/iml130/iree-bare-metal-arm to
+      x86 64                      20.05          2971.06
+      IREE                                                    access the source code. A set of samples asso-
+      (Embedded)                                              ciated with IREE, including the quantized model
+      x86 64                       5.93            96.31      shown in this paper, along with other supported
+      Armv7E-M                     5.93            79.96
+      RISC-V32imf                  5.93           152.86      ML models, are available at https://github.com/
+                                                              google/iree-samples.
+
+        In terms of execution, IREE runtime also              ACKNOWLEDGMENT
+    provides more efficient memory usage, while re-               We would like to thank the members of the
+    quiring a small runtime library. Table 2 shows the        IREE team as well as members of the team
+    peak memory usage comparison between x86 64               at Fraunhofer IML. Especially, we would like
+    TensorFlow Lite (TFLite) benchmark tool [8] and           to thank Scott Todd for the work on runtime
+    IREE application for Mobilenet V2 SSD model               library development and Simon Camphausen for
+    built with the dynamic embedded library mode              the work on the integration of EmitC. We would
+    and synchronous HAL driver. Compared with the             also like to thank Scott Main for the review and
+
+
+
+8                                                                                                       IEEE Micro
+feedback of the manuscript.                                    tle, WA, USA. He received his Ph. D. degree in
+The work of M. Brehler was supported by the                    Computer Science and Engineering from The Ohio
+German Federal Ministry of Education and Re-                   State University, Columbus, OH in 2014, after which
+search (BMBF) as part of the AIA project under                 he worked at NVIDIA Corporation in various teams,
+                                                               including the CUDA compiler team. His work primarily
+grant number 01IS19060A and the Competence
+                                                               focuses on compilation of ML models, with a focus on
+Center Machine Learning Rhine-Ruhr (ML2R)
+                                                               code generation for CPU and GPUs. Contact him at
+under grant number 01IS18038B.                                 ravishankarm@google.com.
+
+   REFERENCES                                                  Nicolas Vasilache is currently with Google, Zürich,
+1. P. Warden and D. Situnayake, “TinyML: Machine Learn-        Switzerland. After a Ph. D. at INRIA, France and a
+   ing with TensorFlow on Arduino, and Ultra-Low Power         stint at Reservoir Labs, NYC on polyhedral compila-
+   Micro-Controllers,” Sebastopol, CA: O’Reilly Media,
+                                                               tion, he joined the Facebook AI Research Lab, NYC
+                                                               where he worked on fast distributed GPU libraries and
+   2019.
+                                                               led the Tensor Comprehensions systems research
+2. N. Rotem et al., “Glow: Graph Lowering Compiler Tech-
+                                                               project. He joined Google as an early core member
+   niques for Neural Networks,” arXiv:1805.00907 [cs.PL],
+                                                               of MLIR in 2018 and now leads Google’s Structured
+   2018.                                                       and Retargetable Codegen efforts in MLIR. Contact
+3. T. Chen et al., “TVM: An Automated End-to-End Optimiz-      him at ntv@google.com.
+   ing Compiler for Deep Learning,” 13th USENIX Symp. on
+   Operating Syst. Design and Implementation (OSDI), pp.       Ben Vanik is currently with Google, Seattle, WA,
+   579–594, 2018.                                              USA. His experience is in real-time graphics and
+4. C. Lattner et al., “MLIR: Scaling Compiler Infrastructure   hardware-accelerated compute with recent work fo-
+   for Domain Specific Computation,” IEEE/ACM Int. Symp.       cusing on helping ML take advantage of the wealth
+   on Code Gener. and Optimization (CGO), pp. 2-14, 2021.      of research that has been done in those domains.
+                                                               Contact him at benvanik@google.com.
+5. N. Vasilache et al., “Composable and Modular Code
+   Generation in MLIR: A Structured and Retargetable
+                                                               Stella Laurenzo is currently with Google, Seattle,
+   Approach        to   Tensor   Compiler     Construction,”
+                                                               WA, USA. Her experience is with scaling machine
+   arXiv:2202:03293 [cs.PL], 2022.
+                                                               learning applications and approaches to small form
+6. https://developer.mlplatform.org/w/tosa/                    factors. Contact her at laurenzo@google.com.
+7. M. Sandler, et al., “MobileNetV2: Inverted Residuals and
+   Linear Bottlenecks,” arxiv:1801.04381 [cs.CV], 2019.
+8. https://www.tensorflow.org/lite/performance/
+   measurement
+
+
+Hsin-I Cindy Liu is currently with Google, Mountain
+View, CA, USA. She received the Ph. D. degree in
+Electrical Engineering and Computer Sciences from
+University of California, Berkeley in 2010. Her re-
+search interests include ambient intelligence sensing,
+DNN model architecture research/deployment, etc.
+Contact her at hcindyl@google.com.
+
+Marius Brehler is currently with Fraunhofer IML,
+Dortmund, Germany. He received the B.Sc., M.Sc.,
+and Dr.-Ing. degrees in Electrical Engineering from
+Technische Universität Dortmund, Dortmund, Ger-
+many, in 2011, 2013, and 2019, respectively.
+Amongst other things, his current work includes
+compilers for machine learning. Contact him at
+marius.brehler@iml.fraunhofer.de.
+
+Mahesh Ravishankar is currently with Google, Seat-
+
+
+
+July/August 2022
+                                                                                                                       9
+
