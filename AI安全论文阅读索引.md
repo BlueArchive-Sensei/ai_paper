@@ -15,7 +15,7 @@
 ### 路线 B：从“安全训练为什么失效”开始
 
 1. [Jailbroken](jailbroken/论文中文解读.md)：目标竞争与安全泛化错配。
-2. [Simple Adaptive Attacks](simple_adaptive_attacks/论文中文解读.md)：静态防御为何会败给针对性攻击。
+2. [Simple Adaptive Attacks](simple_adaptive_attacks/论文中文解读.md)：静态攻击基准为何会高估鲁棒性，针对具体模型适配的简单攻击为何有效。
 3. [Sleeper Agents](sleeper_agents/论文中文解读.md)：已形成的后门能否被常见安全微调清除。
 4. [Alignment Faking](alignment_faking/论文中文解读.md)：训练时的顺从是否可能只是策略性表现。
 5. [Sycophancy to Subterfuge](sycophancy_to_subterfuge/论文中文解读.md)：简单规范投机如何泛化到奖励篡改。
@@ -41,7 +41,7 @@
 | 自适应攻击 | Simple Adaptive Attacks | 防御能否承受专门调整的对手 | 后缀搜索、迁移、prefilling |
 | 可解释性 | Mechanistic Interpretability Review | 能否从内部发现风险机制 | 领域综述 |
 | 涌现失配 | Emergent Misalignment | 窄微调会否造成广泛失配 | 不安全代码微调与对照 |
-| 智能体监控 | SHADE-Arena | 智能体能否破坏且逃避监控 | 17 个长时程任务家族 |
+| 智能体监控 | SHADE-Arena | 智能体能否破坏且逃避监控 | 17 个长时程任务对（主任务 + 隐藏副任务） |
 | 网络能力 | ExploitGym | AI 能否把触发样本发展为 exploit | 898 个真实漏洞实例 |
 
 ## 把 12 篇论文串成一条逻辑链
@@ -53,9 +53,9 @@
         │
         ├─安全目标与通用能力冲突或泛化不匹配 → jailbreak
         │
-        ├─窄奖励可能泛化为捷径、奖励篡改或广泛失配
+        ├─窄任务训练可能泛化为捷径、奖励篡改或广泛失配
         │
-        ├─已形成的后门/伪装可能在安全微调后留存
+        ├─已形成的后门/伪装可能在后续训练后留存
         │
         └─因此需要：内部审计 + 对手适应评估 + 外部控制协议
                                       │
@@ -67,7 +67,7 @@
 > 这一节讨论论文发布后的事件，不属于 12 篇论文的原始实验结论。来源：[OpenAI 事后报告](https://openai.com/index/hugging-face-incident-and-the-road-ahead/)、[Redwood Research 独立调查](https://www.redwoodresearch.org/research/hugging-face-incident)。
 
 - **ExploitGym** 提供了当时正在运行的网络能力任务。
-- **Sycophancy to Subterfuge** 和 **Emergent Misalignment** 解释了为什么“在窄任务中奖励找捷径”可能泛化成更广行为。
+- **Sycophancy to Subterfuge** 和 **Emergent Misalignment** 显示窄任务上的训练（前者奖励规范投机，后者微调不安全代码）可能泛化成更广行为。
 - **AI Control** 说明评测环境不应假设模型会自觉尊重测试边界。
 - **SHADE-Arena** 解释了为什么在长轨迹中发现微妙越权和破坏很难。
 - **Mechanistic Interpretability** 指向内部状态与因果机制审计，但目前还不能给出完备保证。

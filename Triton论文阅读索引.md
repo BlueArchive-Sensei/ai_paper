@@ -1,8 +1,8 @@
 # Triton 论文阅读索引
 
-这里的 **Triton** 指由 OpenAI 发起、现已广泛用于 PyTorch 编译栈的 GPU kernel 编程语言与编译器，不是 NVIDIA Triton Inference Server。
+这里的 **Triton** 指 Tillet 等人在哈佛大学提出（2019 年 MAPL 论文）、后以 OpenAI Triton 之名广泛用于 PyTorch 编译栈的 GPU kernel 编程语言与编译器，不是 NVIDIA Triton Inference Server。
 
-本文按论文首次公开时间排序，选择四篇能串起 Triton 发展主线、且在各自阶段最有代表性的论文。所谓“最出名”并非按单一引用数机械排序，而是综合了奠基性、工业影响、后续研究中的使用频率、论文/会议认可度与是否直接解释 Triton。本目录没有把 FlashAttention 纳入主线：它极其著名，也大量使用 Triton，但研究主角是注意力算法，不是 Triton 本身。
+本文按论文首次公开时间排序，选择四篇能串起 Triton 发展主线、且在各自阶段最有代表性的论文。所谓“最出名”并非按单一引用数机械排序，而是综合了奠基性、工业影响、后续研究中的使用频率、论文/会议认可度与是否直接解释 Triton。本目录没有把 FlashAttention 纳入主线：它极其著名，Triton 版实现也常被用作基线（FA2 论文称对调循环顺序与沿序列并行最早出自 Triton 实现），但各代官方实现是手写 CUDA/CUTLASS（FA4 为 CuTe DSL），研究主角是注意力算法，不是 Triton 本身。
 
 ## 一、时间线
 
@@ -39,7 +39,7 @@ TritonBench 建立两个互补集合：184 个来自真实开源仓库的 Triton
 
 随着 NVIDIA、AMD 等架构加入更多矩阵指令、warp 组织和共享内存访问模式，旧式“每种 layout 单独写规则”的办法会产生组合爆炸。Linear Layouts 把硬件资源位到逻辑张量坐标位的映射表示为 GF(2) 上的线性变换，用统一代数处理 reshape、broadcast、layout conversion、shuffle 与 shared-memory swizzle。
 
-它的最大意义是编译器工程的正确性与可扩展性。真实 benchmark 的平均提升是 1.07×、最高 1.40×；不能只摘最高值，把它宣传成普遍 40% 加速。
+它的最大意义是编译器工程的正确性与可扩展性。摘要对 TritonBench 的真实 kernel 用例报告平均 1.07×、最高 1.40×，但论文没有说明平均口径，按图 9 读出的 GH200 全部用例算术平均约 1.02×，各平台收益也相差很大（MI250 仅 1.00–1.03×）；不能只摘最高值，把它宣传成普遍 40% 加速。
 
 ## 三、推荐阅读顺序
 
@@ -78,7 +78,7 @@ Linear Layouts 纵向改造：tile 到硬件资源的映射怎样统一、正确
 1. **把 2019 原型等同于当前 Triton。** 奠基论文使用 C 风格前端、GTX 1070 和当年的编译流程；今天常见的是 Python DSL、MLIR 后端和新一代 GPU。
 2. **把 PyTorch 2 的端到端加速全部归于 Triton。** 图捕获、算子分解、融合、调度、模板与 Triton codegen 缺一不可。
 3. **把 TritonBench 的 speedup 与正确率分开看。** 速度通常只对成功且正确的样本统计，不能用少数幸存 kernel 的高加速掩盖低成功率。
-4. **把 Linear Layouts 的局部 14.20× 当成整体收益。** 该数字来自特定 gather 微基准；265 个真实用例的平均值是 1.07×。
+4. **把 Linear Layouts 的局部 14.20× 当成整体收益。** 该数字来自特定 gather 微基准；真实 benchmark 的平均 1.07×（摘要称 265 个用例，按图 9 这只是 GH200 上的用例数）没有说明平均口径，图 9 读出约 1.02×，不宜当作精确的整体均值。
 
 ## 六、文件约定
 
@@ -88,6 +88,6 @@ Linear Layouts 纵向改造：tile 到硬件资源的映射怎样统一、正确
 - `paper.txt`：由 PDF 提取、保留大致版面的文本，便于全文检索；
 - `论文概要.md`：快速了解贡献、关键结果和边界；
 - `论文中文解读.md`：按章节、图表、方法、实验和局限展开的长篇解读；
-- `rendered_figures/`：从论文源码导出的独立图表；不保存整页文字截图。
+- `rendered_figures/`：解读引用的原文图表（独立图片，配中文图题与读图说明）；不保存整页文字截图。
 
 在线原文入口：[Triton 2019](https://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf) · [PyTorch 2](https://docs.pytorch.org/assets/pytorch2-2.pdf) · [TritonBench](https://arxiv.org/abs/2502.14752) · [Linear Layouts](https://arxiv.org/abs/2505.23819)

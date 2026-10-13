@@ -35,12 +35,12 @@
 
 | 时间 | 论文 | 为什么必须读 |
 |---|---|---|
-| 1997 | [LSTM](lstm/论文中文解读.md) | 门控记忆与近恒等误差通路；理解 Transformer 所替代的时间串行瓶颈 |
+| 1997 | [LSTM](lstm/论文中文解读.md) | 常量误差传送带（CEC）与输入/输出门，让误差跨长时滞不衰减；理解 Transformer 所替代的时间串行瓶颈 |
 | 2013 | [VAE](vae/论文中文解读.md) | 变分下界与重参数化；后续 latent generative model 的概率基础 |
 | 2014 | [GAN](gan/论文中文解读.md) | 用对抗博弈学习隐式生成分布 |
 | 2014 | [Seq2Seq](seq2seq/论文中文解读.md) | encoder–decoder 条件序列建模 |
 | 2014/15 | [Bahdanau Attention](bahdanau_attention/论文中文解读.md) | 每个解码步动态读取源序列，解除固定向量瓶颈 |
-| 2015 | [ResNet](resnet/论文中文解读.md) | 残差参数化与直接梯度通路 |
+| 2015 | [ResNet](resnet/论文中文解读.md) | 残差学习（拟合 $\mathcal F(x)=\mathcal H(x)-x$）与恒等 shortcut，缓解深层网络的退化问题 |
 | 2015 | [Knowledge Distillation](knowledge_distillation/论文中文解读.md) | teacher–student、软目标和部署压缩 |
 | 2015 | [DQN](deep_q_network/论文中文解读.md) | 深度表征与价值学习结合 |
 
@@ -49,7 +49,7 @@
 | 时间 | 论文 | 核心变化 |
 |---|---|---|
 | 2016/17 | [GCN](gcn/论文中文解读.md) | 从谱近似得到归一化图消息传播 |
-| 2017 | [Transformer](transformer/论文中文解读.md) | self-attention、multi-head、位置编码与完全并行序列建模 |
+| 2017 | [Transformer](transformer/论文中文解读.md) | self-attention、multi-head、位置编码；无循环与卷积，训练时可沿序列位置并行 |
 | 2017 | [Sparsely-Gated MoE](sparsely_gated_moe/论文中文解读.md) | 每个 token 只激活部分参数的条件计算 |
 | 2017 | [AlphaZero](alphazero/论文中文解读.md) | policy/value network、MCTS 与自我博弈闭环 |
 | 2018 | [GPT-1](gpt1/论文中文解读.md) | 自回归预训练后监督微调 |
@@ -61,7 +61,7 @@
 |---|---|---|
 | 2019 | [GPT-2](gpt2/论文中文解读.md) | 规模化 causal LM 与 zero-shot task formatting |
 | 2019 | [Transformer-XL](transformer_xl/论文中文解读.md) | segment recurrence 与相对位置 |
-| 2019 | [T5](t5/论文中文解读.md) | span corruption 与 text-to-text 接口 |
+| 2019 | [T5](t5/论文中文解读.md) | text-to-text 统一接口，并系统比较预训练目标、架构与数据（最终选用 span corruption） |
 | 2019 | [Multi-Query Attention](multi_query_attention/论文中文解读.md) | 多个 Q heads 共享单组 K/V，降低自回归解码带宽 |
 | 2020 | [Scaling Laws](scaling_laws/论文中文解读.md) | loss 与参数、数据、计算之间的经验幂律 |
 | 2020 | [Longformer](longformer/论文中文解读.md) | local window 与 global token 的稀疏 Attention |
@@ -108,7 +108,7 @@
 | 2023 | [Let’s Verify Step by Step](lets_verify_step_by_step/论文中文解读.md) | PRM800K 与步骤级过程监督 |
 | 2023 | [Speculative Sampling](speculative_sampling/论文中文解读.md) | Chinchilla 70B 上验证 exact speculative sampling |
 | 2023/24 | [SpecInfer](specinfer/论文中文解读.md) | token tree 与 topology-aware 并行验证 |
-| 2024 | [Mamba-2 / SSD](mamba_2/论文中文解读.md) | SSM 与半可分矩阵的对偶及 GEMM 友好算法 |
+| 2024 | [Mamba-2 / SSD](mamba_2/论文中文解读.md) | SSM 与（线性）注意力经半可分矩阵的对偶（SSD）及 GEMM 友好的分块算法 |
 | 2024 | [FlashAttention-3](flash_attention_3/论文中文解读.md) | Hopper 上 TMA/WGMMA、异步流水与 FP8 |
 | 2024 | [Compute-Optimal Test-Time Scaling](scaling_test_time_compute/论文中文解读.md) | 按题目难度分配 parallel、sequential 与 PRM search |
 | 2024 | [Medusa](medusa/论文中文解读.md) | multiple decoding heads 与 tree attention |
@@ -116,10 +116,10 @@
 | 2024 | [EAGLE-2](eagle_2/论文中文解读.md) | context-aware dynamic draft tree |
 | 2025 | [s1](s1_test_time_scaling/论文中文解读.md) | 1K reasoning SFT 与 budget forcing |
 | 2025 | [Qwen3](qwen_3/论文中文解读.md) | dense/MoE 与 thinking/non-thinking 统一接口 |
-| 2026 | [FlashAttention-4](flash_attention_4/论文中文解读.md) | 面向 Blackwell 的持久化异步流水 |
-| 2026 | [FP4 FlashAttention-4](fp4_flash_attention_4/论文中文解读.md) | block-scaled FP4 与 Attention 数值/流水协同 |
+| 2026 | [FlashAttention-4](flash_attention_4/论文中文解读.md) | 面向 Blackwell 的全异步流水与算法协同设计（TMEM、2-CTA、软件指数） |
+| 2026 | [FP4 FlashAttention-4](fp4_flash_attention_4/论文中文解读.md) | 第三方单作者报告：block-scaled FP4 与 Attention 数值/流水协同 |
 
-Qwen3、LLaMA、LLaVA 等也属于具体厂商模型。这里仅把它们作为通用方法演进节点；完整公司路线放在厂商索引。
+Qwen3、LLaMA、Segment Anything 等也属于具体厂商模型。这里仅把它们作为通用方法演进节点；完整公司路线放在厂商索引。
 
 ## 4. Attention 应沿五条轴学习
 
@@ -129,7 +129,7 @@ Qwen3、LLaMA、LLaVA 等也属于具体厂商模型。这里仅把它们作为�
 | 位置与记忆 | Transformer-XL、RoPE、ALiBi | 位置信息怎样进入 score，历史怎样复用 |
 | 稀疏或近似 | Longformer、BigBird、Linformer、Performer | 减少连接、降低秩或近似 softmax kernel |
 | KV 表示 | MQA、GQA | 自回归阶段缓存多少组 K/V |
-| 精确 kernel | FlashAttention 1–4 | 数学结果不变，减少 HBM IO 并适配不同 GPU |
+| 精确 kernel | FlashAttention 1–4 | 数学结果不变（FA3 的 FP8 前向为低精度近似），减少 HBM IO 并适配不同 GPU |
 
 ### Attention 推荐顺序
 

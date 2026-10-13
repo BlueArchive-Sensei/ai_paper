@@ -26,7 +26,7 @@
 | 时间 | 资料 | 变化 |
 |---|---|---|
 | 2017– | [XLA / OpenXLA](xla_compiler/论文中文解读.md) | framework graph → HLO，进行 fusion、layout、buffer assignment 与多后端 codegen |
-| 2017 | [Dynamic Computation Graphs](dynamic_computation_graphs/论文中文解读.md) | define-by-run 的动态图语义与编译困难 |
+| 2017 | [Dynamic Computation Graphs](dynamic_computation_graphs/论文中文解读.md) | 每个样本计算图形状不同时，用 dynamic batching 在静态图上批量执行（TensorFlow Fold） |
 
 这一阶段形成长期矛盾：静态图便于全局优化，动态图便于 Python 控制流和调试。后续图捕获系统一直在两者之间寻找可验证边界。
 
@@ -38,7 +38,7 @@
 | 2018 | [TVM](tvm_compiler/论文中文解读.md) | graph optimization、Tensor Expression、schedule 与学习成本模型 |
 | 2018 | [Glow](glow_compiler/论文中文解读.md) | high/low-level IR、逐步 lowering 与显式 buffer |
 
-三者共同确立“计算语义和执行 schedule 分离”的范式，但自动化程度不同。
+三者路线不同：Tensor Comprehensions 用多面体自动调度加 autotuning，TVM 显式分离计算与 schedule 并用学习型成本模型搜索，Glow 以高低两层 IR 逐步 lowering 为主。
 
 ### 2.3 2019：主流动态图框架、图重写与 Kernel DSL
 
@@ -46,7 +46,7 @@
 |---|---|---|
 | 2019 | [Chainer](chainer_define_by_run/论文中文解读.md) | define-by-run 的工程化路径 |
 | 2019 | [PyTorch](pytorch_imperative/论文中文解读.md) | imperative eager frontend 成为主流 |
-| 2019 | [JANUS](janus_symbolic_graph/论文中文解读.md) | 从动态图运行轨迹推断并生成符号图 |
+| 2019 | [JANUS](janus_symbolic_graph/论文中文解读.md) | 先 profile 命令式程序，据此假设从 AST 推测生成符号图，假设失败则回退 |
 | 2019 | [TASO](taso/论文中文解读.md) | 自动生成、验证并搜索等价图替换 |
 | 2019 | [Triton](triton_compiler/论文中文解读.md) | block/tile-level GPU DSL 与自动线程映射 |
 
@@ -56,10 +56,10 @@ Triton 的位置不是“另一个神经网络框架”，而是图编译器和�
 
 | 时间 | 论文 | 变化 |
 |---|---|---|
-| 2020/21 | [MLIR](mlir/论文中文解读.md) | extensible dialect、region 与 progressive lowering |
+| 2020 | [MLIR](mlir/论文中文解读.md) | extensible dialect、region 与 progressive lowering |
 | 2020 | [Ansor](ansor/论文中文解读.md) | 自动构造 schedule sketches 与学习型搜索 |
 | 2020 | [Rammer](rammer/论文中文解读.md) | 用 rTask 统一 operator 内外并行调度 |
-| 2020 | [FusionStitching](fusion_stitching/论文中文解读.md) | fusion 中间结果的共享内存 stitching |
+| 2020 | [FusionStitching](fusion_stitching/论文中文解读.md) | 用寄存器、warp shuffle 与共享内存在线程、warp 或 block 内缝合不同并行度的算子 |
 
 ### 2.5 2021：动态 Shape、SPMD 与硬件原生模板
 
@@ -79,7 +79,7 @@ Triton 的位置不是“另一个神经网络框架”，而是图编译器和�
 | 2022 | [TinyIREE](tinyiree/论文中文解读.md) | MLIR 编译器、HAL、VM 与小型部署 runtime |
 | 2022 | [MetaSchedule](metaschedule/论文中文解读.md) | 用可组合概率程序表达 schedule search space |
 | 2022/23 | [TensorIR](tensorir/论文中文解读.md) | 以 block/read-write region 连接循环调度和 tensor intrinsic |
-| 2022 | [Alpa](alpa/论文中文解读.md) | 联合搜索 intra-op sharding 与 inter-op pipeline |
+| 2022 | [Alpa](alpa/论文中文解读.md) | 分层搜索：inter-op 用 DP 划分 pipeline stage 与 device mesh，intra-op 用 ILP 选 sharding |
 
 ### 2.7 2023：Task Mapping、Tile Fusion 与稀疏 Kernel
 
@@ -101,7 +101,7 @@ Triton 的位置不是“另一个神经网络框架”，而是图编译器和�
 | 时间 | 论文 | 变化 |
 |---|---|---|
 | 2025 | [TileLang](tilelang/论文中文解读.md) | tile dataflow 与 schedule annotation 的可组合 DSL |
-| 2025 | [Mirage Persistent Kernel](mirage_persistent_kernel/论文中文解读.md) | 把模型子图编译为 persistent mega-kernel |
+| 2025 | [Mirage Persistent Kernel](mirage_persistent_kernel/论文中文解读.md) | 把整个模型推理（含多 GPU 通信）编译为一个 persistent mega-kernel |
 | 2025 | [TritonBench](tritonbench/论文中文解读.md) | 分离 LLM 生成 kernel 的可调用性、正确性与性能 |
 | 2025/26 | [Linear Layouts](linear_layouts/论文中文解读.md) | 用统一代数描述线程、寄存器与 shared-memory layout |
 
@@ -109,10 +109,10 @@ Triton 的位置不是“另一个神经网络框架”，而是图编译器和�
 
 | 时间 | 资料 | 变化 |
 |---|---|---|
-| 2026 | [CuTe Layout Algebra](cute_layout_algebra/论文中文解读.md) | layout 变换成为可组合、可推理的代数 |
-| 2026 | [CuTeDSL TorchInductor Backend](cutedsl_torchinductor/论文中文解读.md) | 专家 GPU DSL 接入 PyTorch 图编译 |
+| 2026 | [CuTe Layout Algebra](cute_layout_algebra/论文中文解读.md) | 给出 CUTLASS v3/v4 与 CuTe DSL 所用 layout 的数学规范：可组合、可推理的代数 |
+| 2026 | [CuTeDSL TorchInductor Backend](cutedsl_torchinductor/论文中文解读.md) | CuTe DSL 作为 GEMM 的额外 autotuning 后端接入 TorchInductor（官方博客） |
 | 2026 | [PyTorch Graph Programming Model](pytorch_graph_programming_model/论文中文解读.md) | Dynamo、export 与 dynamic shape 的语义边界 |
-| 2026 | [Event Tensor](event_tensor/论文中文解读.md) | 事件驱动 tensor execution |
+| 2026 | [Event Tensor](event_tensor/论文中文解读.md) | 把 tile 级依赖事件做成带 shape 的 tensor，编译动态 megakernel |
 | 2026 | [Ada-MK](ada_mk/论文中文解读.md) | 自适应 mega-kernel |
 | 2026 | [Taming Bitwise GPU Kernels](taming_bitwise_gpu_kernels/论文中文解读.md) | 将浮点依赖树变成可编译和静态验证的逐位契约 |
 
@@ -124,15 +124,15 @@ XLA、Glow、TVM 开始跨 operator 做常量折叠、layout、fusion 和 buffer
 
 ### 3.2 单一 IR → 多级 IR 与 Dialect
 
-模型算子、张量循环、GPU tile 和机器指令需要不同抽象。Glow 的高低两层 IR 是早期实例，MLIR 将其基础设施化。
+模型算子、张量循环、GPU tile 和机器指令需要不同抽象。Glow 的高低两层 IR 是早期实例，MLIR 则把多级 IR 做成通用基础设施。
 
 ### 3.3 手写 Schedule → Autotuning → 可编程搜索空间
 
 | 阶段 | 代表 | 专家知识放在哪里 |
 |---|---|---|
 | 模板搜索 | AutoTVM | 人工 schedule template |
-| 自动 sketch | Ansor | sketch rule 与 cost model |
-| 可编程搜索 | MetaSchedule | 概率程序、rule、mutator、postprocessor |
+| 自动 sketch | Ansor | sketch 推导规则与 cost model |
+| 可编程搜索 | MetaSchedule | 概率程序、可组合变换模块、trace 变异与 validator |
 | 约束构造 | Roller | 硬件资源和 tile 约束 |
 | 原生模板 | Bolt | CUTLASS/tensor-core pipeline |
 | 专家 DSL | Triton、TileLang、CuTe | tile、layout 与 pipeline 程序 |
@@ -145,11 +145,11 @@ XLA、Glow、TVM 开始跨 operator 做常量折叠、layout、fusion 和 buffer
 
 ### 3.5 静态图 → Guarded Dynamic Capture
 
-Dynamo 并非把任意 Python 永久静态化，而是捕获满足 guards 的稳定子图。guard 失效会重编译或 graph break；dynamic shape 的关键是符号约束和 specialization policy。
+Dynamo 并非把任意 Python 永久静态化，而是捕获满足 guards 的稳定子图。已缓存版本的 guards 全部失效会重编译，遇到无法追踪的代码则 graph break；dynamic shape 的关键是符号约束和 specialization policy。
 
 ### 3.6 单设备 Codegen → 分布式编译
 
-GSPMD 把 tensor sharding 降成每设备局部程序和 collectives；Alpa 在更高层搜索算子内分片和 pipeline stage。通信、拓扑和 microbatch 已成为编译计划的一部分。
+GSPMD 根据少量 sharding 标注补全分片，并降成每设备局部程序和 collectives；Alpa 在其上自动选择算子内 sharding，并划分 pipeline stage 与 device mesh（microbatch 数仍作为输入）。通信、拓扑和流水线调度已成为编译计划的一部分。
 
 ### 3.7 近似数值一致 → 显式数值契约
 
@@ -187,10 +187,10 @@ GSPMD → Alpa → 再去厂商索引看 DeepSeek DualPipe、Ascend CloudMatrix 
 |---|---|---|
 | FlashAttention 1–4 | 模型/Attention 算法 | 主要贡献是 exact Attention 的 IO 与硬件算法 |
 | Triton、TileLang、CuTe | AI Compiler | 主要贡献是 kernel 表达、分析和 codegen |
-| TensorRT-LLM | 厂商系统实现 | NVIDIA 专用模型编译、engine 与 serving runtime |
+| TensorRT-LLM | 厂商系统实现 | NVIDIA 专用的 LLM 推理栈（API、scheduler、KV cache、kernel 与 runtime），不是单一编译器 |
 | CloudMatrix384 | 厂商系统实现 | Ascend 超节点与 DeepSeek workload 的联合设计 |
 | Mooncake | 厂商系统实现 | Kimi 的 KV-centric disaggregated serving |
-| MegaBlocks | AI Compiler/系统 | 通用 block-sparse MoE kernel 与执行方法 |
+| MegaBlocks | AI Compiler/系统 | 面向 MoE 的 block-sparse kernel 与执行方法 |
 
 跨层资料可以在两个索引出现，但只有一个主归类，另一个只保留交叉入口。
 

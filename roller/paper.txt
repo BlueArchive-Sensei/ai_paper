@@ -1,388 +1,1243 @@
-                                               Predictive Power of Computational Astrophysics as a Discovery
-                                               Tool
-                                               Proceedings IAU Symposium No. 362, 2022                © 2022 International Astronomical Union
-                                               D. Bisikalo, T. Hanawa, C. Boily & J. Stone, eds.             DOI: 00.0000/X000000000000000X
-
-
-                                                   Dynamical evolution modeling of the
-                                                 Collinder 135 & UBC 7 binary star cluster
-                                                                     Marina Ishchenko1 , Peter Berczik1,2,3 ,
-                                                                              Nina Kharchenko1
-                                                        1
-                                                         Main Astronomical Observatory, National Academy of Sciences of Ukraine,
-arXiv:2201.12040v3 [astro-ph.GA] 31 Jan 2023
-
-
-
-
-                                                                   27 Akademika Zabolotnoho St, 03143 Kyiv, Ukraine
-                                                   2
-                                                     Astronomisches Rechen-Institut, Zentrum für Astronomie, University of Heidelberg,
-                                                                   Mönchhofstrasse 12-14, 69120, Heidelberg, Germany
-                                                3
-                                                  Konkoly Observatory, Research Centre for Astronomy and Earth Sciences, Eötvös Loránd
-                                                   Research Network (ELKH), Konkoly Thege Miklós út 15-17, 1121 Budapest, Hungary
-
-
-                                               Abstract. The purpose of the present work is a detailed investigation of the dynamical evolution
-                                               of Collinder 135 and UBC 7 star clusters. We present a set of dynamical numerical simulations
-                                               using realistic star cluster N -body modeling technique with the forward integration of the star-
-                                               by-star cluster models to the present day, based on best-available 3D coordinates and velocities
-                                               obtained from the latest Gaia EDR3 data release. We have established that Collinder 135 and
-                                               UBC 7 are probably a binary star cluster and have common origin. We carried out a full star-
-                                               by-star N-body simulation of the stellar population of both clusters using the new algorithm of
-                                               Single Stellar Evolution and performed a comparison of the results obtained in the observational
-                                               data (like cumulative number counts), which showed a fairly good agreement.
-
-                                               Keywords. galaxies: star clusters, methods: n-body simulations
-
-
-
-
-                                               1. Introduction
-                                                 Recently, based on analysis of positions and kinematic data of Gaia space mission
-                                               (Gaia Collaboration et al., 2016), several pairs of star clusters showed a probable com-
-                                               mon origin (for example: Bisht et al., 2021, Pang et al., 2020, Zhong et al., 2019, Kovaleva et al., 2020).
-                                               Collinder 135 (hereafter Cr 135) and newly discovered (Castro-Ginard et al., 2018) UBC 7
-                                               are located in the Vela-Puppis region which attracts active attention since Gaia data al-
-                                               lowed to appreciate its complicated history of evolution, space and kinematic structure
-                                               (Beccari et al., 2018, Cantat-Gaudin et al., 2019b, Cantat-Gaudin et al., 2019a, Beccari et al., 2020).
-                                               We have demonstrated (Kovaleva et al., 2020) that these two clusters locations and ve-
-                                               locities suggest that they might have been closer to each other at their initial history,
-                                               ≈ 50 Myr ago. Backward orbital integration indicates also that the clusters might have
-                                               been even gravitationally bound in the past, assuming that they was significantly more
-                                               massive before their violent relaxation (Kovaleva et al., 2020).
-                                                 We used Gaia DR2 and EDR3 data to restore the most probable members of Cr 135
-                                               and UBC 7, using the method presented in Kharchenko et al., 2012. Based on obtained
-                                               dataset, we constrain present day parameters of the two clusters, such as space positions,
-                                               space velocities, masses and density profiles. These data are used further as boundary
-                                               conditions for star-by-star numerical simulation of dynamical evolution of this pair of
-                                               star clusters.
-                                                                                              1
-2                                    M. Ishchenko et al.
-2. N-body modeling of the star clusters evolution
-                                  2.1. Numerical method
-We used the ϕ−GPU code for the numerical solution of the equations of motion. The
-ϕ−GPU package uses a high order Hermite integration scheme and individual block
-time steps (the code supports time integration of particle orbits with schemes of 4th , 6th
-and even 8th order). Such a direct N -body code evaluates in principle all pairwise forces
-between the gravitating particles, and its computational complexity scales asymptotically
-with N 2 . We refer the more interested readers to a general discussion about different N -
-body codes and their implementation in Spurzem et al., 2011a, Spurzem et al., 2011b.
-   The ϕ−GPU code is fully parallelized using the MPI library. This code is written from
-scratch in C++ and is based on earlier CPU serial N -body code, Nitadori and Makino, 2008.
-The MPI parallelization was done in the same j particle parallelization mode as in the
-earlier ϕ−GRAPE code, Harfst et al., 2007. The current version of the code uses a na-
-tive GPU support and direct code access to the GPU’s using the NVIDIA native CUDA
-library. The multi GPU support is achieved through global MPI parallelization. Simul-
-taneously, our code effectively exploits also the current CPU’s OpenMP parallelization.
-More details about the GPU code public version and its performance we are presented
-in Spurzem et al., 2012 and Berczik et al., 2013. The present code is well tested and has
-already been used to obtain important results in our earlier large scale (up to few mil-
-lion body) simulations, for more details see Khan et al., 2018, Panamarev et al., 2019,
-Shukirgaliyev et al., 2017 and Ernst et al., 2011.
-
-                                2.2. Initial parameter space
-We were looking for the best-fitting King models (King, 1966) for the current observations
-from Gaia DR3. We assume that the clusters age is exactly 50 Myr. Our main goal was
-to reproduce the final cumulative mass profiles M (r) for both objects. For the Cr 135
-we used the range within 0 < r < 20 pc and for UBC 7 – 0 < r < 15 pc. These
-limits corresponds to the clusters current Jacobi radius’s. Because the initial masses of
-the clusters are quite uncertain, we used for the modelling the initial masses as one
-of the initial fitting parameters. Since clusters are formed in molecular clouds with a
-low star formation efficiency, they are most probably supervirial after the initial gas
-expulsion phase (Shukirgaliyev et al., 2021). For the initial mass function we used the
-Kroupa, 2001 approximation, with the lower mass ml = 0.1 M⊙ and the upper mass mh
-= 10 M⊙ limits. The other two main parameters for the cluster initial models was a Rcore
-and the King concentration parameter W0 , individually for ach clusters (see Table 2).
-For the stellar metallicity we used the value Z = 2% (assumed as a Solar value) for both
-clusters.
-   For the initial positions and orbital velocities of the star clusters centre we used the
-selected #(53,61) model from our Kovaleva et al., 2020 paper. The initial conditions for
-the clusters center of mass coordinates and velocities taken from this model (see Table 1).
-
-
-Table 1. Initial position and velocity values for Cr 135 and UBC 7 center of mass in Cartesian
-      Galactic coordinates. Taken from #(53,61) model, Kovaleva et al., 2020.
-
-         Cluster    X, pc       Y , pc     Z, pc    Vx , km/s Vy , km/s Vz , km/s
-          Cr 135 -1061.421 -8382.545 -22.70332       -230.559   33.1769    5.52892
-          UBC 7 -1065.137 -8386.942 -14.5731         -230.792   34.0251    5.86780
-                                    Collinder 135 & UBC 7 binary star cluster                                                 3
-   More than 50 individual models with stellar evolution have been computed. The total
-running time for one typical model on a AMD 3600X 4.1 GHz CPU with a GeForce
-RTX 2600 Super GPU card was about 2 min. Minimizing the difference between the
-cumulative number distributions of the observed clusters and the numerical models we
-find simultaneously the best-fit parameters for both clusters, see Table 2.
-
-                Table 2. Initial values of physical parameters for Cr 135 and UBC 7.
-
-                                               Cluster M⊙           N        R, pc W0
-                                               Cr 135     230 442                 10       3
-                                               UBC 7      200 384                  7       11
-
-
-
-   After the first set of fitting procedure we run extra 20 more numerical models (with
-the clusters same physical parameters but using different randomization parameters).
-First we generated 10 random sets with different initial mass function (different color
-lines), keeping fixed the initial positions and velocities of the stars, see Fig. 1. For the
-second 10 random sets we used one selected initial muss function and randomize the stars
-positions and velocities (different color lines), see Fig. 2. On these figures we present as
-a black thick line the observed cumulative number distribution of stars for both clusters.
-The total cumulative number distribution of stars including the stellar background are
-presented on the figures as a constantly growing gray line. Because the observations have
-own limitations due to the Gaia satellite specifications, we select from the numerical
-models only the stars which are inside the specific stellar mass range - from 0.28 to
-4.0 M⊙ . On our comparison figures we also exclude the neutron stars and black holes.
-The dotted gray lines on the figures represents the one ±σ difference levels from observed
-cumulative number distribution of stars.
-     350                                                                    350
-           Col 135 Count                                                            UBC 7 Count
-              Count-Back                                                             Count-Back
-           imf.rand. #1                                                           imf.rand. #1
-     300   imf.rand. #2                                                     300   imf.rand. #2
-           imf.rand. #3                                                           imf.rand. #3
-           imf.rand. #7                                                           imf.rand. #7
-     250   imf.rand. #9                                                     250   imf.rand. #9
-           imf.rand. #4                                                           imf.rand. #4
-           imf.rand. #5                                                           imf.rand. #5
-     200   imf.rand. #6                                                     200   imf.rand. #6
-           imf.rand. #8                                                           imf.rand. #8
-           imf.rand. #10                                                          imf.rand. #10
- N
-
-
-
-
-                                                                        N
-
-
-
-
-     150                                                                    150
-
-
-     100                                                                    100
-
-
-     50                                                                     50
-
-
-      0                                                                      0
-            2      4       6   8    10    12    14   16   18   20                      2    4     6      8     10   12   14
-                                   R [pc]                                                             R [pc]
-
-
-Figure 1. Cumulative number distribution of stars for clusters Cr 153 (left panel) and UBC 7
-(right panel). The different color lines represents the set of randomization for initial mass func-
-tion when the coordinates and velocities of the stars are fixed.
-
-   As we can see from figures Fig. 1 and Fig. 2 both sets of randomization of our best
-fitted physical model for clusters Cr 135 and UBC 7 are well inside the one ±σ gap.
-
-
-3. Results
-  We present a numerical simulations using realistic star cluster N-body modelling
-by integrating a star-by-star cluster models in the analytic Milky Way potential to
-4                                                         M. Ishchenko et al.
-        350                                                                   350
-              Col 135 Count                                                           UBC 7 Count
-                 Count-Back                                                            Count-Back
-              coo.rand. #1                                                          coo.rand. #1
-        300   coo.rand. #2                                                    300   coo.rand. #2
-              coo.rand. #3                                                          coo.rand. #3
-              coo.rand. #4                                                          coo.rand. #4
-        250   coo.rand. #5                                                    250   coo.rand. #5
-              coo.rand. #6                                                          coo.rand. #6
-              coo.rand. #7                                                          coo.rand. #7
-        200   coo.rand. #8                                                    200   coo.rand. #8
-              coo.rand. #9                                                          coo.rand. #9
-              coo.rand. #10                                                         coo.rand. #10
-    N
-
-
-
-
-                                                                          N
-        150                                                                   150
-
-
-        100                                                                   100
-
-
-        50                                                                    50
-
-
-         0                                                                      0
-               2     4        6   8   10       12   14   16   18   20                 2       4     6        8   10      12   14
-                                      R [pc]                                                            R [pc]
-
-    Figure 2. Same as Fig. 1 but randomization for initial coordinates and velocities was done
-                           with the fixed initial stellar mass function.
-
-the present day. The code taking in to account up to date stellar evolution models
-(Banerjee et al., 2020). The average model relative errors between the observations and
-numerical simulations are better than 1%. This is remarkable small error taking in ac-
-count that the observational average line of site velocity error is around 10%.
-
-    Table 3. Comparison of position and velocity values for Cr 135 and UBC 7 center mass in
-     Cartesian Galactic coordinates at 50 Myr with numerical simulation and observations.
-
-                   Cluster Type             X, pc         Y , pc        Z, pc       Vx , km/s Vy , km/s Vz , km/s
-                   Cr 135         Sim      -8282.94      -284.32    -34.25            -7.65         237.32       -5.01
-                                  Obs      -8282.14      -271.00    -36.16            -7.38         237.94       -4.85
-                   UBC 7          Sim      -8284.14      -251.01    -45.80            -7.43         237.61       -4.65
-                                  Obs      -8276.21      -250.87    -43.63            -7.00         238.13       -4.27
-
-
-
-  The orbits integration with a simple integrator yielded the initial position of the Cr 135
-ans UBS 7 at the time of their formation (see Table 1). The present-day position and
-velocity of the Cr 135 and UBC 7 obtained from numerical simulation are given in
-Table 3. The full 3D orbits of the evolution are shown in Fig. 3. It should be noted that
-the clusters rotate around each other during their orbital motion.
-
-
-4. Conclusions
-   We present a numerical simulations using realistic star cluster N-body modelling by
-integrating a star-by-star cluster models in the analytic Milky Way potential to the
-present day. We were looking for the best-fitting King models for the observations from
-Gaia DR3 after 50 Myr of evolution. The comparative result of observational data and
-simulations for 50 Myr showed a fairly good agreement. The probability of a random
-coincidence chance is only about 2%.
-
-
-5. Acknowledgements
-  This work has made use of data from the European Space Agency (ESA) mission
-Gaia, processed by the Gaia Data Processing and Analysis Consortium. PB and MI
-express their great thanks for the hospitality of the Nicolaus Copernicus Astronomical
-Centre, Polish Academy of Sciences where some part of the work was done. The work of
-                         Collinder 135 & UBC 7 binary star cluster                               5
-
-                                                         Cr 135
-                                                         Cr 135, t = 0 Myr
-                                                         UBC 7
-                         80                              UBC 7, t = 0 Myr
-                         60                                                   250
-                         40
-                         20                                                   200
-                  Z [pc] 0
-
-
-
-
-                                                                                    t [Myr]
-                                                                              150
-                        −20
-                        −40                                                   100
-                        −60                                                   50
-                        −80
-                                                                              0
-                                                                             −50
-                         10
-                              5
-
-                       X [kpc] 0
-                                   −5                                 −10
-                                                               −5
-                                                       0
-                                    −10 10    5      Y [kpc]
-
-
-
-
- Figure 3. 3D orbits evolution of the Cr 135 (solid line) and UBS 7 (dotted line) up to 250
-           Myr. Black and black unfilled circles are position of clusters at Myr.
-
-
-PB and MI was supported by the DFG (German Research Foundation) SFB 881 (”The
-Milky Way System”) and by the Volkswagen Foundation grant No. 97778. PB and MI
-acknowledges the support by Ministry of Education and Science of Ukraine under the
-French-Ukrainian collaborative grant No. M63-17.11.2021 and by the National Academy
-of Sciences of Ukraine under the Main Astronomical Observatory GPU computing cluster
-project No. 13.2021.MM. The work of PB was also supported by the Volkswagen Foun-
-dation under the special stipend No. 9B870 (2022) and by the Science Committee of the
-Ministry of Education and Science of the Republic of Kazakhstan grant No. AP08856184.
-
-
-References
-Banerjee, S., Belczynski, K., Fryer, C. L., Berczik, P., Hurley, J. R., Spurzem, R., & Wang,
-     L. 2020, BSE versus StarTrack: Implementations of new wind, remnant-formation, and
-     natal-kick schemes in NBODY7 and their astrophysical consequences. A&A, 639, A41.
-Beccari, G., Boffin, H. M. J., & Jerabkova, T. 2020, Uncovering a 260 pc wide, 35-Myr-old
-     filamentary relic of star formation. M N RAS, 491(2), 2205–2216.
-Beccari, G., Boffin, H. M. J., Jerabkova, T., Wright, N. J., Kalari, V. M., Carraro, G., De Marchi,
-     G., & de Wit, W.-J. 2018, A sextet of clusters in the Vela OB2 region revealed by Gaia.
-     M N RAS, 481(1), L11–L15.
-Berczik, P., Spurzem, R., Wang, L., Zhong, S., & Huang, S. Up to 700k GPU cores, Kepler,
-     and the Exascale future for simulations of star clusters around black holes. In Third
-     International Conference ”High Performance Computing”, HPC-UA 2013, p. 52-59 2013,,
-     pp. 52–59.
-Bisht, D., Zhu, Q., Yadav, R. K. S., Ganesh, S., Rangwal, G., Durgapal, A., Sariya, D. P., &
-     Jiang, I.-G. 2021, Multicolour photometry and Gaia EDR3 astrometry of two couples of
-     binary clusters (NGC 5617 and Trumpler 22) and (NGC 3293 and NGC 3324). M N RAS,
-     503(4), 5929–5947.
-Cantat-Gaudin, T., Jordi, C., Wright, N. J., Armstrong, J. J., Vallenari, A., Balaguer-Núñez,
-     L., Ramos, P., Bossini, D., Padoan, P., Pelkonen, V. M., Mapelli, M., & Jeffries, R. D.
-     2019,a Expanding associations in the Vela-Puppis region. 3D structure and kinematics of
-     the young population. A&A, 626a, A17.
-Cantat-Gaudin, T., Mapelli, M., Balaguer-Núñez, L., Jordi, C., Sacco, G., & Vallenari, A. 2019,b
-     A ring in a shell: the large-scale 6D structure of the Vela OB2 complex. A&A, 621b, A115.
-Castro-Ginard, A., Jordi, C., Luri, X., Julbe, F., Morvan, M., Balaguer-Núñez, L., & Cantat-
-6                                     M. Ishchenko et al.
-     Gaudin, T. 2018, A new method for unveiling open clusters in Gaia. New nearby open
-     clusters confirmed by DR2. A&A, 618, A59.
-Ernst, A., Just, A., Berczik, P., & Olczak, C. 2011, Simulations of the Hyades. A&A, 536, A64.
-Gaia Collaboration, Prusti, T., de Bruijne, J. H. J., Brown, A. G. A., & et al. 2016, The Gaia
-     mission. A&A, 595, A1.
-Harfst, S., Gualandris, A., Merritt, D., Spurzem, R., Portegies Zwart, S., & Berczik, P. 2007,
-     Performance analysis of direct N-body algorithms on special-purpose supercomputers.
-     N ewAstr, 12, 357–377.
-Khan, F. M., Capelo, P. R., Mayer, L., & Berczik, P. 2018, Dynamical Evolution and Merger
-     Timescales of LISA Massive Black Hole Binaries in Disk Galaxy Mergers. ApJ, 868(2), 97.
-Kharchenko, N. V., Piskunov, A. E., Schilbach, E., Röser, S., & Scholz, R.-D. 2012, Global
-     survey of star clusters in the Milky Way. I. The pipeline and fundamental parameters in
-     the second quadrant. A&A, 543, A156.
-King, I. R. 1966, The structure of star clusters. III. Some simple dynamical models. AJ, 71, 64.
-Kovaleva, D. A., Ishchenko, M., Postnikova, E., Berczik, P., Piskunov, A. E., Kharchenko, N. V.,
-     Polyachenko, E., Reffert, S., Sysoliatina, K., & Just, A. 2020, Collinder 135 and UBC 7: A
-     physical pair of open clusters. A&A, 642, L4.
-Kroupa, P. 2001, On the variation of the initial mass function. M N RAS, 322(2), 231–246.
-Nitadori, K. & Makino, J. 2008, Sixth- and eighth-order Hermite integrator for N-body simula-
-     tions. N ewAstr, 13, 498–507.
-Panamarev, T., Just, A., Spurzem, R., Berczik, P., Wang, L., & Arca Sedda, M. 2019, Direct
-     N-body simulation of the Galactic centre. M N RAS, 484(3), 3279–3290.
-Pang, X., Li, Y., Tang, S.-Y., Pasquato, M., & Kouwenhoven, M. B. N. 2020, Different Fates of
-     Young Star Clusters after Gas Expulsion. ApJL, 900(1), L4.
-Shukirgaliyev, B., Otebay, A., Sobolenko, M., Ishchenko, M., Borodina, O., Panamarev, T.,
-     Myrzakul, S., Kalambay, M., Naurzbayeva, A., Abdikamalov, E., Polyachenko, E., Banerjee,
-     S., Berczik, P., Spurzem, R., & Just, A. 2021, Bound mass of Dehnen models with a centrally
-     peaked star formation efficiency. A&A, 654, A53.
-Shukirgaliyev, B., Parmentier, G., Berczik, P., & Just, A. 2017, Impact of a star formation
-     efficiency profile on the evolution of open clusters. A&A, 605, A119.
-Spurzem, R., Berczik, P., Berentzen, I., Ge, W., Wang, X., Schive, H.-Y., Nitadori, K., &
-     Hamada, T. Supermassive Black Hole Binaries in High Performance Massively Parallel
-     Direct N-body Simulations on Large GPU Clusters. In Dubitzky, W., Kurowski, K., &
-     Schott, B., editors, Large Scale Computing Techniques for Complex Systems and Simula-
-     tions 2011,a, Wiley Publishers, pp. 35–58.
-Spurzem, R., Berczik, P., Hamada, T., Nitadori, K., Marcus, G., Kugel, A., Männer, R.,
-     Berentzen, I., Fiestas, J., Banerjee, R., & Klessen, R. 2011,b Astrophysical Particle Simula-
-     tions with Large Custom GPU Clusters on Three Continents. Computer Science - Research
-     and Development (CSRD), 26b, 145–151.
-Spurzem, R., Berczik, P., Zhong, S., Nitadori, K., Hamada, T., Berentzen, I., & Veles, A. Su-
-     permassive Black Hole Binaries in High Performance Massively Parallel Direct N-body
-     Simulations on Large GPU Clusters. In Capuzzo-Dolcetta, R., Limongi, M., & Tornambè,
-     A., editors, Advances in Computational Astrophysics: Methods, Tools, and Outcome 2012,,
-     volume 453 of Astronomical Society of the Pacific Conference Series, 223.
-Zhong, J., Chen, L., Kouwenhoven, M. B. N., Li, L., Shao, Z., & Hou, J. 2019, Substructure
-     and halo population of Double Cluster h and χ Persei. A&A, 624, A34.
-
-
-6. Discussion
-  Q: Thank you for presenting the simulation results. I have a question about how the
-comparison of the results of the simulation with the observational data was carried out?
-Such as figure 1 or 2 (Christian Boily) A: To compare our results with observational
-data, we performed a transformation of the galactocentric coordinates into equatorial
-coordinate system. (Marina Ishchenko)
+ Roller: Fast and Efficient Tensor Compilation
+               for Deep Learning
+  Hongyu Zhu, University of Toronto and Microsoft Research; Ruofan Wu, Renmin
+University of China and Microsoft Research; Yijia Diao, Shanghai Jiao Tong University
+   and Microsoft Research; Shanbin Ke, UCSD and Microsoft Research; Haoyu Li,
+ Columbia University and Microsoft Research; Chen Zhang, Tsinghua University and
+    Microsoft Research; Jilong Xue, Lingxiao Ma, Yuqing Xia, Wei Cui, Fan Yang,
+Mao Yang, and Lidong Zhou, Microsoft Research; Asaf Cidon, Columbia University;
+                    Gennady Pekhimenko, University of Toronto
+               https://www.usenix.org/conference/osdi22/presentation/zhu
+
+
+          This paper is included in the Proceedings of the
+          16th USENIX Symposium on Operating Systems
+                   Design and Implementation.
+                       July 11–13, 2022 • Carlsbad, CA, USA
+                                  978-1-939133-28-1
+
+                                             Open access to the Proceedings of the
+                                             16th USENIX Symposium on Operating
+                                              Systems Design and Implementation
+                                                       is sponsored by
+              ROLLER: Fast and Efficient Tensor Compilation for Deep Learning
+
+    Hongyu Zhu†⋄∗ Ruofan Wu‡⋄∗ Yijia Diao$⋄∗ Shanbin Ke¶⋄∗ Haoyu Li§⋄∗ Chen Zhang£⋄∗
+          Jilong Xue⋄ Lingxiao Ma⋄ Yuqing Xia⋄ Wei Cui⋄ Fan Yang⋄ Mao Yang⋄
+                            Lidong Zhou⋄ Asaf Cidon § Gennady Pekhimenko †
+         † University of Toronto ‡ Renmin University of China $ Shanghai Jiao Tong University
+                 ¶ UCSD    § Columbia University £ Tsinghua University ⋄ Microsoft Research
+
+
+
+                              Abstract                                   (often hand-crafted) library-based kernel development (e.g.,
+   Despite recent advances in tensor compilers, it often takes           cuDNN [6] and cuBLAS [2]) and provides a flexible way to
+hours to generate an efficient kernel for an operator, a                 cover the fast-growing number of custom operators, which
+compute-intensive sub-task in a deep neural network (DNN),               libraries struggle to catch up with and optimize, a growing
+on various accelerators (e.g., GPUs). This significantly slows           pain especially for new hardware vendors.
+down DNN development cycles and incurs heavy burdens                        DNN compilers treat a DNN operator as tensor compu-
+on the development of general kernel libraries and custom                tation, which is then translated into nested multi-level loops
+kernels, especially for new hardware vendors. The slow com-              iterated over the computation on each tensor element along dif-
+pilation process is due to the large search space formulated by          ferent axes (dimensions). Compiler optimization techniques
+existing DNN compilers, which have to use machine learning               like loop partitioning/fusion/reordering are applied to nested
+algorithms to find good solutions.                                       loops. Due to the inherent complexity of loop rearrangement,
+   In this paper, we present ROLLER, which takes a differ-               it is a combinatorial optimization problem to find a good
+ent construction-based approach to generate kernels. At the              solution among a large search space, often with millions of
+core of ROLLER is rTile, a new tile abstraction that encap-              choices. Therefore, advanced compilers [15, 33, 35] propose
+sulates tensor shapes that align with the key features of the            to adopt machine learning algorithms to search for a good
+underlying accelerator, thus achieving efficient execution by            solution. This usually takes thousands of search steps, each
+limiting the shape choices. ROLLER then adopts a recursive               evaluated in a real accelerator, to find a reasonable solution.
+rTile-based construction algorithm to generate rTile-based               Our own experience shows that tuning an end-to-end DNN
+programs (rProgram), whose performance can be evaluated                  model using state-of-the-art compilers [15, 33] often requires
+efficiently with a micro-performance model without being                 days, if not weeks. The tuning time may be even longer if
+evaluated in a real device. As a result, ROLLER can generate             the DNN model runs on less mature accelerators (e.g., AMD
+efficient kernels in seconds, with comparable performance                GPU or Graphcore IPU [4]) (§2). To make the matter worse,
+to the state-of-the-art solutions on popular accelerators like           a DNN model need to re-compile whenever its structure, op-
+GPUs, while offering better kernels on newer accelerators                erator types, tensor shapes and configurations are changed.
+like IPUs.                                                               This is often required when trying different configurations
+                                                                         in model training or inference. Given that an operator could
+                                                                         have arbitrary input shapes and configurations, such compi-
+1     Introduction                                                       lation could significantly slow down the overall DNN model
+                                                                         development cycle.
+Deep neural networks (DNN) have been used extensively in
+                                                                            In this paper, we propose ROLLER, a deep learning tensor
+intelligent tasks like computer vision and natural language
+                                                                         compiler that addresses the problem in a radically different
+understanding. As DNN computation is known for its com-
+                                                                         way. ROLLER is built on the following insights. First, instead
+plexity, the compute intensive sub-tasks (e.g., matrix multipli-
+                                                                         of multi-level nested loops, ROLLER treats the computation
+cation) in a DNN model are abstracted as operators and im-
+                                                                         in a DNN operator as a data processing pipeline, where data
+plemented as kernels, executed on modern accelerators (e.g.,
+                                                                         tiles (a fraction of a tensor) are moved and processed in an
+GPUs, TPUs) to speed up the computation. DNN compilers
+                                                                         abstracted hardware with parallel execution units and multi-
+play an important role in producing high-performance kernels
+                                                                         layer memory hierarchy. The goal of generating efficient ker-
+for the development of DNN models. It reduces the burden of
+                                                                         nel programs then becomes that of improving the throughput
+     *Work is done during the internship at Microsoft Research.          of the pipeline.
+
+
+
+USENIX Association                                   16th USENIX Symposium on Operating Systems Design and Implementation          233
+                                                                               wasted reads: 3mnk wasted reads: 0       wasted reads: 0
+   Second, for an accelerator to execute efficiently, the shape                  total reads: 5mnk  total reads: 1.25mnk total reads: 0.5mnk
+of a data tile should align with the hardware characteristics,
+                                                                                       k    B                  k                    k
+including memory bank, memory transaction length, and min-
+                                                                                   k       n               k       n            k       n
+imum schedulable unit (e.g., warp size in GPUs). To achieve
+                                                                               m           C         m                    m
+the full alignment across multiple hardware features, the avail-                   A
+able tile shapes are limited. More importantly, with alignment
+as a constraint, to maximize the throughput of a pipeline, one
+                                                                               memory unaligned          memory aligned       better data reuse
+only needs to construct an aligned tile shape that saturates
+                                                                                      (a)                     (b)                    (c)
+the execution unit of the accelerator. This construction pro-
+cess is significantly more efficient than solving the original             Figure 1: Access pattern of different tile shape. Matrix multi-
+unconstrained combinatorial optimization problem.                          plication, Cm,n = Am,k × Bk,n .
+   Third, the performance of an aligned pipeline is highly pre-            mainstream DNN models shows that ROLLER can generate
+dictable. Key performance metrics under the aligned pipeline               highly-optimized kernels in seconds, especially for large ex-
+(e.g., memory throughput) can be derived from the hardware                 pensive custom operators. This achieves three orders of mag-
+specification (or through micro-benchmarking). This greatly                nitude improvement on compilation time. The performance of
+simplifies the performance evaluation under various aligned                ROLLER-generated kernels is comparable to and often better
+configurations, eliminating the need of a complex cost model               than the state-of-the-art tensor compilers and even vendor-
+and/or expensive hardware-based evaluation on each aligned                 provided DNN libraries. With the three rTile-based interfaces
+configuration.                                                             (Load, Compute, Store) describing an rProgram, ROLLER
+   With these insights, ROLLER proposes rTile, a new ab-                   can easily adapt to different accelerators like AMD GPU and
+straction that encapsulates data tile shapes that align with               Graphcore IPU. ROLLER has been used to develop custom
+the key features of the hardware accelerator and the input                 DNN kernels internally and shown to significantly speed up
+tensor shapes (§3.1). A data processing pipeline can then be               our development cycle. It offers potentially disruptive oppor-
+described as an rTile-based program (a.k.a. rProgram) com-                 tunities to new players in the compute accelerator market,
+posed by three interfaces: Load, Store, and Compute, acted                 who previously have to spend significant engineering efforts
+against rTile. To construct an efficient rProgram, ROLLER fol-             on efficient kernels.
+lows a scale-up-then-scale-out approach. It first performs the
+scale-up process, which adopts a recursive rTile-based con-
+struction algorithm (Figure 8) to gradually increase the size              2    Motivation and Key Observations
+of the rTile shape to construct an rProgram that saturates a
+single execution unit of the accelerator (e.g., an SM, a stream-           Excessive compilation time. Our own experience in a set of
+ing multi-processor in a NVIDIA GPU). It then performs                     DNN operators (detailed setting in §5) shows that the average
+the scale-out process, which simply replicates the resulting               compile time for a single operator using Ansor [33], a state-
+rProgram to other parallel execution units, thanks to the ho-              of-the-art tensor compiler, is 0.65 hours. Among them, one
+mogeneity of both the computation pattern of deep learning                 convolution operator in ResNet model takes 2.17 hours. A
+and the parallel execution units in an accelerator.                        DNN model may contain hundreds of operators, thus it easily
+   ROLLER can evaluate the performance of different rTiles                 takes days to compile the model. For example, to compile
+without significant overheads. The peak (saturate) compute                 a NASNet model (§5), we reach only 32% of the overall
+throughput can simply be measured once per operator type.                  searching progress after tuning for 41.8 hours. Our experience
+And due to the alignment, other key performance factors                    also shows the compilation speed is even worse on less mature
+like memory pressure of an rTile can be derived analytically               devices, the compiler takes much longer time for a kernel.
+from hardware specifications. This leads to an efficient micro-            Observation and insights. We observe that there exists a
+performance model, avoiding the expensive online profiling                 different view to the computation of an DNN operator. Tak-
+on each configuration required by existing DNN compilers,                  ing matrix multiplication (MatMul), Cm,n = Am,k × Bk,n , as an
+thereby significantly speeding up the compilation process. In              example to illustrate our observation. Unlike existing com-
+addition, due to the strict alignment requirements, the recur-             pilers that treat MatMul as a 3-level loop iterated over each
+sive construction process can produce a few desired rTiles                 axis m, k, n, the computation process is also a data processing
+(and rProgram) quickly. Combined, ROLLER can generate                      pipeline. One can Load each sub-matrix (i.e., a tile) from A
+efficient kernels in seconds.                                              and B, Compute the two tiles, and Store the resulting tile
+   We have implemented ROLLER on top of TVM [15] and                       of C to memory. Thus, the performance of the computation
+Rammer [26], and open-sourced the code1 . Our evaluation                   depends on how fast one can move the data tiles in the Load-
+on 6 types and 119 popular DNN operators from several                      Compute-Store pipeline.
+                                                                              The key factor affecting the performance in all steps in the
+  1 https://github.com/microsoft/nnfusion/tree/osdi22_artifact/artifacts   pipeline is the shape of tiles and the corresponding layout
+
+
+
+234   16th USENIX Symposium on Operating Systems Design and Implementation                                                USENIX Association
+                 DNN models (TensorFlow, PyTorch, ONNX)                       class rTile {
+                                                                                 TensorExpr expr ;
+                               Tensor Expression                                 TileShape shape ;
+          Tensor                                                                 TileShape storage_padding ;
+                                               2   rProgram
+          shapes           1                                                     vector < TileShape > GetInputDataTiles ();
+                                                                                 vector < TileShape > GetOutputDataTiles ();
+       rTiles              …       Construct
+                                                                              };
+                    …              algorithm                 3
+       Hardware                          Micro           Codegen
+       specs                             performance                                    Figure 3: The data structure of rTile.
+                           Hardware Abstraction Layer
+                                                                                                     rTile.shape: [i, j, k]
+                Device A           Device B         Device C
+
+                                                                                            DataTile: [i, k]       DataTile: [k, j]
+           Figure 2: System overview of ROLLER.
+                                                                                                  ComputeTile: [i, j, k]
+
+in the one-dimension memory space. Figure 1(a) illustrates                                             DataTile: [i,j]
+the computation of one element in C (in the top part) and the
+memory accessing pattern (in the bottom part). Assuming all                 Figure 4: The data tiles and computing tile inferred by an
+matrices stored in a row-major layout, loading a column from                rTile for MatMul expression.
+B causes strided accesses in length of 1. Suppose the memory
+transaction length is 4, there will be 3/4 of total redundant
+data reads. Thus, the data tile shape should align with the                 through a micro-performance model. It is built on top a device
+memory transaction length for efficient memory access. In                   described through a hardware abstraction layer exposing only
+Figure 1(b), when computing B in the granularity of 1 × 4 tile,             rTile-related interfaces: Load, Compute, and Store (§3.3).
+there will be no memory bandwidth waste. Besides memory                     The constructed rProgram is finally realized through a code
+alignment, the tile shape should also align with the hardware               generator to emit the final kernel code corresponding to the
+execution unit, e.g., the parallel threads number, to avoid waste           specific device.
+in computing cycles. Moreover, the tile shape also affects
+data reuse opportunities due to caching, a common feature in
+modern accelerators. For example, Figure 1(a) needs 2mnk                    3.1    Tensor Expression and rTile
+data reads when computing a 1 × 1 tile each time. However,
+                                                                              ROLLER takes input of a tensor computation as an index-
+in Figure 1(b), only 1.25mnk reads are required, as one read                based lambda expression, i.e., tensor expression [15, 27]. It
+from A can be reused 4 times. If setting the tile size along M              describes how each element in the output tensor is computed
+dimension to 4×4, as shown in Figure 1(c), the total reads can              based on the corresponding elements in the input tensors. For
+be reduced to 0.5mnk. A 10× improvement over Figure 1(a).                   example, a MatMul operator with output tensor C of the shape
+    These observations motivate ROLLER, a system that iden-                 M × N can be expressed as,
+tifies the aligned tile shapes and constructs an efficient tile             C = compute((M,N), lambda i,j:sum(A[i,k]*B[k,j])),
+processing pipeline to improve the end-to-end throughput.
+                                                                            where the element indexed by (i, j) in C is computed by a
+                                                                            sum reduction over the elements in row i of A and column j
+3   System Design                                                           of B, and k is the reduction axis. Such an expression can cover
+                                                                            the majority of operators in DNN models and is widely used
+Figure 2 shows the system overview. ROLLER takes an op-                     in existing DNN compilers including TVM [15], Ansor [33],
+erator described as a tensor expression (§3.1). The expres-                 and FlexTensor [35].
+sion is generated by users or from a graph-level DNN com-                      ROLLER introduces RollingTile (rTile for short) as the
+piler [15, 26, 33], which might further fuse multiple operators             basic computing unit to compose a tensor computation. As
+into a single expression. ROLLER extracts the tensor shapes                 shown in Figure 3, an rTile encapsulates a multi-dimensional
+from the tensor expression and leverage hardware specifi-                   tile shape defined along each loop axis of a given tensor ex-
+cations to construct rTiles, i.e., a hardware-aligned building              pression expr. Given shape and expr, an rTile can statically
+block (§3.1). Based on rTiles, ROLLER proposes a scale-up-                  infer the involved input and output data tiles. For example,
+then-scale-out recursive construction algorithm to generate                 a tile shape [4, 4, 2] along axes i, j, k denotes an rTile for the
+efficient tensor programs (named rProgram) that describes the               above MatMul expression, where each rTile loads a 4 × 2 data
+data processing pipeline (§3.2). When generating rProgram,                  tile from A and a 2 × 4 tile from B, conducts total 4 × 4 × 2
+the construction algorithm identifies good rTile configurations             multiply-add computations, and stores a 4 × 4 data tile to C,
+by evaluating the performance of a constructed rProgram                     as illustrated in Figure 4.
+
+
+
+USENIX Association                                      16th USENIX Symposium on Operating Systems Design and Implementation             235
+      Leading dimension                     load w/o conflict        Alignment with tensor shape. Finally, an rTile’s shape
+                                                                     should align with the tensor shape of an input tensor expres-
+                                                                     sion. Otherwise, the computation cannot be evenly partitioned
+                                                                     by the rTile, wasting compute resources or incurring heavy
+Aligned load
+                                                                     boundary checking overheads. A simple solution is to add
+                                                                     a padding size Pi along a tensor dimension i with size of Ni ,
+                      …
+                                Padded store                         which makes Ni + Pi a multiple of the rTile shape’s dimension
+      Transaction length                                             size at axis i. However, a large padding might waste computa-
+                                                  Bank# 0-3          tion. ROLLER therefore restricts tensor padding under a range
+               (a)                          (b)
+                                                                     ε, where an rTile’s shape dimension size Si has to satisfy that
+                                                                     Si −Ni %Si
+Figure 5: Illustration of (a) transaction aligned memory load            Ni     ≤ ε, where Ni is the tensor size at dimension i. This
+and (b) bank conflict-free padding.                                  ensures the wasted percentage of computation is bounded by
+                                                                     ε. With this restriction, we can enumerate all the valid rTile
+   A unique property of an rTile is that it must align with both     shapes that satisfy this condition.
+the underlying hardware features and the tensor shapes in a          Deriving all rTiles. Given the above alignment requirements,
+                                                                     for a specific tensor expression and hardware device, ROLLER
+given tensor expression. All these alignments are controlled
+                                                                     incrementally derives all the conforming rTiles using the
+by the rTile shape and the storage_padding fields in Figure 3,       following interface:
+which represent the logical form and the physical layout of
+                                                                     vector<int> GetNextAlignedAxisSize(rTile T, Dev d),
+an rTile, respectively. We elaborate the detailed requirements
+of alignment next.                                                   which returns the next aligned size for each axis in the shape
+Alignment with the hardware execution unit. First, the               of rTile T given the specific device specification d. This is
+shape of an rTile must align with the parallelism of the exe-        calculated by gradually increasing the dimension size along
+cution unit it runs on. For example, if running on a warp of         each axis until it satisfies all the alignment requirements.
+threads in a GPU, the size of shape in the rTile should be a         The rTile abstraction allows ROLLER to be extended to sup-
+multiple of the warp size, e.g., 32, for maximal computing           port new alignment requirements (e.g., new hardware fea-
+efficiency. When using TensorCore in NVIDIA GPUs, the                tures). This is achieved by adding new alignment rules to the
+rTile shape should be a multiple of 16 × 16 × 16. Similarly, an      GetNextAlignedAxisSize interface.
+rTile executed on a streaming multi-processor (SM) should            Calculating data reuse score. An interesting property of
+align its size as a factor of execution unit number on the SM.       rTile is that we can implicitly control the memory traffic by
+Alignment with memory transaction. Second, a data tile’s             adjusting its shape. Increasing the rTile size usually brings
+shape should align with the length of memory transaction for         more data reuse opportunities at the cost of occupying more
+optimal memory access. Specifically, for each data tile of an        memory space. Given an rTile T and its next aligned size in
+rTile, we should guarantee that its leading dimension (e.g., the     each axis, we can calculate the data reuse score Si for axis
+                                                                                Q(T )−Q(T ′ )           ′
+inner-most dimension in a row-major tensor) is a multiple of         i by Si = F(T ′ )−F(Ti ) , where Ti is a newly enlarged rTile by
+                                                                                   i
+the memory transaction length, as illustrated in Figure 5(a). In     replacing the dimension size at axis i with the next aligned size
+ROLLER, tensors are allocated in a cache-aligned way. Thus,          from GetNextAlignedAxisSize. Functions Q(T ) and F(T )
+an rTile can avoid any wasted transaction read, as its shape is      calculate the memory traffic and memory footprint when the
+aligned with the memory transaction.                                 computation is executed in the granularity of T , which can
+Alignment with memory bank. Third, the memory layout                 be directly inferred based on the given tensor expression and
+of a data tile should align its stride with the memory bank to       hardware memory specification (§3.3). A larger Si means
+avoid read conflicts. For example, a [3, 4] data tile is kept in     better cost-efficiency, i.e., more memory traffic can be saved
+the memory across 4 banks and is read by an upper-memory-            with the same memory usage. The memory reuse score plays
+layer tile with a shape of [3, 1], as shown in Figure 5(b). A        a critical role in constructing an efficient rProgram (using
+naive approach that stores all the [3, 1] values in the same         rTiles), as shown in the next subsection.
+bank will result in conflicted loading. rTile avoids such in-
+efficiency by padding a data tile. Given a data tile with a
+leading dimension of size N, which is read by another tile           3.2    Tensor Program Construction
+with a leading dimension of size n, we add a padding size of
+(BL − N%(BL) + L⌈n/L⌉)%(BL) along N when storing this                rTile program. Given rTile and the hierarchical memory
+tile, where B and L are the bank number and the bank width,          structure of modern accelerators, a tensor computation can
+respectively. The padding sizes along each axis are calculated       be naturally treated as a streaming data processing pipeline.
+and stored in the storage_padding field in Figure 3. For the         The computation loads data tiles (specified in rTile) from the
+case in Figure 5(b), by a padding size of 1, all the [3, 1] values   lowest memory layer through the memory hierarchy to the
+are distributed in different banks and can be read efficiently.      highest layer, performs rTile computation on the execution
+
+
+
+236    16th USENIX Symposium on Operating Systems Design and Implementation                                    USENIX Association
+  for L1_iter in L2_rtile . split ( L1_rtile ):
+    L1_input_tiles = Load( L1_iter ); //L2 to L1                                1    Func ConstructProg(expr:TensorExpr, dev:Device):
+    for L0_iter in L1_rtile . split ( L0_rtile ):                                2     T = rTile(expr);
+      L0_input_tiles = Load( L0_iter ) //L1 to L0                                3     Results = [];
+      L0_out_tile = Compute( L0_input_tiles );                                   4     EnlargeTile(T , dev.MemLayer(0), rProg());
+      Store( L0_out_tile , L2_out_tile );//L0 to L2
+                                                                                5    Func EnlargeTile(T:rTile, mem:MemLayer, P:rProg):
+                                                                                 6     if mem.IsLowestLayer()
+Figure 6: The pseudo code of an rProgram on a device with a                      7         Results.append(P);
+3-layer memory hierarchy (Bottom-up: layer L2 to layer L0).                      8         if (Results.Size() > TopK) Exit();
+                                                                                 9         Return();
+      rProgram:                             Compute:[2, 2, 1]                   10     for T ′ : GetNextRTileShapes(T , mem) do
+      Load : L2->L1->L0                                                         11         if Visited(T ′ )
+      Compute: L0                                     TEU
+                                                                                12             Return();
+      Store: L0->L2
+      rTile : L1=[4, 8, 4], L0= [2, 2, 1]                             𝐿0        13         if MemFootprint(T ′ ) > mem.Capacity()
+                      (a)                         [2,1] [1,2] [2,2]             14             P.Add(mem, T );
+                                                                                15             EnlargeTile(T , mem.Next(), P);
+                                              [4,4]    [4,8]      𝐿1
+                                                                                16         else
+                                       B                                        17             if MemPerf(T ′ ) > MaxComputePerf(T ′ .expr)
+                                                                                18                 P.Add(mem, T ′ );
+                                                            B
+                                                                                19                 EnlargeTile(T ′ , mem.Next(), P);
+                                              A             C                   20             EnlargeTile(T ′ , mem, P);
+             A                  C                                      𝐿2
+                                                                                21   Func GetNextRTileShapes(T:rTile, mem:MemLayer)
+                     (b)                              (c)                       22     alignedSizes = GetNextAlignedAxisSize(T , mem);
+                                                                                23     SortedRTiles = OrderedMap();
+Figure 7: ROLLER computation model. (a) An rTile program;                       24     for d : T.Dimensions() do
+(b) rTiles on matrix multiplication; (c) Execution of the rTile                 25        T ′ = T .Replace(d, alignedSizes[d]);
+program on a hardware memory hierarchy.                                         26        SortedRTiles.Insert({T ′ , DataReuseScore(T ′ )});
+                                                                                27     Return SortedRTiles;
+units of the accelerator, and stores the resulting data tiles back                   Figure 8: ROLLER’s rProgram constructing algorithm
+to the lowest memory. For each memory layer, a specific rTile                        for a single core (e.g., an SM).
+is defined to align with the characteristics of this memory
+layer. Thus, ROLLER describes tensor computation as a data
+processing pipeline with a hierarchical rTile configuration,
+which is called an rTile program (i.e., rProgram).                              scale-out to leverage the multi-core parallelism by replicating
+   Figure 6 shows an rProgram on a device with three memory                     the constructed single-core rProgram.
+layers (L0, L1 and L2). The rProgram is described by the rTile                  Scaling up an rProgram. Since the alignment properties
+at each layer and the rTile instructions (i.e., Load, Store, and                of rTile ensure hardware efficiency, ROLLER can just focus
+Compute) at each memory layer. Figure 7(a) shows a MatMul                       on maximizing the throughput at each memory layer by con-
+rProgram illustrated in Figure 7(b). Figure 7(c) illustrates how                structing the right rTile shape. By leveraging the data reuse
+the rProgram is mapped to each memory layer of a device.                        score defined in §3.1, the single-core rProgram construction
+Specifically, each time it loads a [4, 4] data tile in A and a                  algorithm starts from an initial rTile and gradually enlarges
+[4, 8] tile in B from memory L2 to L1; and then it loads the                    it towards the most cost-effective axis in the rTile (i.e., with
+data tiles from memory L1 to memory L0 (i.e., registers) in                     the maximum data reuse score). Note that the construction
+shapes of [2, 1] and [1, 2]. After each Compute, the resulting                  algorithm does not require an absolute data reuse score, it
+[2, 2] tile will be directly stored from L0 to L2.                              just picks the largest one to maximize the throughput. Dur-
+   Given a data processing pipeline, the optimization goal of                   ing the process, the memory performance improves until it
+the corresponding rProgram is to maximize the throughput                        hits the computational bound or the maximal memory capac-
+of the pipeline. The goal can be translated into three condi-                   ity. The above process repeats for each memory layer from
+tions: 1) the computation and memory movement should fully                      top to bottom, until a desired rProgram is constructed. Note
+leverage the hardware features; 2) the throughput should satu-                  that if the data reuse score remains constant for some tensor
+rate the bottleneck stage; and 3) there needs to be sufficient                  expressions, e.g., element-wise operators, ROLLER will just
+parallelism to leverage all the parallel execution units. Thus,                 construct rTiles for the top layer and loads them directly from
+ROLLER proposes the following rProgram construction pol-                        the bottom layer memory.
+icy: first scale-up on one core by constructing a single-core                       Figure 8 shows the detailed construction algorithm. Given
+rProgram to saturate the core’s hardware utilization and then                   a tensor expression expr and a target device dev, the algo-
+
+
+
+USENIX Association                                          16th USENIX Symposium on Operating Systems Design and Implementation               237
+rithm constructs an initial rTile T at the top memory layer            // compute interface
+and enlarges T recursively (EnlargeTile in line 4). At each            int Load(T* src , rTile st , T* dst , rTile dt );
+step, it enumerates the next larger rTile T ′ that improves the        int Store(T* dst , rTile dt , T* src , rTile st );
+                                                                       int Compute( TensorExpr e , rTile t , T ** args );
+data reuse score most (GetNextRTileShapes in line 10). If
+T ′ hits the memory capacity (line 13) or the data tile load-          Spec GetDeviceSpec (); // Spec query interface
+ing throughput MemPer f (T ′ ) exceeds the peak computing
+                                                                       // interfaces of the micro-performance model
+throughput MaxComputePer f (T ′ ) (line 17), the algorithm             size_t MemFootprint ( rTile t );
+records the current rTile T and goes on to EnlargeTile at              size_t MemTraffic ( rTile t );
+the next memory layer. Otherwise, it continues to enlarge              double MaxComputePerf ( TensorExpr expr );
+T ′ at the current layer (line 20). The construction finishes at       double MemPerf ( rTile t );
+the lowest memory layer (line 6), producing one result and
+repeating, until it obtains K (e.g., 5-20) rPrograms (to tolerate     Figure 9: The interface of ROLLER’s hardware abstraction
+the hidden factors affected by the device compiler). Note that
+MemPer f (T ′ ) and MaxComputePer f (T ′ ) are derived based         shape [561](17 × 11 × 3) by fusing the three axes. Besides
+on dev, based on the micro-performance model (§3.3).                 axis fusion, ROLLER will also try to greedily increase the
+Scaling out an rProgram. Given the homogeneity of both               parameter ε in the tensor padding mechanism (§3.1) until K
+the computation pattern of most DNN operators and the par-           rPrograms have been constructed.
+allel execution units in an accelerator, ROLLER simply repli-
+cates the rProgram constructed on one execution unit to other
+units, by uniformly partitioning the computation into rTiles         3.3    Efficient Evaluation of an rProgram
+of the size equals to the lowest layer rTile. We achieve this        In the construction algorithm, ROLLER needs to evaluate the
+by distributing all the partitions evenly to all execution units.    performance of rProgram. Instead of evaluating the end-to-
+Note that ROLLER prefers to assign the partitions split along        end rProgram in a real hardware device, ROLLER only needs
+a reduction axis on the same execution unit, as they can share       to evaluates the performance of the corresponding rTile, e.g.,
+the reduction results in the higher memory layers. Note that         MemPerf and MaxComputePerf in Figure 8.
+ROLLER does not assume an rProgram will exclusively oc-                 To this end, ROLLER builds a micro-performance model
+cupy all computing units, the system can explicitly control          against a device described in a hardware abstraction layer
+the parallelism of a rProgram when scaling out.                      (HAL). The HAL models an accelerator as multiple parallel
+Small operator and irregular tensor shape. The scale-out             execution units with a hierarchical memory layer. The HAL
+algorithm inherently favors operators with sufficient paral-         exposes three rTile-based interfaces: Load, Compute, and
+lelism, e.g., where the partition number is significantly larger     Store (Figure 9). An execution unit is abstracted as an rTile
+than the number of execution units. For a small operator, the        Execution Unit (TEU), which computes the data tiles through
+overall performance of the algorithm could suffer from the           the Compute interface. Multiple TEUs can be organized as a
+low utilization of parallel execution units. In general, this        group, which Load and Store tiles cooperatively. The HAL
+can be addressed by co-scheduling with other operators in            treats different memory layers, e.g., register, shared memory,
+compilers like Rammer [26], if there exists sufficient inter-        DRAM, as an unified type exposing the hardware specifi-
+operator parallelism. Otherwise, for each rProgram, ROLLER           cations that affect the performance of tile movement. The
+will try to shrink its rTiles along the axis that has the smallest   specifications include memory capacity, transaction lengths,
+data reuse score to achieve sufficient parallelism. Note that        cache line size, and number of memory banks, which can be
+this enumerating process returns the next aligned tile size          obtained by the GetDeviceSpec interface in Figure 9.
+each time just like other alignment rules, which is an efficient     Micro performance model. With the hardware abstraction
+process and incurs negligible costs compared to the overall          layer, ROLLER can easily derive the performance of a rTile
+construction process.                                                (and hence the rProgram). First, given an rTile, the incurred
+   In addition, a large operator may contain irregular tensor        memory footprint (including padding) and the memory traf-
+shapes with small dimensions, whereas ROLLER might not               fic volume across different layer can be statically inferred
+generate a sufficient number of rPrograms due to the align-          from the rTile’s tensor expression expr and the shape, i.e.,
+ment requirements. To address this issue, ROLLER transforms          the MemFootprint and MemTraffic interfaces in Figure 9.
+a tensor expression into a canonical form by an axis fusion          They are used to calculate the data reuse scores and check if
+pass. Specifically, for all the involved tensors, if there exist     an rTile exceeds the memory capacity. Second, to calculate
+two adjacent axes in one tensor, which are either both existing      MaxComputePerf of an rTile, ROLLER conducts a one-time
+and still adjacent or both missing in all other tensors, ROLLER      profiling to measure the peak compute throughput by aggres-
+can safely merge these two axes. For example, an element-            sively enlarging the compute tiles (e.g., multiple of warp size
+wise operator with the tensor shape [17, 11, 3] in both input        in an SM) to saturate the TEU. This performance data is
+and output tensors, ROLLER will transform it into the tensor         cached in ROLLER for future query in the construction al-
+
+
+
+238   16th USENIX Symposium on Operating Systems Design and Implementation                                    USENIX Association
+gorithm. Finally, for a given rTile, ROLLER also estimates         tensor shapes). The latter profiles the fastest kernels among
+MemPerf, the performance on loading data tiles from a mem-         the top K rPrograms and is used for each compilation result
+ory layer to a higher layer. Given the aligned memory access       if the K is larger than 1. In practice, the performance of a
+in rTile, the latency of loading a regular chunk of data can be    specific kernel code is also slightly affected by some device-
+simply modeled by the division of the total traffic to the mem-    compiler and hardware related hidden factors, which ROLLER
+ory bandwidth. For the memory layer shared by all TEUs, we         can hardly control. These factors include instruction density
+split the bandwidth evenly. For the smaller accessing sizes,       of different instruction types, register allocation behaviors,
+ROLLER also conducts a one-time offline profiling for each         device compiler optimizations, warp scheduling overhead, etc.
+device type and cache the results. It is worth noting that the     Particularly, on NVIDIA GPUs, ROLLER relies on nvcc [3]
+micro-performance model only needs to be accurate when the         to compile the generated CUDA codes into machine code.
+tile shapes are fully aligned, a key requirement of ROLLER.        However, nvcc’s proprietary optimizations might undesirably
+                                                                   affect the program execution behaviors. Thus, ROLLER lever-
+                                                                   ages the kernel profiler to quickly evaluate top performing
+4   Implementation
+                                                                   rPrograms and select the best one. A larger K could generally
+Our implementation of ROLLER is based on TVM [15] and              increase kernel quality. After evaluating the top 10, 20, and
+Rammer [26], two open-source DNN compilers. ROLLER’s               50 results, our experiences show that top 10 could recall the
+core mechanisms, including expression optimization, con-           optimal results for most cases. Note that ROLLER’s kernel pro-
+struction algorithm, micro-performance model, etc., are imple-     filer differs from the evaluation process driven by a machine
+mented with 8K lines of code. ROLLER’s compilation pipeline        learning algorithm in previous compilers [15,33,35]. The ML-
+is as follows. Its input is an ONNX graph [9] or a TensorFlow      based approach usually requires hundreds even thousands of
+frozen graph [13]. ROLLER first leverages Rammer to con-           sequential evaluation steps, while ROLLER only profiles tens
+duct graph level optimizations (e.g., inter- and intra-operator    of candidates in parallel. In future, we plan to implement
+co-scheduling). Next ROLLER derives the TVM tensor expres-         assembly-level code generation to alleviate the hidden issues
+sions for each (fused) operator extracted from the optimized       in a high-level device compiler.
+graph, and generates corresponding rProgram by ROLLER’s               ROLLER’s HAL allows us to support different accelerators
+construction algorithm, and performs kernel generation. Fi-        easily. User can configure the corresponding HAL for each
+nally, the generated kernels are injected to Rammer’s runtime      device type. ROLLER also provides built-in configurations
+and generate the end-to-end model code.                            for most common device types. Some detailed configurations,
+Code generation. Given the fixed code structure in an              e.g., memory bandwidth, rely on micro-benchmark profiling
+rProgram (in Figure 6), ROLLER generates the kernel code           or derive from published device specifications. Next, we share
+through a predefined template, implemented as a TVM sched-         our experiences in implementing the HAL on several popular
+ule with its built-in scheduling primitives. Loading and storing   DNN accelerators, including NVIDIA GPUs, AMD GPUs
+data tiles at each memory layer are implemented by TVM’s           and Graphcore IPU.
+cache_read and cache_write primitives. Partitioning on             ROLLER on NVIDIA CUDA GPUs. An NVIDIA GPU
+rTile is done through split and fuse. Some primitive rTile         usually employs a centralized memory architecture. We imple-
+computation is implemented with TVM’s intrinsic API. With          ment ROLLER on V100 and K80, two CUDA GPUs with dif-
+the template, a given rProgram can be directly generated into      ferent architectures on the streaming multi-processors (SMs).
+device codes, e.g., CUDA kernels.                                  Their memory architecture contains global memory, L2 cache,
+Tensor padding. ROLLER relies on tensor padding to align           L1 cache, shared memory, and register. In ROLLER’s HAL,
+rTiles with tensor shape. In practice, most tensors in the         we abstract them into 3 memory layers: L2 layer for global
+lowest memory (e.g., DRAM) are allocated by external pro-          memory and L2 cache, L1 layer for only the shared memory,
+gram (e.g., DNN framework), thus we just apply padding             and the L0 layer for register. We ignore L1 cache because it
+in the upper layer memory (e.g., shared memory). Our ten-          shares the space with shared memory and cannot be controlled
+sor padding currently requires the input tensor expression         by user programs. The memory bandwidths of all levels are
+to specify whether it allows to pad, as well as the default        measured by our micro-benchmarks. The transaction length
+padding value (e.g., 0 for MatMul operator). For the storage       at the global memory layer is set to 32 Bytes, i.e., 8 float
+padding for memory bank alignment, we leverage TVM’s               elements, for both GPUs. For V100 GPUs, the bank number
+storage_align primitive to add padding.                            and the bank length of the shared memory is 32 and 4 Bytes
+Performance profiling. ROLLER implements two profil-               respectively. For K80 GPUs, the bank length is 8 Bytes. The
+ers: a micro-performance profiler and a kernel profiler. The       shared memory capacities are set as 48KB for both GPUs
+former generates device specifications, e.g., memory band-         (based on deviceQuery).
+width, computing throughput, etc., through a set of micro-            We implement the TEU on CUDA GPUs as a warp of 32
+benchmarks, which is a one-time offline profiling for each         threads, which is also the basic unit to execute the TensorCore
+device type and tensor expression types (regardless of the         WMMA instructions. The size of a TEU Group on a HAL
+
+
+
+USENIX Association                           16th USENIX Symposium on Operating Systems Design and Implementation            239
+(e.g., a SM) is set to the warp scheduler number, which is 4           Operator        Configuration                            Note
+for both GPUs. The SM number is 80 for V100 [21] and 13                MatMul          M=65536,K=2,N=1024                       M0
+                                                                       MatMul          M=128,K=4032,N=1000                      M1
+for K80. On CUDA GPUs, each thread has a limited register              MatMul          M=65536,K=1024,N=4096                    M2
+capacity, e.g., 255 registers for V100. Exceeding this limit           Conv2D          D=(128,128,28,28), K=(128,128,3,3),S=1   C0
+will lead to register spilling, causing significant performance        Conv2D          D=(128,128,58,58), K=(128,128,3,3),S=2   C1
+degradation. This sets a limit to the size of an rTile at register     Conv2D          D=(128,256,30,30), K=(256,256,3,3),S=2   C2
+                                                                       DepthwiseConv   D=(128,84,83,83), K=(84,84,5,5),S=2      D0
+layer. We notice that the nvcc compiler will implicitly declare        DepthwiseConv   D=(128,42,83,83), K=(42,42,5,5),S=1      D1
+more registers (for loop variables or other purposes). Given           DepthwiseConv   D=(128,84,21,21), K=(336,336,1,1),S=1    D2
+that this behaviour is hard to predict, we reduce the register         Element(Relu)   I=(128,1008,42,42)                       E0
+limit empirically to only 96 registers for both V100 and K80           Element(Relu)   I=(128,256,14,14)                        E1
+                                                                       Element(Relu)   I=(128,1024,14,14)                       E2
+per thread to avoid unexpected performance impacts.                    Avgpool         D=(128,168,83,83),K=1,S=2,VALID          P0
+ROLLER on AMD ROCm GPUs. We also implement                             Avgpool         D=(128,617,21,21),K=3,S=2,SAME           P1
+ROLLER on MI50 [12], AMD’s second-generation Vega series               Avgpool         D=(128,42,83,83),K=3,S=1,SAME            P2
+GPU. MI50 shares a similar memory architecture as V100:                ReduceMean      I=(128, 512, 1024), axis=[2]             R0
+                                                                       ReduceMean      I=(65536, 1024),axis=[1]                 R1
+the centralized global memory can be accessed by all compute           ReduceMean      I=(128, 4032, 11, 11), axis=[2,3]        R2
+units (CUs). Like SMs in NVIDIA GPU, each CU has its own
+scratchpad memory, registers, and computation cores. The             Table 1: A subset of operator configurations in our benchmark.
+data movement of a ROCm [1] kernel program is also similar.
+The memory transaction size for the global memory is set as          all other operators take only around 13 seconds to compile.
+64 Bytes. The memory bank number is 32 and bank length               2) ROLLER matches the state-of-the-art performance of ven-
+is also 4 Bytes. We also implement the TEU as a warp of              dor libraries and other compilers on a wide range of opera-
+threads, which is 64 threads on MI50 GPUs. The maximal               tors. It even outperforms others for more than 50% of opera-
+register size is empirically limited to 70 registers per thread.     tors. 3) For operators with smaller sizes and irregular shapes,
+All other specifications such as the memory bandwidths at            ROLLER’s results are sub-optimal because of the difficulty
+each layer, peak computing throughput, etc., are measured            in aligning with the hardware. However, their kernel execu-
+with our micro-benchmark.                                            tion time is usually small (around or below 1ms). 4) We have
+ROLLER on Graphcore IPUs The Graphcore IPU [22]                      conducted the most extensive evaluations (119 ops in total)
+is a massive parallel MIMD processor with 1216 parallel              covering different operator types over different accelerators.
+processing cores. Distinct from NVIDIA and AMD GPUs,                 Experimental setup. ROLLER is evaluated on four types of
+an IPU employs a distributed memory architecture. There is           servers equipped with different accelerators. The CUDA GPU
+only 256KB on-chip local memory attached per core, and no            evaluations use two types of servers: an Azure NC24s_v3 VM
+unified global memory. When the local memory is unable               equipped with Intel Xeon E5-2690v4 CPUs and 4 NVIDIA
+to hold all the input data, by default, the initial data of a        Tesla V100 (16GB) GPUs and an Azure NC24_v1 VM with
+kernel program is stashed in the on-chip local memory and            24 Intel(R) Xeon(R) CPU E5-2690v3 CPUs and 4 NVIDIA
+evenly distributed across the nodes. Thus, ROLLER’s HAL              Tesla K80 GPUs. Both running on Ubuntu 16.04 with CUDA
+for IPUs also abstracts three memory layers: L2 for all the          10.2 and cuDNN 7.6.5. The AMD ROCm GPU evaluations
+remote memories across all cores, L2 for the local memory on         use a server equipped with Intel Xeon CPU E5-2640 v4 CPU
+each core, and L0 for the register. We take advantage of prior       and 4 AMD Radeon Instinct MI50 (16GB) GPUs, installed
+benchmarking work [22], which has successfully measured              with Ubuntu 18.04 and ROCm 4.0.1 [1]. The IPU evalua-
+peak memory bandwidth and computation throughput. The                tions use an Azure ND40s_v3 VM equipped with Intel Xeon
+size of the register files per IPU core is not publicly available.   Platinum 8168 CPUs and 16 IPUs with Poplar-sdk 1.0.
+Considering that we have no prediction for behaviours of the            We compare ROLLER against other tensor compilers, ven-
+IPU program compiler, we allow each upper-level rTile to             dor libraries and DNN frameworks, including TVM [15]
+use only 10 registers, which safely guarantee that the tiling        (v0.8) and Ansor [33] (v0.8), two state-of-the-art tensor com-
+algorithm does not emit invalid tiling configurations.               pilers; cuDNN, cuBLAS, rocBLAS (ROCm GPUs), POPLAR
+                                                                     library (Graphcore IPU), which are vendor libraries; Tensor-
+5     Evaluation                                                     Flow (v1.15), a state-of-the-art DNN framework; TensorFlow-
+                                                                     XLA a state-of-the-art DNN full-model compilers; and Ten-
+We evaluate ROLLER on both DNN operator benchmarks and               sorRT (v7.0) (with TensorFlow integration version), a vendor-
+end-to-end models by comparing with state-of-the-art DNN             specific inference library for NVIDIA GPUs. We validate our
+compilers and frameworks. We first summarize our findings:           compilation results by comparing them against Ansor’s.
+1) ROLLER achieves three orders of magnitude speedup on              Benchmarks. Our evaluation benchmark uses four typical
+compilation time, compared to TVM and Ansor. On V100                 DNN models, including ResNet-50 [19] (CNN), LSTM [20]
+GPU, the most expensive operator takes 43 seconds, while             (RNN), NASNet [36] (a state-of-the-art CNN model obtained
+
+
+
+240    16th USENIX Symposium on Operating Systems Design and Implementation                                    USENIX Association
+1000                          TF(CudaLib)                           TVM                       Ansor                   Roller-Top1                    Roller-Top10
+ 100
+  10
+   1
+           C10           C24          C32         C33         C39         C40         C43       D16           D20            E0           E4           M3           M4          M5      M6
+   6
+   5
+   4
+   3
+   2
+   1
+   0
+         C0      C1      C2     C3     C4    C5         C6   C7     C8    C9    C11     C12    C13    C14     C15      C16   C17    C18        C19    C20   C21     C22   C23    C25   C26   C27
+   5
+   4
+   3
+   2
+   1
+   0
+         C28     C29    C30     C31    C34   C35    C36      C37    C38   C41   C42     D0     D1     D2      D3       D4     D5    D6         D7      D8   D9      D10   D11    D12   D13   D14
+   3
+   2
+   1
+   0
+         D15     D17    D18     D19    D21   D22        E1   E2     E3     E5   E6      E7     E8     E9      E10      E11   E12    E13        E14    E15   E16     E17   E18    E19   E20   E21
+   3
+   2
+   1
+   0
+         E22     E23    E24     E25    E26   E27        P0   P1     P2     P3   P4      P5     P6     P7      P8       P9     P10   P11        P12     R0   R1      R2    R3     M0    M1    M2
+
+
+
+                       Figure 10: Operator performance on V100 GPUs (y-axis: average kernel execution time in ms).
+
+by the neural architecture search), and BERT-Large [17]                                              Flow’s session, we repeat the kernel running for 1,000 times
+(transformer-based). We set the default batch size of each                                           in each session and calculate the average. We set the tuning
+model to 128. From each model, we choose the most-                                                   steps for TVM and Ansor to 1,000 for each operator, same as
+frequently used operators to construct our operator bench-                                           Ansor’s evaluation setup [33], and report the best results. We
+mark. It contains 6 classes of operator type with total 119                                          compare both the top-1 and the best from the top-10 kernels
+operator instances with different configurations (7 MatMul                                           constructed by ROLLER, the latter can tolerate some hidden
+operators, 44 Conv2D operators, 23 DepthwiseConv opera-                                              performance impacts from device compilers.
+tors, 28 element-wise operators, 13 pooling operators, and 4                                            Figure 10 plots the average kernel performance for all
+reduction operators). Table 1 lists a representative subset of                                       the 119 operators in our benchmark, ordered by the oper-
+operators as well as their configurations. The last column lists                                     ator type and ID. We plot the large operators (e.g., kernel
+the corresponding abbreviation of each operator. The full list                                       time is larger than 5ms) in the top sub-figure in a log-scale
+of the operator configurations is omitted due to page limit.                                         for y-axis, and the other medium and small operators in the
+                                                                                                     bottom 4 sub-figures 2 . First, compared to CUDA libraries
+                                                                                                     (CudaLib), ROLLER could get comparable performance (i.e.,
+5.1    Evaluation on NVIDIA GPUs                                                                     within 10% performance) for 81.5% of the total operators,
+                                                                                                     and can be even faster for 59.7% of them. We observe that the
+This section first evaluates ROLLER’s operator performance,
+                                                                                                     majority of operators that ROLLER performs worse are convo-
+compilation time, and scalability on large operators by com-
+                                                                                                     lution operators with 3 × 3 or larger filters, which are usually
+paring against the state-of-the-art tensor compilers and vendor
+                                                                                                     implemented with a more efficient numerical algorithm (e.g.,
+libraries. We also evaluate the performance of ROLLER on
+                                                                                                     Winograd [23]) in cuDNN and hard to be expressed by the
+TensorCore. Finally, we show the end-to-end model perfor-
+                                                                                                     tensor expression. This is the reason Ansor and TVM are also
+mance compared to existing DNN compilers and framework.
+                                                                                                     slower than CudaLib in these cases. Second, compared to
+Operator performance. We first evaluate the performance
+                                                                                                     TVM and Ansor, ROLLER could also get comparable perfor-
+of ROLLER generated kernels by comparing against TVM
+                                                                                                     mance for 72.3% and 80.7% of the total operators respectively.
+(i.e., AutoTVM with XGBoost tuning algorithm [16]), Ansor,
+                                                                                                     The rest 27.7% and 19.3% of them are mainly small oper-
+cuBLAS (for matrix multiplication operators) and cuDNN
+                                                                                                     ators or with irregular tensor shapes, which are by natural
+(for convolution operators). Vendor libraries like cuBLAS
+                                                                                                     hard to align with the hardware. However, these operators
+and cuDNN are wrapped in TensorFlow to evaluate the per-
+                                                                                                     usually have relatively short kernel time, e.g., only 1.65ms
+formance. For the rest of operators (e.g., element-wise, re-
+                                                                                                     and 1.16ms on average. Among 54.6% and 65.5% of the total
+duce), we use TensorFlow’s built-in kernel implementations.
+To amortize the overhead of data feeds/fetches in Tensor-                                                  2 Please   find the complete results in our artifact.
+
+
+
+
+USENIX Association                                                 16th USENIX Symposium on Operating Systems Design and Implementation                                                        241
+                    1x106         TVM              Roller-top1
+
+
+
+
+                                                                                       Kernel time (ms)
+                                                                                                                    TF(CudaLib)                      Roller-top1
+Compile time (s)
+
+
+                   100000         Ansor           Roller-top10                                            1000            TVM                       Roller-top10
+                    10000                                                                                                Ansor
+                     1000                                                                                  100
+                      100                                                                                   10
+                        10
+                         1                                                                                    1
+                       0.1                                                                                  0.1
+                      0.01
+                                                                                                                           128       256     512       1024 2048 4096 8192
+                             0       20        40       60      80        100   120
+                                     Operator ID (sorted by compilation time)                                                                      Batch size
+
+                      Figure 11: Compilation time for each operator.                  Figure 13: Kernel time for Conv2d operator with different
+                                                                                      batch sizes of N, where C=1024, H=14, F=2048, K=1, S=2.
+Kernel time (ms)
+
+
+
+
+                   1000          TF(CudaLib)            Roller-top1                                        1x106        TVM                 Roller-top1
+                                       TVM             Roller-top10                                       100000
+                    100               Ansor                                                                             Ansor              Roller-top10
+
+
+
+
+                                                                                      Compile time (s)
+                                                                                                           10000
+                     10
+                                                                                                            1000
+                       1                                                                                     100
+                     0.1                                                                                       10
+                                   512    1K      2K      4K      8K     16K                                    1
+                                                                                                              0.1
+                                               M dimension size
+
+
+
+
+                                                                                                                    M
+
+                                                                                                                         M
+
+                                                                                                                                 M
+
+                                                                                                                                      M
+
+                                                                                                                                            M
+
+                                                                                                                                                   M
+
+                                                                                                                                                    C1
+
+                                                                                                                                                    C2
+
+                                                                                                                                                    C5
+
+                                                                                                                                                    C1
+
+                                                                                                                                                    C2
+
+                                                                                                                                                    C4
+
+                                                                                                                                                    C8
+                                                                                                                    51
+
+                                                                                                                           1K
+
+                                                                                                                                 2K
+
+                                                                                                                                       4K
+
+                                                                                                                                             8K
+
+                                                                                                                                                     16
+
+                                                                                                                                                      28
+
+                                                                                                                                                      56
+
+                                                                                                                                                      12
+
+                                                                                                                                                      K
+
+                                                                                                                                                      K
+
+                                                                                                                                                      K
+
+                                                                                                                                                      K
+                                                                                                                       2
+
+
+
+
+                                                                                                                                                        K
+Figure 12: Kernel time for MatMul operator with different
+sizes of M in BERT-Large model, K=1024, N=4096.                                       Figure 14: Compilation time for both MatMul and Conv2d
+                                                                                      operator with different batch sizes.
+operators, ROLLER can even produce faster kernels than TVM
+and Ansor, respectively. We observe that the majority of these                        libraries, TVM, and Ansor. We select a MatMul operator from
+operators are large and time-consuming ones. As it shows in                           the BERT model and a Conv2D operator from the ResNet
+the top sub-figure where operators are larger than 5ms (up to                         mode, and scale them by setting different batch sizes. Fig-
+343ms), ROLLER could achieve better performance for most                              ure 12 and Figure 13 show the performance comparisons. For
+of these operators, e.g., by 1.85× and 1.27 × speedup over                            the MatMul operator, both Ansor and ROLLER have a linear
+TVM and Ansor on average.                                                             scalability over the batch sizes and comparable performance
+Compilation time. Given the comparable kernel perfor-                                 with CudaLib (i.e., cuBLAS). However, TVM’s performance
+mance, the major advantage of ROLLER is its fast compilation.                         is relatively non-stable. For example, ROLLER can outperform
+Figure 11 compares ROLLER’s compilation time against TVM                              TVM by average 11.2× and up to 36.1× for the batch size of
+and Ansor for all the operators. The operator ID is sorted by                         1024. For Conv2D operators, ROLLER can still achieve linear
+the compilation time for each line. The average operator com-                         scalability over the batch size, and get slightly better perfor-
+pilation time for TVM is 0.65 hours and up to 7.89 hours. For                         mance than Ansor and TVM (by 1.25 and 1.54× on average).
+the first 40 operators, which are mainly the element-wise, re-                        Note that Anosr is unable to search for a valid kernel for the
+duction, and pooling operators, TVM’s compilation takes less                          batch size over 2048 using its default configurations. TVM
+than 10 seconds. This is because TVM’s manually-written                               can generate valid kernels, but the performance is scaled sub-
+code templates for these operators can directly emit code                             linearly for the larger batch sizes, e.g., ROLLER can achieve
+without searching. However, Ansor generates search spaces                             more than 1.9 × speedup for batch sizes greater than 2048.
+for all the operators. Its compilation time takes 0.66 hours on                          Finally, Figure 14 compares the compilation time for the
+average and up to 2.17 hours. In contrast, ROLLER’s top-1                             two operators with different batch sizes. The average com-
+kernel results can be generated in 1 second for most operators                        pilation time of TVM and Ansor is 2.36 (up to 9.55) hours
+and in 0.43s on average, which is more than three orders of                           and 1.19 (up to 3.0) hours respectively. Moreover, their com-
+magnitude faster. The major time is spent on the recursive con-                       pilation time grows constantly with the growing of batch size.
+structing algorithm, which increases slightly with the growth                         This is because that they are both based on ML-based search
+of operator size, but quickly stabilizes as the recursive depth                       approach, whose search space usually increases exponentially
+(to enlarge the rTiles) is bounded by the limited memory ca-                          with the operator size. In contrast, ROLLER produces the top-
+pacity. To get the optimal kernels from the top-10 candidates,                        1 kernel in 1 second, and 16 seconds (up to 34 seconds) on
+ROLLER’s average compilation time is only 13.3 seconds.                               average for the top-10 kernel.
+The major cost comes from the kernel code compilation with                            Compile on TensorCore. ROLLER could easily support
+the device compiler and the evaluation on target devices.                             hardware tensor ISAs (e.g., TensorCore) by aligning the
+Scale-out with operator size. We evaluate the scalability of                          rTile shape with the hardware instruction shape. We use the
+ROLLER on larger operators by comparing with both CUDA                                16×16×16 WMMA instruction in ROLLER. We remove An-
+
+
+
+242                   16th USENIX Symposium on Operating Systems Design and Implementation                                                                      USENIX Association
+                           TF(cuBlas)            Roller-top1
+
+
+
+
+                                                                                        Kernel time (ms)
+                   100                                                                                                  8            Ansor
+                                TVM             Roller-top10
+Kernel time (ms)
+
+
+
+                                                                                                                        6         Roller-B
+                                                                                                                                  Roller-F
+                                                                                                                        4       Roller-P0.4
+                   10                                                                                                           Roller-P1.0
+                                                                                                                        2
+                                                                                                                        0
+                                                                                                                                              C9   C12   C13     C15    C28     C36
+                    1
+                                  M3            M4             M5     M6
+                                                                                        Figure 17: Performance for operators with irregular shapes.
+                     Figure 15: Matmul kernel time on TensorCore.
+                                                                                                                                   Measured Throughput         Modeled Throughput
+Kernel time (ms)
+
+
+
+
+                     2                                                                                                   1000
+
+
+
+
+                                                                                                        DRAM (GB/S)
+                             TVM             Roller-O                                                                     800
+                   1.5       Ansor           Roller-S
+                                                                                                                          600
+                     1                                                                                                    400
+                   0.5                                                                                                    200
+                                                                                                                            0
+                     0
+                                        M1                           M2                                                 16000
+
+
+
+
+                                                                                         Compute (GFLOPS) SRAM (GB/S)
+                                                                                                                        12000
+                         Figure 16: Performance for small operators.                                                     8000
+                                                                                                                         4000
+                                                                                                                            0
+                                                                                                                        16000
+sor in this experiment as it does not support TensorCore to our                                                         12000
+best knowledge. We select 4 large MatMul operators that are                                                              8000
+friendly to TensorCore in this experiment. Figure 15 shows                                                               4000
+                                                                                                                            0
+the performance comparisons. As it shows, by constructing
+
+
+
+                                                                                                                                T=32,B=10
+                                                                                                                                T=32,B=20
+                                                                                                                                T=32,B=40
+                                                                                                                                T=32,B=80
+                                                                                                                                T=32,B=160
+                                                                                                                                T=32,B=320
+                                                                                                                                T=32,B=640
+                                                                                                                                T=32,B=1280
+                                                                                                                                T=32,B=2560
+                                                                                                                                T=64,B=10
+                                                                                                                                T=64,B=20
+                                                                                                                                T=64,B=40
+                                                                                                                                T=64,B=80
+                                                                                                                                T=64,B=160
+                                                                                                                                T=64,B=320
+                                                                                                                                T=64,B=640
+                                                                                                                                T=64,B=1280
+                                                                                                                                T=64,B=2560
+                                                                                                                                T=128,B=10
+                                                                                                                                T=128,B=20
+                                                                                                                                T=128,B=40
+                                                                                                                                T=128,B=80
+                                                                                                                                T=128,B=160
+                                                                                                                                T=128,B=320
+                                                                                                                                T=128,B=640
+                                                                                                                                T=128,B=1280
+                                                                                                                                T=128,B=2560
+                                                                                                                                T=256,B=10
+                                                                                                                                T=256,B=20
+                                                                                                                                T=256,B=40
+                                                                                                                                T=256,B=80
+                                                                                                                                T=256,B=160
+                                                                                                                                T=256,B=320
+                                                                                                                                T=256,B=640
+                                                                                                                                T=256,B=1280
+                                                                                                                                T=256,B=2560
+                                                                                                                                T=512,B=10
+                                                                                                                                T=512,B=20
+                                                                                                                                T=512,B=40
+                                                                                                                                T=512,B=80
+                                                                                                                                T=512,B=160
+                                                                                                                                T=512,B=320
+                                                                                                                                T=512,B=640
+                                                                                                                                T=512,B=1280
+                                                                                                                                T=512,B=2560
+                                                                                                                                T=1024,B=10
+                                                                                                                                T=1024,B=20
+                                                                                                                                T=1024,B=40
+                                                                                                                                T=1024,B=80
+                                                                                                                                T=1024,B=160
+                                                                                                                                T=1024,B=320
+                                                                                                                                T=1024,B=640
+                                                                                                                                T=1024,B=1280
+                                                                                                                                T=1024,B=2560
+from the aligned rTile shape, ROLLER can quickly produce
+good kernels on TensorCores, e.g., within a 43% performance
+gap to cuBLAS. Note that cuBLAS is highly optimized with                                Figure 18: Memory throughput (DRAM and shared memory)
+a lot of hand-crafted optimizations on TensorCore. As a com-                            and compute throughput from our micro-performance model
+parison, TVM fails to generate valid kernels for 3 of the 4 total                       and real measurement (X-axis: kernel configurations with
+operators with the default configurations. We try to increase                           different number of threads per block (T) and blocks (B)).
+the tuning steps from 1,000 to 10,000, it is still unable to find
+a legitimated kernel due to its poorly-defined search space.
+Small operators and irregular tensor shape. ROLLER opti-                                padding optimizations (e.g., at ε of 1.0), ROLLER can further
+mizes performance for small operators by shrinking the rTile                            improve performance than Roller-F by 1.4×. This is mainly
+when there is insufficient parallelism. We demonstrate the per-                         because the number of legitimated kernels is very limited with
+formance of this optimization for the two small MatMul opera-                           smaller ε for irregular shapes. Increasing the ε allows ROLLER
+tors. Figure 16 compares the performance of the original rTile                          to have chance to select from more candidate kernels.
+configuration without sufficient parallelism (Roller-O), and                            Micro-performance model. We conduct extensive exper-
+the shrunken rTile configuration (Roller-S) which matches                               iments to validate the micro-performance model, including
+the SM parallelism. As it shows, shrinking rTile could sig-                             global memory throughput, shared memory throughput, and
+nificantly improve performance than the original kernel, e.g.,                          compute throughput, under different kernel configurations
+by 2.3× on average. However, ROLLER is still slower than                                (i.e., different thread block and grid size). Figure 18 compares
+Ansor, e.g., by 50% on average, on small operators, even it                             the performance estimated by our micro-performance model
+is significantly faster than TVM by 6.6×. For such operators,                           with that measured on real device. As shown, when the config-
+we can further leverage search-based approach to fine-tune                              uration is not aligned with the parallelism of execution units,
+the configurations to obtain a better performance.                                      i.e., thread number per block is less than 128 (4 warps), our
+   ROLLER compiles operators with irregular tensor shapes                               model produces a relatively estimation error, especially for
+with two optimizations: i.e., axis fusion and tensor padding                            the DRAM throughput. This is also the case when there is
+with bound parameter ε. We demonstrate their benefits on a                              insufficient parallelism (i.e., block number is less than 80).
+representative set of irregular convolution operators, as shown                         Thus, we can see our micro-performance model is accurate
+in Figure 17. We compare the performance of ROLLER with-                                only for those shape-aligned configurations (i.e., rTiles), as
+out any optimizations (Roller-B), with axis fusion (Roller-F),                          they fully exploit hardware efficiency. This also motivates us
+and further with tensor padding of ε from 0.4 to 1.0 (Roller-                           to choose only the aligned rTiles, which greatly reduces the
+P0.4 and Roller-P1.0). All ROLLER’s performances are the                                complexity of micro-performance model.
+best one selected from the top-10 candidates. First, with axis                          Kernel performance. We further study how close the per-
+fusion optimization, ROLLER is able to have more rTiles                                 formance of ROLLER generated kernels can approach the
+that aligns with the tensor shapes, which improves the kernel                           optimal. Since ROLLER’s data pipeline model can naturally
+performance by 1.5× on average. Moreover, with the tensor                               identify the bottleneck layer, e.g., DRAM, shared memory, or
+
+
+
+USENIX Association                                                  16th USENIX Symposium on Operating Systems Design and Implementation                                              243
+   Resource utilization   60-70%   70-80%    80-90%     90-100%                             BERT-Large    ResNet    NASNet      LSTM
+           Operator #          6        13        22          78    TF                            5,186      131      1,041       141
+           Percentage         5%      11%       18%         66%     TF-XLA                        OOM        112      OOM          98
+                                                                    TF-TRT                          N/A      137        883        31
+Table 2: The distribution of resource utilization at the satu-      Ansor                 46,847 (TVM)       122        927        84
+rated layer for different kernels.                                  Rammer+TVM                   17,730      143      1,168        43
+                                                                    Rammer+Ansor                   5466      137       1036        48
+   Baseline    MemAlignn     EUAlign    ShapeAlign     BankAlign    Rammer+Roller                 4,850      142      1,005        20
+   1.0x        1.42x         1.88x      1.92x          1.94x        Ansor compile-time     30.9h (TVM)     33.4 h     41.8h     11.3 h
+                                                                    Roller compile-time            371s     352s       668s      298s
+Table 3: Average accumulated performance improvement with
+different alignment optimization.                                  Table 4: End-to-end model execution time (in milliseconds)
+                                                                   and compilation time on V100 GPUs.
+computation, we profile each generated kernel and compare                                     TF(CudaLib)      TVM      Ansor
+the corresponding resource utilization at the saturated layer            Better Performance        82.4%      65.5%     71.4%
+with the theoretical hardware limit. Table 2 lists the distri-              Perf. within 5%        82.4%      67.2%     75.6%
+bution of the resource utilization for the total 119 operators.            Perf. within 10%        83.2%      73.1%     79.0%
+The table shows most kernels saturate hardware resources,                  Perf. within 50%        99.2%      93.3%     94.1%
+                                                                           Perf. within 90%       100.0%     100.0%    100.0%
+e.g., 66% of them utilize more than 90% of the theoretical
+limit. For the few under-utilized kernels, especially whose        Table 5: The percentage of better and comparable performant
+utilization is less than 80%, our investigation shows that they    operators on NVIDIA K80 GPUs.
+are mostly small operators with insufficient parallelisms.
+                                                                   a legitimate program for BERT-Large models. Thus, for this
+   To understand the impact of different alignment rules, we
+                                                                   case, we use TVM to compile the model. Note that, the per-
+incrementally turn on each alignment optimization and evalu-
+                                                                   formance of TVM for BERT-Large is about 2.6× slower than
+ate its performance improvement. Table 3 shows the average
+                                                                   Rammer+TVM, as the default layout of the dense operator in
+speedup compared with the baseline (without any optimiza-
+                                                                   TVM (i.e., NT) is different from that in Rammer (i.e., NN).
+tion). For example, EUAlign shows the kernels with the align-
+                                                                   First, for the ResNet and NASNet models, ROLLER can only
+ment on execution units and memory transaction alignment
+                                                                   achieve comparable and mostly slower performance than TF,
+(MemAlign) can together improve the performance by 1.88x
+                                                                   TF-XLA, and TF-TRT (up to 26.7% slower compared to TF-
+than the baseline. Bank alignment (BankAlign) has relatively
+                                                                   XLA for ResNet). This major overhead in ROLLER is caused
+small improvement because most kernels are already bank
+                                                                   by the less efficient convolution kernels compared to cuDNN
+conflict free.
+                                                                   as explained before. However, for the BERT-Large and LSTM
+End-to-end model performance. We evaluate the end-to-
+                                                                   models, ROLLER can outperform all other frameworks and
+end model performance of ROLLER by comparing against Ten-
+                                                                   compilers, e.g., by 1.07× and 1.55× faster than the state-of-
+sorFlow (TF), TensorFlow-XLA (TF-XLA), TensorRT (TF-
+                                                                   the-arts, i.e., TF for BERT-Large and TensorRT for LSTM.
+TRT), and Ansor, which represent the state-of-the-art DNN
+                                                                   This mainly due to ROLLER’s kernel construction favors large
+framework, graph-level compiler, vendor-provided DNN en-
+                                                                   and regular operator shape, which are heavily used in the
+gine, and DNN compiler with tensor compilation, respectively.
+                                                                   BERT-Large model. For both the BERT and LSTM models,
+Note that TensorRT is also the core engine in NVIDIA Tri-
+                                                                   since ROLLER can control to generate resource-efficient ker-
+ton inference server [8]. We omit TVM in this experiment
+                                                                   nels by the scaling-up policy, it provides more opportunities
+as it usually requires an order of magnitude longer compi-
+                                                                   for Rammer to co-schedule parallel kernels on the parallel
+lation time on tuning end-to-end models than Ansor [33].
+                                                                   SMs on GPUs. They together produce an efficient end-to-end
+ROLLER’s end-to-end model compilation is implemented in
+                                                                   program, which can even outperform TF-TRT by 1.55× for
+Rammer (i.e., Rammer+Roller) by feeding the generated ker-
+                                                                   LSTM. Among all the implementations, Ansor can also pro-
+nels into it. To create a fair baseline, we manually feed both
+                                                                   duce very efficient programs for all the rest 3 models except
+the TVM and Ansor generated kernels for the same set of
+                                                                   for the BERT. However, it requires a long compilation time
+operators into Rammer, which are denoted as Rammer+TVM
+                                                                   (29.3 hours on average). For the NASNet model, it reaches
+and Rammer+Ansor.
+                                                                   only 32% of the overall searching progress after tuning for
+   Table 4 lists the model execution time for each model com-
+                                                                   41.8 hours. In contrast, ROLLER only takes 422s on average
+piled or executed by each compiler and framework. Note
+                                                                   to compile these models. This includes the graph-level op-
+that TF-XLA fails to compile the BERT-Large and NASNet
+                                                                   timization and the full-model compilation time in Rammer,
+model (out-of-memory). TF-TRT also fails to run the BERT-
+                                                                   which occupies about 41% of the total time on average.
+Large model due to exceeding the maximum protobuf size
+limit (2GB) in its graph loading stage. For Ansor, we set the      Operator performance on K80 GPUs. We also evaluate
+total tuning steps as 1,000 multiplied with the number of sub-     ROLLER on the K80 GPUs. Table 5 shows the percentage of
+graphs for each model. However, Ansor also fails to produce        better or comparable performing operators (e.g., within 10%
+
+
+
+244    16th USENIX Symposium on Operating Systems Design and Implementation                                    USENIX Association
+                                               TF(RocLib)      TVM     Ansor           Operator performance on Graphcore IPU. We evaluate
+                      Better Performance           73.1%      58.8%    70.6%           ROLLER on Graphcore IPUs. Due to the limited on-chip
+                         Perf. within 5%           79.0%      62.2%    72.3%
+                        Perf. within 10%           81.5%      62.2%    73.9%           memory capacity, we only evaluate a set of small MatMul and
+                        Perf. within 50%           94.1%      84.0%    86.6%           Conv2D operators with different configurations. Figure 19
+                        Perf. within 90%            100%       100%     100%           shows the average kernel time of each operator in log-scale,
+                                                                                       comparing against the Poplar-sdk library (i.e., PopART) pro-
+Table 6: The percentage of better and comparable performant                            vided by Graphcore and Ansor. Since TVM and Ansor do
+operators on AMD ROCm MI50 GPUs.                                                       not have Graphcore backends, we use a modified version of
+                                                                                       Ansor in this experiment. As it shows, ROLLER can generate
+Kernel time (ms)
+
+
+
+
+                          PopART              Roller-top10                             faster kernels than PopART for all operators, with an average
+                    10      Ansor
+                     1                                                                 of 3.1× and up to 9.2× speedup. Even comparing to Ansor,
+                    0.1                                                                ROLLER can still construct comparable or even better kernels
+                   0.01                                                                in most of operators, i.e., 2.9% average improvement. Note
+                           M0       M1   M2     M3     M4    C0   C1   C2   C3         that Ansor still requires hours of tuning for each operator,
+Figure 19: Operator performance on Graphcore IPU (y-axis                               as the device compiler on IPUs could take up to minutes to
+in log-scale).                                                                         compile a program. However, ROLLER usually produce good
+                                                                                       kernels from the top-10 constructed candidates in several min-
+differences or 1.1× slow down) ROLLER generates for our                                utes. This time is mainly bottle-necked by the less-matured
+operator benchmarks. Compared to CUDA libraries, TVM,                                  device compiler. It also brings more challenges to adopt the
+and Ansor, ROLLER produces 82.4%, 65.5% and 71.4% bet-                                 ML-based tensor compilers on these devices.
+ter kernels for the whole operator benchmark. The percent-
+age is relatively low for TVM mainly because the manual-
+crafted element-wise kernel templates in TVM are already                               6   Discussion and Future Work
+highly-optimized. Finally, the average compilation time for
+all operators is 0.65 hours for TVM and 0.95 hours for Ansor                           Optimization space compared with loop-based compiler.
+respectively. In contrast, ROLLER’s average compilation time                           The abstraction of rTile and data processing pipeline al-
+is only 5.24 milliseconds for top-1 kernel and 12.3 seconds                            lows ROLLER to construct an optimization space overlapped
+for top-10 kernel.                                                                     with, but different from, existing DNN compilers (e.g., An-
+                                                                                       sor) [15, 33, 35]. As mentioned previously, these compilers
+                                                                                       view tensor compilation as nested loop optimizations. For
+                                                                                       example, Ansor allows only divisible tiling sizes along a ten-
+5.2                  Evaluation on Other Accelerators.                                 sor dimension to partition a loop axis evenly. This makes
+Operator performance on AMD ROCm GPUs. We evalu-                                       it usually perform worse for tensor shapes with prime di-
+ate ROLLER on AMD ROCm GPUs by comparing it against                                    mensions. ROLLER instead focuses on maximizing hardware
+ROCm libraries, TVM, and Ansor. Table 6 shows the percent-                             efficiency from the data-processing-pipeline view, allowing
+age of operators that ROLLER can produce better or compara-                            more aggressive optimizations, e.g., exploring non-divisible
+ble performance (e.g., within 5% and 10% differences) in our                           but hardware-aligned tiling sizes with fused adjacent axis
+operator benchmarks. Compared to the ROCm libraries (e.g.,                             and padded tensor shapes. Driven by our observation that
+rocBlas), 73.1% of the total operators ROLLER can produce                              most DNN operators are memory-bound, ROLLER fundamen-
+better kernels. This percentage is much higher than that on                            tally differs from existing DNN compilers by first optimizing
+CUDA GPUs (59.7% and 54.6% for V100 and K80 GPUs).                                     data-tile throughput, i.e., maximizing reuse score rewards
+This is mainly because the libraries on CUDA GPUs are more                             and aligning with hardware features, and then for parallelism.
+mature than the ROCm GPUs, where ROLLER can help sig-                                  Such a trade-off inherently leads to fast compilation and good
+nificantly. Compared to TVM and Ansor, ROLLER can also                                 performance for operators with sufficient parallelism.
+produce 58.8% and 70.6% better kernels. Similar to CUDA                                Optimization trade-off. ROLLER’s design philosophy is
+GPUs, the kernels that are slower by more than 10% are                                 based on an observation: large and dense operators tend to
+mostly small operator and those with irregular tensor shapes:                          be major contributors to the execution time. This leads to
+the average execution time of these kernels are only 1.69ms                            a design trade-off: optimizing data reuse (i.e., maximizing
+and 1.57ms for TVM and Ansor, respectively. Finally, the                               pipeline throughput) as the primary optimization goal, and
+average compilation time for all operators is 0.85 (up to 4.2)                         turning other hardware related optimizations into alignment
+hours for TVM and 0.99 (up to 3.4) hours for Ansor, respec-                            constraints. Such trade-off results in fast compilation and high
+tively. In contrast, ROLLER’s average compilation time is 0.24                         kernel quality for a majority of operators in mainstream work-
+(up to 0.63) seconds for top-1 kernel and 7.69 (up to 49.0)                            loads. For small operators, ROLLER further employs some
+seconds for top-10 kernel.                                                             adaptive mechanisms to trade-off among different optimiza-
+
+
+
+USENIX Association                                                 16th USENIX Symposium on Operating Systems Design and Implementation           245
+tion goals, e.g., using a threshold to limit redundant work        configuration with a solver. All these approaches rely on a
+(§3.1) when there are insufficient results, employing an adapt-    huge search space to provide good kernel, which leads to
+ing rTile shrinking process to increase parallelism (§3.2),        long compilation/solving time. ROLLER explores a different
+etc.                                                               approach to construct rTiles that align with hardware features.
+Future work. ROLLER currently relies on high level device             Tensor Processing Primitives (TPPs) [18] define a set of
+compiler, e.g., nvcc, to compile kernel code to executable.        2D-tensor operators to compose complex operators on high-
+This sometimes introduces undesirable performance impacts          dimensional tensors, providing limited expressiveness. In con-
+and forces ROLLER to allocate registers conservatively. This       trast, ROLLER does not limit the dimension of tile shape and
+is because the device compiler will implicitly allocate regis-     can be applied to general tensor expressions. The OpenAI
+ters for intermediate values (e.g., loop variables). ROLLER        Triton [28] is a programming framework and compiler for de-
+cannot detect implicit register allocation beforehand, hence it    veloping block-based GPU kernels. Triton relies on program-
+is difficult to estimate and decide the precise register usage.    mers to decide the block size and block scheduling, while this
+One of our future work is to generate assembly (e.g., PTX for      is the key problem ROLLER addressed by considering both
+NVIDIA GPUs) code directly to avoid the side effects from          hardware features and tensor shapes. MLIR [5] and Tensor
+the high level device compiler.                                    IR [10] plan to support block-level (i.e., tile) computation rep-
+   Moreover, although the key hardware information that af-        resentation in their IRs. ROLLER’s rTile abstraction and the
+fects performance, including memory bandwidth, capacity,           rProgram construction are compatible with these initiatives.
+and transaction length, is often available in the hardware spec-      Graph-level DNN compilers like XLA [11], TVM [15],
+ification, there are still some devices (e.g., mobile GPUs)        and Rammer [26] focus on cross-operator optimizations, e.g.,
+lacking such information. Another future work is to leverage       operator fusion/co-scheduling. ROLLER’s kernel generation is
+some profiling techniques [25] to disclose and quantify those      compatible with these compilers. ROLLER’s rTile abstraction
+hardware features.                                                 complements the rTask concept in Rammer [26] as it provides
+   ROLLER’s HAL assumes hardware contains homogeneous              an efficient way to construct an rTask.
+computing units and symmetric memory accessing. However,              Finally, some works focus on operator-specific optimiza-
+we also observe that some devices have NUMA architecture.          tions. CUTLASS [7] is a template for implementing matrix-
+This makes it difficult for the micro-performance model to         multiplication. An analytical model [24] is proposed to find
+estimate rTile performance, as the same tile will perform          the best loop-level optimization configuration only for con-
+differently at different locality under NUMA architecture. We      volution operators on multi-core CPUs. And DREW [30]
+leave this issue as future work.                                   proposes a new way to optimize Winograd convolution using
+   Finally, the optimization for sparse kernel may also violate    data compression [31]. ROLLER’s optimization approach is
+the assumption of homogeneous workload in a DNN kernel             general for DNN operators on various devices.
+and make the micro-performance model inaccurate. Some
+tiles with a larger degree of sparsity may perform differently
+                                                                   8   Conclusion
+from dense tiles. ROLLER assumes a higher level, sparsity-
+aware compiler (e.g., SparTA [34]) will address this issue.        ROLLER takes an unconventional approach to deep learning
+                                                                   compiler. Instead of relying on costly machine learning algo-
+                                                                   rithms to find a good solution in a large search space, ROLLER
+                                                                   generates efficient kernels using a recursive construction-
+7     Related Work                                                 based algorithm that leverages the new rTile abstraction with
+Most tensor compilers treat DNN operators as nested multi-         much fewer shapes that align with multiple hardware fea-
+level loop computation, which essentially defines a large space    tures. The constructed program can be evaluated by a micro
+with a combinatorial complexity. TVM [15] inherits the in-         performance model, without running on a real device every
+sight from Halide [27] and describes DNN operators as loop         time. As a result, ROLLER can compile high-performance
+optimization schedule primitives. Later, AutoTVM [16] ex-          kernels in seconds, even in less mature accelerators. More
+tends TVM to apply an ML-method to search for the best con-        importantly, ROLLER offers a unique and significantly more
+figurations from manually written code templates. FlexTen-         efficient approach for new AI hardware vendors to build com-
+sor [35] proposes to automatically explore the space without       petent vendor-specific DNN libraries, bridging the ecosystem
+manual templates. Ansor [33] further advances such automa-         gap to market leaders and thereby facilitating innovations in
+tion. It generates an even larger search space considering a       AI accelerators.
+hierarchical code structure and adopts an evolution algorithm
+to find performant kernels. Compilers like Tiramisu [14],
+AKG [32], and Tensor Comprehensions [29] apply polyhedral-
+                                                                   Acknowledgments
+based techniques to loop optimization, which transforms the        We thank anonymous reviewers and our shepherd, Prof.Yufei
+loop into an integer programming problem and finds a good          Ding, for their extensive suggestions.
+
+
+
+246    16th USENIX Symposium on Operating Systems Design and Implementation                                  USENIX Association
+References                                                    [15] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin
+                                                                   Zheng, Eddie Yan, Haichen Shen, Meghan Cowan,
+ [1] AMD ROCm Platform.      https://github.com/                   Leyuan Wang, Yuwei Hu, Luis Ceze, Carlos Guestrin,
+     RadeonOpenCompute/ROCm.                                       and Arvind Krishnamurthy. TVM: An automated end-
+                                                                   to-end optimizing compiler for deep learning. In 13th
+ [2] CUDA Basic Linear Algebra Subroutine library. https:          USENIX Symposium on Operating Systems Design and
+     //docs.nvidia.com/cuda/cublas/index.html.                     Implementation (OSDI 18), pages 578–594, Carlsbad,
+ [3] CUDA NVCC. https://docs.nvidia.com/cuda/                      CA, 2018. USENIX Association.
+     cuda-compiler-driver-nvcc/.                              [16] Tianqi Chen, Lianmin Zheng, Eddie Yan, Ziheng Jiang,
+ [4] IPU PROGRAMMER’S GUIDE.         https://www.                  Thierry Moreau, Luis Ceze, Carlos Guestrin, and Arvind
+     graphcore.ai/docs/ipu-programmers-guide.                      Krishnamurthy. Learning to optimize tensor programs.
+                                                                   In S. Bengio, H. Wallach, H. Larochelle, K. Grauman,
+ [5] MLIR. https://mlir.llvm.org/.                                 N. Cesa-Bianchi, and R. Garnett, editors, Advances in
+                                                                   Neural Information Processing Systems 31, pages 3389–
+ [6] NVIDIA cuDNN. https://developer.nvidia.com/                   3400. Curran Associates, Inc., 2018.
+     cudnn.
+                                                              [17] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and
+ [7] NVIDIA cutlass.      https://github.com/NVIDIA/               Kristina Toutanova. BERT: pre-training of deep bidirec-
+     cutlass.                                                      tional transformers for language understanding. CoRR,
+                                                                   abs/1810.04805, 2018.
+ [8] NVIDIA    TRITON     INFERENCE              SERVER.
+     https://developer.nvidia.com/                            [18] Evangelos Georganas, Dhiraj D. Kalamkar, Sasikanth
+     nvidia-triton-inference-server.                               Avancha, Menachem Adelman, Cristina Anderson,
+                                                                   Alexander Breuer, Narendra Chaudhary, Abhisek Kundu,
+ [9] ONNX. https://onnx.ai/.                                       Vasimuddin Md, Sanchit Misra, Ramanarayan Mohanty,
+[10] TensorIR.   https://discuss.tvm.apache.org/                   Hans Pabst, Barukh Ziv, and Alexander Heinecke. Ten-
+     t/rfc-tensorir-a-schedulable-ir-for-tvm/                      sor processing primitives: A programming abstraction
+     7872.                                                         for efficiency and portability in deep learning workloads.
+                                                                   CoRR, abs/2104.05755, 2021.
+[11] XLA. https://www.tensorflow.org/xla.
+                                                              [19] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian
+[12] AMD Radeon Instinct™ MI50 Accelerator, accessed               Sun. Deep residual learning for image recognition. In
+     2018 Nov. https://www.amd.com/en/products/                    Proceedings of the IEEE conference on computer vision
+     professional-graphics/instinct-mi50.                          and pattern recognition, pages 770–778, 2016.
+
+[13] Martín Abadi, Paul Barham, Jianmin Chen, Zhifeng         [20] Sepp Hochreiter and Jürgen Schmidhuber. Long
+     Chen, Andy Davis, Jeffrey Dean, Matthieu Devin, San-          short-term memory. Neural Comput., 9(8):1735–1780,
+     jay Ghemawat, Geoffrey Irving, Michael Isard, Man-            November 1997.
+     junath Kudlur, Josh Levenberg, Rajat Monga, Sherry
+     Moore, Derek G. Murray, Benoit Steiner, Paul Tucker,     [21] Zhe Jia, Marco Maggioni, Benjamin Staiger, and
+     Vijay Vasudevan, Pete Warden, Martin Wicke, Yuan              Daniele P Scarpazza. Dissecting the nvidia volta gpu
+     Yu, and Xiaoqiang Zheng. TensorFlow: A System for             architecture via microbenchmarking. arXiv preprint
+     Large-Scale Machine Learning. In 12th USENIX Sympo-           arXiv:1804.06826, 2018.
+     sium on Operating Systems Design and Implementation      [22] Zhe Jia, Blake Tillman, Marco Maggioni, and
+     (OSDI 16), pages 265–283, GA, 2016. USENIX Associ-            Daniele Paolo Scarpazza. Dissecting the graphcore ipu
+     ation.                                                        architecture via microbenchmarking. arXiv preprint
+[14] Riyadh Baghdadi, Jessica Ray, Malek Ben Romdhane,             arXiv:1912.03413, 2019.
+     Emanuele Del Sozzo, Abdurrahman Akkas, Yunming           [23] Andrew Lavin and Scott Gray. Fast algorithms for con-
+     Zhang, Patricia Suriana, Shoaib Kamil, and Saman Ama-         volutional neural networks. In 2016 IEEE Conference
+     rasinghe. Tiramisu: A polyhedral compiler for express-        on Computer Vision and Pattern Recognition (CVPR),
+     ing fast and portable code. In Proceedings of the 2019        pages 4013–4021, 2016.
+     IEEE/ACM International Symposium on Code Genera-
+     tion and Optimization, CGO 2019, page 193–205. IEEE      [24] Rui Li, Yufan Xu, Aravind Sukumaran-Rajam, Atanas
+     Press, 2019.                                                  Rountev, and P. Sadayappan. Analytical characterization
+
+
+
+USENIX Association                        16th USENIX Symposium on Operating Systems Design and Implementation          247
+      and design space exploration for optimization of cnns. In   [32] Jie Zhao, Bojie Li, Wang Nie, Zhen Geng, Renwei
+      Proceedings of the 26th ACM International Conference             Zhang, Xiong Gao, Bin Cheng, Chen Wu, Yun Cheng,
+      on Architectural Support for Programming Languages               Zheng Li, Peng Di, Kun Zhang, and Xuefeng Jin. Akg:
+      and Operating Systems, ASPLOS 2021, page 928–942,                Automatic kernel generation for neural processing units
+      New York, NY, USA, 2021. Association for Computing               using polyhedral transformations. In Proceedings of the
+      Machinery.                                                       42nd ACM SIGPLAN International Conference on Pro-
+                                                                       gramming Language Design and Implementation, PLDI
+[25] Rendong Liang, Ting Cao, Jicheng Wen, Manni Wang,                 2021, page 1233–1248, New York, NY, USA, 2021. As-
+     Yang Wang, Jianhua Zou, and Yunxin Liu. Romou:                    sociation for Computing Machinery.
+     Rapidly generate high-performance tensor kernels for
+     mobile gpus. In The 28th Annual International Confer-        [33] Lianmin Zheng, Chengfan Jia, Minmin Sun, Zhao Wu,
+     ence On Mobile Computing And Networking (MobiCom                  Cody Hao Yu, Ameer Haj-Ali, Yida Wang, Jun Yang,
+     2022). ACM, February 2022.                                        Danyang Zhuo, Koushik Sen, Joseph E. Gonzalez, and
+                                                                       Ion Stoica. Ansor: Generating high-performance tensor
+[26] Lingxiao Ma, Zhiqiang Xie, Zhi Yang, Jilong Xue,                  programs for deep learning. In 14th USENIX Sympo-
+     Youshan Miao, Wei Cui, Wenxiang Hu, Fan Yang, Lintao              sium on Operating Systems Design and Implementa-
+     Zhang, and Lidong Zhou. Rammer: Enabling holistic                 tion (OSDI 20), pages 863–879. USENIX Association,
+     deep learning compiler optimizations with rtasks. In              November 2020.
+     14th USENIX Symposium on Operating Systems De-
+                                                                  [34] Ningxin Zheng, Bin Lin, Quanlu Zhang, Lingxiao Ma,
+     sign and Implementation (OSDI 20), pages 881–897.
+                                                                       Yuqing Yang, Fan Yang, Yang Wang, Mao Yang, and
+     USENIX Association, November 2020.
+                                                                       Lidong Zhou. Deep-learning model sparsity via tensor-
+[27] Jonathan Ragan-Kelley, Connelly Barnes, Andrew                    with-sparsity-attribute. In Proceedings of the 16th
+     Adams, Sylvain Paris, Frédo Durand, and Saman Ama-                USENIX Symposium on Operating Systems Design and
+     rasinghe. Halide: A language and compiler for optimiz-            Implementation (OSDI’22), 2022.
+     ing parallelism, locality, and recomputation in image        [35] Size Zheng, Yun Liang, Shuo Wang, Renze Chen, and
+     processing pipelines. In Proceedings of the 34th ACM              Kaiwen Sheng. Flextensor: An automatic schedule ex-
+     SIGPLAN Conference on Programming Language De-                    ploration and optimization framework for tensor com-
+     sign and Implementation, PLDI ’13, pages 519–530,                 putation on heterogeneous system. pages 859–873, 03
+     New York, NY, USA, 2013. ACM.                                     2020.
+[28] Philippe Tillet, H. T. Kung, and David Cox. Triton: An       [36] Barret Zoph, Vijay Vasudevan, Jonathon Shlens, and
+     Intermediate Language and Compiler for Tiled Neural               Quoc V Le. Learning transferable architectures for
+     Network Computations, page 10–19. Association for                 scalable image recognition. In Proceedings of the IEEE
+     Computing Machinery, New York, NY, USA, 2019.                     conference on computer vision and pattern recognition,
+                                                                       pages 8697–8710, 2018.
+[29] Nicolas Vasilache, Oleksandr Zinenko, Theodoros
+     Theodoridis, Priya Goyal, Zachary DeVito, William S.
+     Moses, Sven Verdoolaege, Andrew Adams, and Albert
+     Cohen. Tensor comprehensions: Framework-agnostic
+     high-performance machine learning abstractions. CoRR,
+     abs/1802.04730, 2018.
+
+[30] Ruofan Wu, Feng Zhang, Jiawei Guan, Zhen Zheng,
+     Xiaoyong Du, and Xipeng Shen. Drew: Efficient wino-
+     grad cnn inference with deep reuse. In Proceedings
+     of the ACM Web Conference 2022, WWW ’22, page
+     1807–1816, New York, NY, USA, 2022. Association for
+     Computing Machinery.
+
+[31] Feng Zhang, Jidong Zhai, Xipeng Shen, Onur Mutlu, and
+     Xiaoyong Du. Poclib: A high-performance framework
+     for enabling near orthogonal processing on compression.
+     IEEE Transactions on Parallel and Distributed Systems,
+     33(2):459–475, 2022.
+
+
+
+248   16th USENIX Symposium on Operating Systems Design and Implementation                               USENIX Association
 
