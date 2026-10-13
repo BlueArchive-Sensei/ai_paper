@@ -2,7 +2,7 @@
 
 > 整理日期：2026-10-05
 >
-> 本专题新增 10 篇论文与 2 份官方工程资料。每个目录均保存 PDF、可检索文本、论文概要、中文精读和原文证据导航；不保存论文正文截图。TensorRT-LLM 与 PyTorch CuTeDSL 两项没有被包装成学术论文，目录中已明确标注资料性质与快照日期。
+> 本专题新增 10 篇论文与 2 份官方工程资料。每个目录均保存 PDF、可检索文本、论文概要、中文精读和原文证据导航；不保存论文正文截图。TensorRT-LLM 与 PyTorch CuTeDSL 两项没有被包装成学术论文，目录中已明确标注资料性质与日期（快照或发布日期）。
 
 Speculative decoding、Medusa 与 EAGLE 属于通用解码算法，主归类在 [近代高级算法论文阅读索引](近代高级算法论文阅读索引.md)；本索引只在讨论 target verification kernel、batch、KV 与 serving runtime 时与它们交叉。
 
@@ -29,8 +29,8 @@ Speculative decoding、Medusa 与 EAGLE 属于通用解码算法，主归类在 
 1. [Sparsely-Gated MoE](sparsely_gated_moe/论文中文解读.md)：noisy top-k、专家并行、importance/load balancing。
 2. [Switch Transformer](switch_transformers/论文中文解读.md)：top-1、capacity factor、token dropping 与稳定训练。
 3. [MegaBlocks](megablocks/论文中文解读.md)：把动态 expert batches 表示成 block sparsity，去掉 dropping/padding 二选一。
-4. [MPK 的 MoE case](mirage_persistent_kernel/论文中文解读.md#9-moe-与多-gpu)：在同一 tGraph 融合 routing、dispatch、expert compute、combine。
-5. [Event Tensor 的 MoE case](event_tensor/论文中文解读.md#6-moe-与通信融合)：用 runtime-computed event indices 表达 top-k 路由。
+4. [MPK 的 MoE case](mirage_persistent_kernel/论文中文解读.md#63-案例研究moe图-10论文第-64-节)：在同一 tGraph 融合 routing、dispatch、expert compute、combine。
+5. [Event Tensor 的 MoE case](event_tensor/论文中文解读.md#53-moe-层图-13)：用 runtime-computed event indices 表达 top-k 路由。
 
 这条路线要始终同时看四个量：
 
@@ -96,15 +96,15 @@ Speculative decoding、Medusa 与 EAGLE 属于通用解码算法，主归类在 
 | 2017 | [Sparsely-Gated MoE](sparsely_gated_moe/论文概要.md) | 论文 | noisy top-k gate | 固定计算、4096 experts 时 perplexity 改善 |
 | 2020 | [FusionStitching](fusion_stitching/论文概要.md) | 论文 | stitching schemes | 相对 XLA 平均 1.45× |
 | 2022 | [Switch Transformer](switch_transformers/论文概要.md) | 论文 | top-1 + capacity | 扩展到 1.6T 总参数 |
-| 2023 | [Welder](welder/论文概要.md) | 论文 | tile-graph | V100 多模型相对 TensorRT 平均约 1.47× |
-| 2023 | [MegaBlocks](megablocks/论文概要.md) | 论文 | block-sparse MoE | dropless training 最高 4.35× vs padding |
-| 2024 | [Korch](korch/论文概要.md) | 论文 | fission + BLP | V100/A100 平均 1.39×/1.30× |
-| 2025 | [MPK](mirage_persistent_kernel/论文概要.md) | 预印本 | SM-level tGraph | 相对 vLLM/SGLang 约 1.0×–1.7× |
-| 2026 | [Event Tensor](event_tensor/论文概要.md) | 预印本 | dependency tensor | dynamic megakernel + AOT warmup |
-| 2026 | [Ada-MK](ada_mk/论文概要.md) | 预印本 | offline DAG search | L20/TRT-LLM batch 1 最高 +23.6% |
-| 2026 | [CuTe Layout Algebra](cute_layout_algebra/论文概要.md) | 预印本 | layout algebra | 表示、验证与推导，不以 benchmark 为主 |
+| 2023 | [Welder](welder/论文概要.md) | 论文 | tile-graph | V100、FP32、batch 1，10 个模型相对 TensorRT 几何平均约 1.47× |
+| 2023 | [MegaBlocks](megablocks/论文概要.md) | 论文 | block-sparse MoE | dropless 训练相对 Tutel padding 方案最高 4.35×（MoE-Medium，部分来自 padding 迫使 micro-batch 变小） |
+| 2024 | [Korch](korch/论文概要.md) | 论文 | fission + BLP | 5 个视觉模型 batch 1，V100/A100 相对各模型最快基线平均 1.39×/1.30× |
+| 2025 | [MPK](mirage_persistent_kernel/论文概要.md) | 预印本 | SM-level tGraph | 离线 batch 1–16，相对 vLLM/SGLang 中较强者约 1.0×–1.7× |
+| 2026 | [Event Tensor](event_tensor/论文概要.md) | 论文（MLSys 2026） | dependency tensor | dynamic megakernel + AOT warmup |
+| 2026 | [Ada-MK](ada_mk/论文概要.md) | 预印本 | offline DAG search | 单张 L20、Qwen3-1.7B，batch 1 相对 vanilla TRT-LLM 最高 +23.6% |
+| 2026 | [CuTe Layout Algebra](cute_layout_algebra/论文概要.md) | 预印本 | layout algebra | 表示、验证与推导；无性能实验，仅有代码量对比 |
 | 2026 | [TensorRT-LLM Architecture](tensorrt_llm_architecture/论文概要.md) | 官方文档 | executor/KV/scheduler | 版本化架构快照 |
-| 2026 | [TorchInductor CuTeDSL](cutedsl_torchinductor/论文概要.md) | 官方报告 | backend portfolio | B200 GEMM 最高 1.78×，E2E 最高 6.5% |
+| 2026 | [TorchInductor CuTeDSL](cutedsl_torchinductor/论文概要.md) | 官方报告 | backend portfolio | B200 GEMM 正文称最高 1.6×–1.78×（随数据类型），vLLM BF16 E2E 最高 6.5% |
 
 ## 3. Fusion、CUDA Graph 与 MegaKernel 的区别
 
@@ -180,7 +180,7 @@ $$
 
 ## 7. 版本提醒
 
-- MPK、Event Tensor、Ada-MK、CuTe Layout Algebra 均为快速演进的预印本。
-- TensorRT-LLM 文档与 PyTorch 报告是 2026-10-03 保存的工程快照，未来 API/版本会变化。
+- MPK、Ada-MK、CuTe Layout Algebra 为快速演进的预印本；Event Tensor 已发表于 MLSys 2026，但同样较新。
+- TensorRT-LLM 文档是 2026-10-03 的 main 分支快照，PyTorch CuTeDSL 报告发布于 2026-04-07，二者的 API/版本未来都会变化。
 - 仓库中的 Triton 2019 论文解释原始语言设计；现代 Triton layout 与后端能力应结合 Linear Layouts 和当前实现。
-- CuTe Layout Algebra 明确区分 PyCuTe、C++ CuTe 与 CuTe DSL，不应把三者混称为同一个编译器。
+- CuTe Layout Algebra 明确区分 CuTe（数学规范）、C++ CuTe、PyCuTe（Python 参考实现）与 CuTe DSL，不应混为一谈；它也不是 CuTe DSL 编译器的说明。

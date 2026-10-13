@@ -2,7 +2,7 @@
 
 > 整理日期：2026-10-03
 >
-> 本专题新增 7 篇论文与 1 份 PyTorch 官方工程资料，并复用仓库已有的 PyTorch 2 论文。每个新增目录均保存 PDF、可检索文本、论文概要、中文精读和精读引用的关键页面。
+> 本专题新增 7 篇论文与 1 份 PyTorch 官方工程资料，并复用仓库已有的 PyTorch 2 论文。每个新增目录均保存 PDF、可检索文本、论文概要、中文精读，以及精读引用的原文图表（如有）。
 
 ## 1. 先回答：PyTorch 里到底有哪些 Graph
 
@@ -84,7 +84,7 @@
 | 2019 | [PyTorch](pytorch_imperative/论文概要.md) | 论文 | eager + dynamic autograd | 通用研究与训练 |
 | 2019 | [JANUS](janus_symbolic_graph/论文概要.md) | 论文 | speculative graph execution | CNN/RNN/TreeNN/GAN/RL |
 | 2021 | [Nimble](nimble_dynamic_nn/论文概要.md) | 论文 | dynamic type + VM | LSTM、Tree-LSTM、BERT inference |
-| 2021 | [DISC](disc_dynamic_shape/论文概要.md) | 论文 | dynamic HLO + shape-aware fusion | ASR、Seq2seq、BERT、推荐 |
+| 2021 | [DISC](disc_dynamic_shape/论文概要.md) | 论文 | dynamic HLO + shape-aware fusion | ASR、Seq2seq、BERT、广告排序 |
 | 2022 | [torch.fx](torch_fx/论文概要.md) | 论文 | symbolic trace + GraphModule | 量化、融合、分析、TensorRT |
 | 2024 | [PyTorch 2](pytorch_2/论文概要.md) | 论文 | Dynamo + AOTAutograd + Inductor | eager program compilation |
 | 2026 | [PyTorch Graph Programming Model](pytorch_graph_programming_model/论文概要.md) | 官方文档 | guards、graph breaks、export | 编译诊断与部署 |

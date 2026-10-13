@@ -72,7 +72,7 @@ DeepSeekMoE → V2 → V3 → R1。
 | 时间 | 资料 | 类型 | 关键公开内容 | 权重状态 |
 |---|---|---|---|---|
 | 2020 | [GPT-3](openai_gpt3/论文中文解读.md) | 论文 | in-context learning 与规模化 few-shot | 未开放 |
-| 2021 | [Codex](openai_codex/论文中文解读.md) | 论文 | 代码预训练、HumanEval、pass@k | 未开放 |
+| 2021 | [Codex](openai_codex/论文中文解读.md) | 论文 | GPT 在公开代码上继续训练、HumanEval、pass@k | 未开放 |
 | 2022 | [InstructGPT](openai_instructgpt/论文中文解读.md) | 论文 | SFT → reward model → PPO | 未开放 |
 | 2023 | [GPT-4](openai_gpt4/论文中文解读.md) | 技术报告/系统卡 | predictable scaling、能力、安全与披露边界 | 未开放 |
 | 2025 | [gpt-oss](openai_gpt_oss/论文中文解读.md) | 模型卡 | MoE、MXFP4、Harmony 与可调 reasoning effort | 开放权重 |
@@ -109,7 +109,7 @@ Claude Code 是 coding agent 产品，不是一家公司，也没有公开完整
 | 时间 | 资料 | 主要公开内容 | 主层次 |
 |---|---|---|---|
 | 2024/25 | [Mooncake](kimi_mooncake/论文中文解读.md) | disaggregated prefill/decode 与 KV cache 调度 | Serving |
-| 2025 | [Kimi k1.5](kimi_k15/论文中文解读.md) | online mirror descent、partial rollout、long2short | Reasoning RL |
+| 2025 | [Kimi k1.5](kimi_k15/论文中文解读.md) | online policy mirror descent 变体、partial rollout、long2short | Reasoning RL |
 | 2025 | [Kimi K2](kimi_k2/论文中文解读.md) | 1T MoE、MuonClip、agentic data/RL | 模型 + Agent |
 
 三篇是三条互补路线，不是版本号顺序：
@@ -132,7 +132,7 @@ Claude Code 是 coding agent 产品，不是一家公司，也没有公开完整
 |---|---|---|
 | 2023 | [LLaMA](llama/论文中文解读.md) | 公开数据训练、RMSNorm、SwiGLU、RoPE 与推理友好规模 |
 | 2023 | [Segment Anything](sam/论文中文解读.md) | promptable segmentation、SA-1B 与 data engine |
-| 2024 | [Llama 3](llama_3/论文中文解读.md) | 8B/70B/405B、15.6T token、128K 与完整后训练栈 |
+| 2024 | [Llama 3](llama_3/论文中文解读.md) | 8B/70B/405B（405B 训练 15.6T token）、128K，后训练用 SFT、拒绝采样与 DPO |
 
 LLaMA/Llama 3 的 base 与 instruct 版本必须分开比较；上下文窗口上限也不等于所有距离上的可靠利用。
 
@@ -150,10 +150,10 @@ Gemini 技术报告展示系统能力，但没有披露到可以独立复现完�
 
 | 时间 | 资料 | 主要公开内容 | 主归类 |
 |---|---|---|---|
-| 2026 | [TensorRT-LLM Architecture](tensorrt_llm_architecture/论文中文解读.md) | model definition、compiler、engine、KV cache 与 serving runtime | 厂商系统 |
-| 2026 | [CuTe Layout Algebra](cute_layout_algebra/论文中文解读.md) | layout 的可组合代数 | Compiler 交叉入口 |
-| 2026 | [CuTeDSL TorchInductor Backend](cutedsl_torchinductor/论文中文解读.md) | CuTe DSL 接入动态图编译 | Compiler 交叉入口 |
-| 2024–26 | [FlashAttention 3](flash_attention_3/论文中文解读.md) / [4](flash_attention_4/论文中文解读.md) | Hopper/Blackwell 硬件感知 Attention | 算法交叉入口 |
+| 2026 | [TensorRT-LLM Architecture](tensorrt_llm_architecture/论文中文解读.md) | LLM API、PyExecutor、Scheduler、KVCacheManager、ModelEngine 与 CUDA Graph/Overlap Scheduler（官方文档快照） | 厂商系统 |
+| 2026 | [CuTe Layout Algebra](cute_layout_algebra/论文中文解读.md) | layout 的可组合代数（NVIDIA Research） | Compiler 交叉入口 |
+| 2026 | [CuTeDSL TorchInductor Backend](cutedsl_torchinductor/论文中文解读.md) | Meta/PyTorch 官方博客：CuTe DSL 作为 GEMM 的 autotuning 后端接入 TorchInductor | Compiler 交叉入口 |
+| 2024–26 | [FlashAttention 3](flash_attention_3/论文中文解读.md) / [4](flash_attention_4/论文中文解读.md) | Hopper/Blackwell 硬件感知 Attention（Princeton/Together AI、Colfax、Meta、NVIDIA 等合作） | 算法交叉入口 |
 
 TensorRT-LLM 属于厂商定制实现；CuTe 和 FlashAttention 仍有可迁移的方法贡献，因此主解释分别放在 Compiler 和算法索引。
 
@@ -174,7 +174,7 @@ TensorRT-LLM 属于厂商定制实现；CuTe 和 FlashAttention 仍有可迁移�
 | Anthropic | 架构披露少 | 对齐研究强 | 有限 | Claude Code 编排未公开 | 网络结构、数据、产品 agent 栈 |
 | MiniMax | hybrid Attention + MoE | CISPO | 部分 | 部分 | 完整数据和生产系统 |
 | Kimi | MoE | reasoning/agentic RL | 部分 | Mooncake 较强 | 完整训练 recipe |
-| Qwen | dense/MoE | 混合思考 | 部分 | 部分 | 数据与完整训练代码 |
+| Qwen | dense/MoE | 混合思考 | 未披露 | 未披露 | 数据、训练基础设施与完整训练代码 |
 | Meta | Llama 系列较强 | instruct/safety 部分 | 大规模训练经验 | 部分 | 完整数据与端到端复现 |
 | Google | scaling/多模态/科学模型 | 部分 | TPU 系统 | 产品细节有限 | frontier 复现细节 |
 
